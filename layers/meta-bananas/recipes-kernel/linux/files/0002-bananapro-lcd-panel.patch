@@ -1,0 +1,105 @@
+From: BanaNAS <noreply@example.invalid>
+Subject: [PATCH] arm: dts: sun7i-a20-bananapro: enable BL050-RGB-002 panel + backlight + display engine
+
+Wire the BPI-M1+ 5" 800x480 BL050-RGB-002 panel through tcon0 with
+explicit panel-timing (panel-dpi reads timings from DT). Add the
+parallel RGB888 pinmux on PD, the PWM-driven backlight on PB2/PH8,
+and the panel power enable on PH12, matching the timing budget
+documented in docs/LCD_5INCH_CONFIGURATION.md.
+
+Crucially, set status = "okay" on the &de display-engine node — the
+upstream sun7i-a20.dtsi ships it disabled, so even with TCON, backend,
+frontend, panel and pwm-backlight all individually probing, the
+sun4i-drm component master never instantiates and /sys/class/drm/
+stays empty.
+
+Specify bus-format = MEDIA_BUS_FMT_RGB888_1X24 (0x100a) plus hsync /
+vsync / de / pixelclk polarities so the TCON drives the panel with
+correct signal phasing instead of falling back to defaults.
+
+Signed-off-by: BanaNAS <noreply@example.invalid>
+---
+ arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts | 73 +++++++++++++++++++++
+ 1 file changed, 73 insertions(+)
+
+diff --git a/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts b/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts
+index 0000000..0000000 100644
+--- a/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts
++++ b/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts
+@@ -225,3 +225,76 @@
+ &cpu1 {
+ 	clock-frequency = <912000000>;
+ };
++
++&de {
++	status = "okay";
++};
++
++&pio {
++	lcd0_rgb888_pins: lcd0-rgb888-pins {
++		pins = "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7",
++		       "PD8", "PD9", "PD10", "PD11", "PD12", "PD13", "PD14",
++		       "PD15", "PD16", "PD17", "PD18", "PD19", "PD20", "PD21",
++		       "PD22", "PD23", "PD24", "PD25", "PD26", "PD27";
++		function = "lcd0";
++	};
++};
++
++&pwm {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pwm0_pin>;
++	status = "okay";
++};
++
++&tcon0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&lcd0_rgb888_pins>;
++};
++
++&tcon0_out {
++	tcon0_out_lcd: endpoint@0 {
++		reg = <0>;
++		remote-endpoint = <&lcd_panel_input>;
++	};
++};
++
++/ {
++	lcd_backlight: lcd-backlight {
++		compatible = "pwm-backlight";
++		pwms = <&pwm 0 20000 0>; /* PB2 = PWM0, 50 kHz, normal polarity */
++		enable-gpios = <&pio 7 8 GPIO_ACTIVE_HIGH>; /* PH8 - backlight enable */
++		brightness-levels = <0 10 20 30 40 50 60 70 80 90 100>;
++		default-brightness-level = <8>;
++	};
++
++	lcd_panel: lcd-panel {
++		compatible = "panel-dpi";
++		power-supply = <&reg_vcc5v0>;
++		enable-gpios = <&pio 7 12 GPIO_ACTIVE_HIGH>; /* PH12 - LCD power */
++		backlight = <&lcd_backlight>;
++		/* MEDIA_BUS_FMT_RGB888_1X24 = 0x100a; sets bpc=8 */
++		bus-format = <0x100a>;
++
++		panel-timing {
++			clock-frequency = <30000000>;
++			hactive = <800>;
++			hfront-porch = <40>;
++			hback-porch = <40>;
++			hsync-len = <48>;
++			vactive = <480>;
++			vfront-porch = <13>;
++			vback-porch = <29>;
++			vsync-len = <3>;
++			hsync-active = <1>;
++			vsync-active = <1>;
++			de-active = <1>;
++			pixelclk-active = <0>;
++		};
++
++		port {
++			lcd_panel_input: endpoint {
++				remote-endpoint = <&tcon0_out_lcd>;
++			};
++		};
++	};
++};

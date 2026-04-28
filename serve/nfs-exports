@@ -1,0 +1,5 @@
+# NFS export for the BPI's dev-time nfsroot. The bananas-nfs container bind-
+# mounts this file at /etc/exports. "*" allows any client that can reach the
+# host's NFS port — fine on a trusted dev LAN; tighten to your subnet (e.g.
+# 192.168.1.0/24) if you serve over a wider network.
+/nfsshare *(rw,fsid=0,sync,no_subtree_check,no_auth_nlm,insecure,no_root_squash)

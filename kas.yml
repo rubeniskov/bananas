@@ -1,0 +1,85 @@
+header:
+  version: 14
+
+machine: bananapro
+distro: bananas
+target:
+  - bananas-image
+
+# Build-time env vars. kas takes each value from the calling environment and
+# exposes it to bitbake via BB_ENV_PASSTHROUGH_ADDITIONS. Set via .env (local)
+# or CI/CD secrets:
+#   NFS_EXPORT_NETWORK   CIDR or hostname allowed in /etc/exports on the BPI.
+#                        e.g. 192.168.1.0/24
+#   ROOT_PASSWORD_HASH   SHA-512 hash for root login (serial / LCD console).
+#                        Generate via: openssl passwd -6 -salt $(openssl rand -hex 8)
+# Both are required (no default here) — install_nfs_exports / set_root_password
+# in bananas-image.bb fail with bbfatal if they're empty at build time.
+env:
+  NFS_EXPORT_NETWORK:
+  ROOT_PASSWORD_HASH:
+
+repos:
+  poky:
+    url: "https://git.yoctoproject.org/poky"
+    refspec: "scarthgap"
+    layers:
+      meta:
+      meta-poky:
+      meta-yocto-bsp:
+
+  meta-openembedded:
+    url: "https://github.com/openembedded/meta-openembedded.git"
+    refspec: "scarthgap"
+    layers:
+      meta-oe:
+      meta-python:
+      meta-networking:
+      meta-filesystems:
+
+  meta-sunxi:
+    url: "https://github.com/linux-sunxi/meta-sunxi.git"
+    refspec: "scarthgap"
+    layers:
+      .:
+
+  meta-arm:
+    url: "https://git.yoctoproject.org/meta-arm"
+    refspec: "scarthgap"
+    layers:
+      meta-arm:
+      meta-arm-toolchain:
+
+  meta-bananas:
+    path: "./layers/meta-bananas"
+
+local_conf_header:
+  bananas-common: |
+    # General build settings
+    CONF_VERSION = "2"
+    PACKAGE_CLASSES = "package_ipk"
+    EXTRA_IMAGE_FEATURES += "ssh-server-openssh"
+    USER_CLASSES ?= "buildstats"
+
+    # Speed / disk usage
+    INHERIT += "rm_work"
+    BB_NUMBER_THREADS ?= "8"
+    PARALLEL_MAKE ?= "-j8"
+
+    # Useful for local dev caching
+    DL_DIR ?= "${TOPDIR}/downloads"
+    SSTATE_DIR ?= "${TOPDIR}/sstate-cache"
+
+    # Serial console (common on sunxi boards)
+    SERIAL_CONSOLES = "115200;ttyS0"
+
+    # If systemd is desired (optional)
+    DISTRO_FEATURES:append = " systemd usrmerge"
+    DISTRO_FEATURES:remove = " x11 wayland vulkan"
+    VIRTUAL-RUNTIME_init_manager = "systemd"
+
+    BB_ENV_PASSTHROUGH_ADDITIONS += "PATH"
+
+  bananas-debug: |
+    # Uncomment while bring-up/debugging
+    # IMAGE_FEATURES += "debug-tweaks"

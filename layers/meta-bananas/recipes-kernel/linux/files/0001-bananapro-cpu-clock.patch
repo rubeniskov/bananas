@@ -1,0 +1,30 @@
+From: BanaNAS <noreply@example.invalid>
+Subject: [PATCH] arm: dts: sun7i-a20-bananapro: pin CPU clock to 912 MHz
+
+The upstream sun7i-a20-bananapro.dts leaves cpu@0 and cpu@1 without a
+clock-frequency property, which makes the kernel emit
+  /cpus/cpu@0 missing clock-frequency property
+at boot. Pin both cores to the 912 MHz operating point that U-Boot
+SPL already configures the PLLs for, matching what the LeMaker
+reference setup uses.
+
+Signed-off-by: BanaNAS <noreply@example.invalid>
+---
+ arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts b/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts
+--- a/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts
++++ b/arch/arm/boot/dts/allwinner/sun7i-a20-bananapro.dts
+@@ -217,3 +217,11 @@
+ 	usb2_vbus-supply = <&reg_usb2_vbus>;
+ 	status = "okay";
+ };
++
++&cpu0 {
++	clock-frequency = <912000000>;
++};
++
++&cpu1 {
++	clock-frequency = <912000000>;
++};

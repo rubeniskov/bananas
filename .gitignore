@@ -1,2 +1,18 @@
 .DS_Store
 
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+# yocto
+/build
+/meta-*
+/poky
+*.log
+# vendored third-party tooling
+/vendor
+# served artifacts (kernel/dtb staged for tftp; rootfs lives in serve/nfs/bananas)
+/serve/tftp
+/serve/nfs/
+# local secrets / per-deployment config — see .env.example
+.env
+

@@ -1,0 +1,91 @@
+[workspace]
+authors = ["rubeniskov <me@rubeniskov.com>"]
+channels = ["conda-forge"]
+name = "bananas"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+info = "python --version && kas --version"
+
+# `build`: kas → bitbake. Sources .env first so NFS_EXPORT_NETWORK and
+# ROOT_PASSWORD_HASH (declared in kas.yml's `env:` block) reach the recipe.
+# Without them install_nfs_exports / set_root_password call bbfatal.
+[tasks.build]
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; kas build kas.yml'"
+
+[tasks.setup-fel]
+cmd = "test -d vendor/sunxi-tools || git clone --depth 1 https://github.com/linux-sunxi/sunxi-tools.git vendor/sunxi-tools && make -C vendor/sunxi-tools tools"
+
+[tasks.fel]
+cmd = "./vendor/sunxi-tools/sunxi-fel"
+depends-on = ["setup-fel"]
+
+# --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
+# `serve-tftp`: stage kernel+dtb into ./serve/tftp/. Wrapped in `bash -c` because deno_task_shell's builtin `cp` doesn't support `-L`.
+[tasks.serve-tftp]
+cmd = "bash -c 'mkdir -p serve/tftp && rm -f serve/tftp/* && cp -L build/tmp/deploy/images/bananapro/uImage build/tmp/deploy/images/bananapro/sun7i-a20-bananapro.dtb serve/tftp/'"
+
+# `extract-rootfs`: unpack the rootfs tarball into ./serve/nfs/bananas/ as root via a throwaway alpine container.
+# `--userns=host` is required because the daemon has userns-remap enabled — without it, container UID 0 maps to host
+# UID 100000 and can't write to the bind-mounted ./serve/nfs/bananas (owned by real user 1000).
+[tasks.extract-rootfs]
+cmd = "mkdir -p serve/nfs/bananas && DOCKER_CONTEXT=default docker run --rm --userns=host -v $PIXI_PROJECT_ROOT/build/tmp/deploy/images/bananapro:/build:ro -v $PIXI_PROJECT_ROOT/serve/nfs/bananas:/dst alpine sh -c 'rm -rf /dst/* /dst/.[!.]*; tar -xzf /build/bananas-image-bananapro.rootfs.tar.gz -C /dst'"
+
+# `serve`: republish artifacts and (re)start the TFTP+NFS containers.
+# Note: serve does *not* extract-rootfs anymore — that has to happen while the
+# board is offline (see `iterate`). Standalone `pixi run serve` only re-stages
+# TFTP and starts containers; rootfs extract is a separate explicit step.
+[tasks.serve]
+cmd = "DOCKER_CONTEXT=default docker compose up -d"
+depends-on = ["serve-tftp"]
+
+# `reboot`: ask the running board to reboot so it picks up the new artifacts.
+# BPI_HOST is required — set in .env or export before running. Tasks below
+# `set -a; . .env; set +a` so .env values populate the env, then the
+# `${BPI_HOST:?...}` shell-expansion fails fast with a helpful message.
+[tasks.reboot]
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; ssh -o StrictHostKeyChecking=accept-new root@\"$host\" reboot || true'"
+
+# `wait-board-down`: poll ICMP until $BPI_HOST stops answering, so the next
+# step (extract-rootfs) runs against an idle NFS share. Without this, the
+# board's running sshd/systemd has files swapped under it mid-shutdown and
+# wedges into "Running in chroot, ignoring request" mode requiring a hard
+# power-cycle. 30 s timeout is conservative — proceeds anyway if the board
+# refuses to power down (e.g., already off).
+[tasks.wait-board-down]
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; echo waiting for $host to power down...; for i in $(seq 1 30); do ping -c 1 -W 1 \"$host\" > /dev/null 2>&1 || { echo $host is down; exit 0; }; sleep 1; done; echo \"ERROR: $host did not go down within 30s — likely the ssh-reboot did not fire (board already wedged). Hard power-cycle the board, then re-run pixi run iterate.\" >&2; exit 1'"
+
+# `iterate`: build → restage TFTP → reboot board → wait for it to drop off the
+# net → extract rootfs (now safe, NFS share is idle) → bring containers up.
+# The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
+# now-correctly-staged servers. No buttons, no SD writes, no wedge.
+[tasks.iterate]
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+
+[dependencies]
+python = "==3.11"
+chrpath = "*"
+cpio = "*"
+patch = "*"
+bzip2 = "*"
+gzip = "*"
+tar = "*"
+make = "*"
+gcc_linux-64 = "*"
+gxx_linux-64 = "*"
+perl = "*"
+coreutils = "*"
+bc = "*"
+xz = "*"
+zstd = "*"
+lz4 = "*"
+inetutils = ">=2.7,<3"
+libusb = "*"
+pkg-config = "*"
+git = "*"
+zlib = "*"
+libfdt = "*"
+
+[pypi-dependencies]
+kas = ">=5.2, <6"
