@@ -5,10 +5,6 @@
 //!   "/path with spaces"  *(rw,sync)
 //! Lines starting with `#` and blank lines are ignored.
 
-use std::path::Path;
-
-use anyhow::{Context, Result};
-
 #[derive(Debug, Clone)]
 pub struct Export {
     pub path: String,
@@ -19,12 +15,6 @@ pub struct Export {
 pub struct Client {
     pub host: String,
     pub options: String,
-}
-
-pub fn read(path: &Path) -> Result<Vec<Export>> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    Ok(parse(&raw))
 }
 
 pub fn parse(input: &str) -> Vec<Export> {

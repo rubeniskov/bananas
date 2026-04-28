@@ -74,9 +74,16 @@ install_nfs_exports() {
     if [ -z "${NFS_EXPORT_NETWORK}" ]; then
         bbfatal "NFS_EXPORT_NETWORK is required (set it in kas.yml local_conf or export it before pixi run build)"
     fi
+    # all_squash + anonuid=1000/anongid=1000: every client (root or not, any
+    # UID) is remapped to UID 1000 / GID 1000 on the server. This matches the
+    # ownership of pre-existing /srv/media files (UID 1000) and gives all
+    # clients consistent write access to /srv/services without needing a
+    # shared UID across machines. Tradeoff: file-level user attribution is
+    # gone — everything is "the NAS user". For a single-user personal NAS
+    # this is the simplest correct model.
     cat > ${IMAGE_ROOTFS}/etc/exports <<EOF
-/srv/media     ${NFS_EXPORT_NETWORK}(rw,sync,no_subtree_check,no_root_squash,insecure)
-/srv/services  ${NFS_EXPORT_NETWORK}(rw,sync,no_subtree_check,no_root_squash,insecure)
+/srv/media     ${NFS_EXPORT_NETWORK}(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000,insecure)
+/srv/services  ${NFS_EXPORT_NETWORK}(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000,insecure)
 EOF
     install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants
     ln -sf /lib/systemd/system/nfs-server.service \
