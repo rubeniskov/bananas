@@ -15,4 +15,6 @@
 /serve/nfs/
 # local secrets / per-deployment config — see .env.example
 .env
+# rust workspace build output
+/target
 
