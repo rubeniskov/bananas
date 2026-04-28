@@ -13,4 +13,4 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tower-http = { version = "0.5", features = ["trace"] }
-bananas-helper = { path = "../bananas-helper" }
+bananas-helper = { path = "../helper" }
