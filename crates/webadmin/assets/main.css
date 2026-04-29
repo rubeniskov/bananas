@@ -245,6 +245,20 @@ nav.app-nav label.button-like:hover {
   gap: 1em;
 }
 .config-banner pre { flex: 1; }
+/* Close button inside any banner inherits the banner's role color
+ * (red for err, green for ok, accent for the neutral config-banner)
+ * instead of the default --accent which clashes with the banner tint. */
+.banner button.ghost {
+  flex-shrink: 0;
+  font-size: 14px;
+  padding: 0 6px;
+  color: inherit;
+  opacity: 0.7;
+}
+.banner button.ghost:hover { opacity: 1; background: transparent; }
+.banner.err button.ghost { color: var(--danger); }
+.banner.ok button.ghost { color: var(--ok); }
+.banner.warn button.ghost { color: var(--warn); }
 .config-banner button.ghost {
   flex-shrink: 0;
   font-size: 14px;
@@ -935,11 +949,92 @@ form.add input[type=text]:not(:placeholder-shown):invalid {
 
 fieldset {
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: .8em 1em;
+  border-radius: 6px;
+  padding: 1em 1.2em 1.1em;
   margin: 0;
 }
-legend { font-size: 12px; color: var(--text-soft); padding: 0 .4em; }
+legend {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  padding: 0 .5em;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+/* Inline form used by Settings → Stats / Dashboard. Same row grid as
+ * the modal version, but with explicit gaps between fieldsets so the
+ * page doesn't feel crammed. Inputs get a uniform style with hover +
+ * focus rings; sections breathe. */
+.settings-form {
+  display: grid;
+  gap: 16px;
+}
+.settings-form fieldset {
+  display: grid;
+  gap: 12px;
+  background: var(--bg-soft);
+}
+.settings-form .row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  align-items: center;
+  gap: 14px;
+}
+.settings-form .row > label.hint {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+  /* Suppress the default hint underline inside form rows — labels are
+   * already strong enough; keep the dotted indicator for inline help
+   * text only. */
+  text-decoration: none;
+  cursor: help;
+}
+.settings-form .row > span:last-child { display: none; }
+.settings-form input[type=text],
+.settings-form input[type=number],
+.settings-form select {
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 7px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  min-height: 32px;
+  transition: border-color 80ms ease-out, box-shadow 80ms ease-out;
+}
+.settings-form input[type=text]:hover,
+.settings-form input[type=number]:hover,
+.settings-form select:hover {
+  border-color: var(--text-soft);
+}
+.settings-form input[type=text]:focus,
+.settings-form input[type=number]:focus,
+.settings-form select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.settings-form input::placeholder { color: var(--text-soft); }
+.settings-form input[type=text]:not(:placeholder-shown):invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+.settings-form .settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+.settings-form h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
 fieldset .opts {
   display: flex;
   flex-wrap: wrap;
@@ -1071,6 +1166,11 @@ textarea {
   box-sizing: border-box;
 }
 .textarea-wrap { position: relative; }
+/* Read-only Copy textareas are inspection panes (current TOML on disk
+ * or the about-to-save preview). 220 px is enough to show ~14 rows
+ * before scrolling — longer than the default 120 px so the operator
+ * can read the file without dragging the resize handle. */
+.textarea-wrap textarea { min-height: 220px; }
 .textarea-wrap button.textarea-copy {
   position: absolute;
   top: 6px;

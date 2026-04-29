@@ -13,7 +13,9 @@
 
 use dioxus::prelude::*;
 
-use crate::{AuthCtx, api, api::ApiError, icons::Icon, storage::DiskCard};
+use crate::{
+    AuthCtx, api, api::ApiError, icons::Icon, stats_config::StatsConfigModal, storage::DiskCard,
+};
 
 const SPARKLINE_WINDOW: &str = "5m";
 
@@ -26,6 +28,7 @@ pub fn StatsPage() -> Element {
     let mut exports: Signal<Vec<api::ExportRow>> = use_signal(Vec::new);
     let mut errors: Signal<Vec<String>> = use_signal(Vec::new);
     let mut tick = use_signal(|| 0u32);
+    let mut modal_open = use_signal(|| false);
 
     use_effect(move || {
         let _ = tick();
@@ -100,10 +103,10 @@ pub fn StatsPage() -> Element {
                 Icon { name: "rotate-cw" }
                 "Refresh"
             }
-            a {
-                class: "ghost button-like",
-                href: "#settings",
-                "data-tip": "Open Settings → Stats to edit sampling intervals, retention, device filters.",
+            button {
+                class: "ghost",
+                "data-tip": "Quick-edit /etc/bananas/stats.toml in a popover. The full editor lives in Settings → Stats.",
+                onclick: move |_| modal_open.set(true),
                 Icon { name: "settings" }
                 "Stats config"
             }
@@ -111,6 +114,10 @@ pub fn StatsPage() -> Element {
 
         for msg in errors.read().iter() {
             div { class: "banner err", pre { "{msg}" } }
+        }
+
+        if modal_open() {
+            StatsConfigModal { on_close: move |_| modal_open.set(false) }
         }
 
         if let Some(s) = snapshot() {

@@ -17,7 +17,7 @@ use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{AuthCtx, components::TextareaWithCopy};
+use crate::{AuthCtx, components::TextareaWithCopy, icons::Icon};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ConfigResp {
@@ -417,6 +417,39 @@ pub fn StatsConfigForm() -> Element {
                 "Copy the block if you'd rather edit it by hand on the device."
             }
             TextareaWithCopy { value: preview, id: "stats-config-toml" }
+        }
+    }
+}
+
+/// Thin modal wrapper around StatsConfigForm, kept as a fast-edit
+/// entry point from the Stats page (gear icon). The full Settings →
+/// Stats tab embeds the same form inline; this is the same widget,
+/// just popped over the dashboard for quick tweaks without a tab
+/// change.
+#[derive(Props, Clone, PartialEq)]
+pub struct StatsConfigModalProps {
+    pub on_close: EventHandler<()>,
+}
+
+#[component]
+pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
+    rsx! {
+        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
+            div {
+                class: "modal form-modal stats-config-modal",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "modal-header",
+                    h3 { "Stats config" }
+                    button {
+                        class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        Icon { name: "x" }
+                    }
+                }
+                div { class: "modal-body form-modal-body",
+                    StatsConfigForm {}
+                }
+            }
         }
     }
 }
