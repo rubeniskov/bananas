@@ -1,12 +1,18 @@
 [workspace]
 members = ["crates/server", "crates/helper"]
+exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2024"
+edition = "2021"   # scarthgap's rust-native is 1.75 — edition 2024 needs 1.85+
 authors = ["rubeniskov <me@rubeniskov.com>"]
 license = "MIT"
+
+# Prevent the in-tree Yocto build/ tree (which lives under bananas/build/)
+# from getting pulled into this workspace. Without it, rust-native's bootstrap
+# cargo walks up from build/tmp/work/.../bootstrap/Cargo.toml, finds this
+# manifest, and tries to enumerate our member crates with the wrong toolchain.
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

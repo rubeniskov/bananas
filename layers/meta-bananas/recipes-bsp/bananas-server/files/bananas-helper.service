@@ -1,0 +1,16 @@
+[Unit]
+Description=BanaNAS root helper (NFS exports + group ops for bananas-server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bananas-helper
+RuntimeDirectory=bananas
+RuntimeDirectoryMode=0755
+Environment=BANANAS_HELPER_SOCKET=/run/bananas/helper.sock
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
