@@ -1078,10 +1078,10 @@ pub async fn delete_cloud_sync(idx: usize) -> Result<(), ApiError> {
     helper_status(resp).await
 }
 
-pub async fn run_cloud_sync(idx: usize) -> Result<String, ApiError> {
-    // Synchronous call — server forwards to helper, helper invokes
-    // rclone and waits for it to finish. Big trees can take a while;
-    // gloo-net's default timeout is generous (no client-side limit).
+/// Trigger a sync. Returns immediately with the new (or existing) job_id.
+/// Caller polls /api/cloud/runs/{job_id} until status is no longer
+/// `running` to follow the run.
+pub async fn run_cloud_sync(idx: usize) -> Result<u64, ApiError> {
     let resp = Request::post(&format!("/api/cloud/syncs/{idx}/run"))
         .send()
         .await
@@ -1096,11 +1096,9 @@ pub async fn run_cloud_sync(idx: usize) -> Result<String, ApiError> {
     let body: serde_json::Value = serde_json::from_str(&txt)
         .unwrap_or_else(|_| serde_json::json!({ "ok": false, "error": txt }));
     if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(body
-            .get("output")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string())
+        body.get("job_id")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ApiError::Other("server did not return a job_id".into()))
     } else {
         let msg = body
             .get("error")
@@ -1109,6 +1107,83 @@ pub async fn run_cloud_sync(idx: usize) -> Result<String, ApiError> {
             .to_string();
         Err(ApiError::Other(msg))
     }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudJobStatus {
+    Running,
+    Success,
+    Failure,
+}
+
+impl CloudJobStatus {
+    pub fn css(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Success => "ok",
+            Self::Failure => "err",
+        }
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Success => "success",
+            Self::Failure => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct CloudJob {
+    pub id: u64,
+    pub sync_idx: usize,
+    pub status: CloudJobStatus,
+    pub started_unix: i64,
+    pub finished_unix: Option<i64>,
+    #[serde(default)]
+    pub output: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RunsResp {
+    runs: Vec<CloudJob>,
+}
+
+pub async fn list_cloud_runs() -> Result<Vec<CloudJob>, ApiError> {
+    let resp = Request::get("/api/cloud/runs")
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    let body: RunsResp = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    Ok(body.runs)
+}
+
+pub async fn get_cloud_run(job_id: u64) -> Result<CloudJob, ApiError> {
+    let resp = Request::get(&format!("/api/cloud/runs/{job_id}"))
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    resp.json::<CloudJob>()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))
 }
 
 fn urlencode(s: &str) -> String {

@@ -1,30 +1,27 @@
-//! /api/cloud/* — cloud-sync configuration storage.
-//!
-//! Today this module ONLY persists configuration; the actual sync
-//! engine (rclone or similar) ships in a follow-up commit. The
-//! intentional split: get the persistence + UX right first, then plug
-//! in whichever sync runtime fits best.
+//! /api/cloud/* — cloud-sync configuration storage + run dispatch.
 //!
 //! Storage shape lives at `/etc/bananas/cloud.toml` and is round-trip
 //! safe through the existing config bundle (TOML save/load on the
-//! Save Config / Load Config buttons).
+//! Save Config / Load Config buttons). The `cloud_jobs` module owns
+//! the in-process job table that backs `/api/cloud/runs/*`.
 //!
 //! Endpoints:
 //!   GET    /api/cloud/providers      — static list of supported
-//!                                       provider kinds (drive,
-//!                                       dropbox, onedrive, s3,
-//!                                       webdav, …).
-//!   GET    /api/cloud/accounts       — current accounts (cleartext
-//!                                       view; tokens redacted).
+//!                                       provider kinds.
+//!   GET    /api/cloud/accounts       — current accounts (tokens
+//!                                       redacted).
 //!   POST   /api/cloud/accounts       — add an account.
 //!   DELETE /api/cloud/accounts/<n>   — remove an account by name.
 //!   GET    /api/cloud/syncs          — list sync entries.
 //!   POST   /api/cloud/syncs          — add a sync entry.
 //!   PUT    /api/cloud/syncs/<idx>    — update entry by index.
 //!   DELETE /api/cloud/syncs/<idx>    — remove entry by index.
-//!   POST   /api/cloud/syncs/<idx>/run — trigger immediate run
-//!                                       (stubbed: returns 501 until
-//!                                       the rclone wiring lands).
+//!   POST   /api/cloud/syncs/<idx>/run — enqueue a run; returns the
+//!                                       job_id immediately.
+//!   GET    /api/cloud/runs           — list recent runs (newest first).
+//!   GET    /api/cloud/runs/<job_id>  — fetch one run with its output
+//!                                       tail; UI polls this while a
+//!                                       sync is in flight.
 
 use axum::{
     Json,
@@ -376,20 +373,37 @@ pub async fn delete_sync(
     Json(json!({ "ok": true })).into_response()
 }
 
+/// Trigger a sync. Returns immediately with the new (or existing, if a
+/// run was already in flight) job_id; the actual rclone call runs on a
+/// background task. Caller polls `/api/cloud/runs/{job_id}` to follow it.
 pub async fn run_sync(State(state): State<AppState>, AxumPath(idx): AxumPath<usize>) -> Response {
-    let cmd = Command::RunCloudSync { idx };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => Json(json!({ "ok": true, "output": output })).into_response(),
-        Ok(HelperResponse { error, output, .. }) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "{}\n\n{}",
-                error.unwrap_or_else(|| "rclone failed".into()),
-                output
-            ),
-        ),
-        Err(e) => err(StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")),
+    let cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let Some(entry) = cfg.syncs.get(idx) else {
+        return err(StatusCode::NOT_FOUND, format!("sync row {idx} not found"));
+    };
+    let label = format!(
+        "{}:{} → {}:{}",
+        entry.account, entry.local_path, entry.account, entry.remote_path
+    );
+    let job_id = state
+        .jobs
+        .enqueue(idx, label, (*state.helper_socket).clone())
+        .await;
+    Json(json!({ "ok": true, "job_id": job_id })).into_response()
+}
+
+/// List recent jobs (newest first). Bounded to ~100 by the job manager.
+pub async fn list_runs(State(state): State<AppState>) -> Response {
+    let jobs = state.jobs.list().await;
+    Json(json!({ "runs": jobs })).into_response()
+}
+
+pub async fn get_run(State(state): State<AppState>, AxumPath(job_id): AxumPath<u64>) -> Response {
+    match state.jobs.get(job_id).await {
+        Some(j) => Json(j).into_response(),
+        None => err(StatusCode::NOT_FOUND, format!("job {job_id} not found")),
     }
 }

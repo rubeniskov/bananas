@@ -29,6 +29,7 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 
 mod auth;
 mod cloud;
+mod cloud_jobs;
 mod config;
 mod dirs;
 mod exports;
@@ -49,6 +50,7 @@ pub struct AppState {
     pub session_key: Arc<SessionKey>,
     pub stats: stats::StatsState,
     pub live_bus: stats_ws::LiveBus,
+    pub jobs: cloud_jobs::JobManager,
 }
 
 #[tokio::main]
@@ -79,20 +81,24 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "/run/bananas-stats/live.sock".into());
     live_bus.start_socket(live_socket_path);
 
+    let helper_socket: PathBuf = std::env::var_os("BANANAS_HELPER_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/helper.sock".into());
+
+    let jobs = cloud_jobs::JobManager::new();
+    cloud_jobs::spawn_scheduler(jobs.clone(), helper_socket.clone());
+
     let state = AppState {
         exports_path: Arc::new(
             std::env::var_os("BANANAS_EXPORTS_PATH")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| "/etc/exports".into()),
         ),
-        helper_socket: Arc::new(
-            std::env::var_os("BANANAS_HELPER_SOCKET")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| "/run/bananas/helper.sock".into()),
-        ),
+        helper_socket: Arc::new(helper_socket),
         session_key: Arc::new(session_key),
         stats: stats_state,
         live_bus,
+        jobs,
     };
 
     let ui_dir: PathBuf = std::env::var_os("BANANAS_UI_DIR")
@@ -156,6 +162,8 @@ async fn main() -> Result<()> {
             put(cloud::update_sync).delete(cloud::delete_sync),
         )
         .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
+        .route("/cloud/runs", get(cloud::list_runs))
+        .route("/cloud/runs/{job_id}", get(cloud::get_run))
         .route(
             "/config",
             get(config::export_config).post(config::import_config),

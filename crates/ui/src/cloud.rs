@@ -1,19 +1,25 @@
 //! Cloud-sync configuration UI.
 //!
-//! Two stacked panels:
+//! Three stacked panels:
 //!   - **Accounts** — list of providers the operator has configured,
 //!     each shown with its name, provider kind, and a "✓ token" /
 //!     "no token" indicator. Add via a modal that asks for a name,
 //!     provider (dropdown from /api/cloud/providers), and the
 //!     `rclone authorize` token blob (paste).
 //!   - **Sync entries** — list of (local path, remote path, direction,
-//!     schedule, account) rows. Add / edit / delete; "Run now" button
-//!     is rendered but currently 501s because the rclone runtime
-//!     wiring lands in a follow-up.
+//!     schedule, account) rows. Add / edit / delete / run-now.
+//!   - **Recent runs** — last ~20 jobs with status badge, started /
+//!     finished timestamps and label. Fed by `/api/cloud/runs`.
+//!
+//! "Run now" enqueues a job server-side and returns immediately with a
+//! job_id; the UI then polls `/api/cloud/runs/{id}` every 2 s and
+//! updates the toast banner when the run finishes — so the browser tab
+//! can be closed without aborting a long sync.
 
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
+use gloo_timers::future::TimeoutFuture;
 
 use crate::{AuthCtx, api, api::ApiError, browse::Browser, icons::Icon};
 
@@ -23,8 +29,10 @@ pub fn CloudPage() -> Element {
     let mut providers: Signal<Vec<api::CloudProvider>> = use_signal(Vec::new);
     let mut accounts: Signal<Vec<api::CloudAccount>> = use_signal(Vec::new);
     let mut syncs: Signal<Vec<api::CloudSync>> = use_signal(Vec::new);
+    let mut runs: Signal<Vec<api::CloudJob>> = use_signal(Vec::new);
     let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
     let mut tick = use_signal(|| 0u32);
+    let mut runs_tick = use_signal(|| 0u32);
     let mut add_account_open = use_signal(|| false);
     let mut sync_form: Signal<Option<SyncFormMode>> = use_signal(|| None);
 
@@ -59,6 +67,23 @@ pub fn CloudPage() -> Element {
                     BannerKind::Err,
                     format!("Loading sync entries failed: {e}"),
                 ))),
+            }
+        });
+    });
+
+    // Refresh the recent-runs list whenever something bumps `runs_tick`
+    // (initial load, after Run-now click, or after a polling task notices
+    // a job finished).
+    use_effect(move || {
+        let _ = runs_tick();
+        let _ = auth_ctx.refresh.read();
+        spawn(async move {
+            match api::list_cloud_runs().await {
+                Ok(list) => runs.set(list),
+                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                // Don't surface load-runs errors as banners — they'd
+                // overwrite the user's actual sync feedback.
+                Err(_) => {}
             }
         });
     });
@@ -161,20 +186,49 @@ pub fn CloudPage() -> Element {
                             on_run: {
                                 let idx = s.idx;
                                 move |_| {
-                                    banner.set(Some((BannerKind::Ok, format!("Syncing row {idx}… (browser may take a while on large trees)"))));
+                                    banner.set(Some((BannerKind::Ok, format!("Queueing sync row {idx}…"))));
                                     spawn(async move {
-                                        match api::run_cloud_sync(idx).await {
-                                            Ok(output) => {
-                                                let summary = if output.trim().is_empty() {
-                                                    "Sync complete.".to_string()
-                                                } else {
-                                                    let last_line = output.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("Sync complete.");
-                                                    format!("Sync complete. {last_line}")
-                                                };
-                                                banner.set(Some((BannerKind::Ok, summary)));
+                                        let job_id = match api::run_cloud_sync(idx).await {
+                                            Ok(id) => id,
+                                            Err(ApiError::Unauthorized) => {
+                                                auth_ctx.signal_unauthorized();
+                                                return;
                                             }
-                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
+                                            Err(e) => {
+                                                banner.set(Some((BannerKind::Err, e.to_string())));
+                                                return;
+                                            }
+                                        };
+                                        banner.set(Some((BannerKind::Ok, format!("Sync running (job #{job_id}). You can leave this page; the run continues on the NAS."))));
+                                        runs_tick.set(runs_tick() + 1);
+                                        // Poll every 2s until the job leaves the Running state.
+                                        loop {
+                                            TimeoutFuture::new(2000).await;
+                                            match api::get_cloud_run(job_id).await {
+                                                Ok(job) => match job.status {
+                                                    api::CloudJobStatus::Running => continue,
+                                                    api::CloudJobStatus::Success => {
+                                                        let tail = output_tail(&job.output);
+                                                        banner.set(Some((BannerKind::Ok, format!("Sync #{job_id} complete. {tail}"))));
+                                                        runs_tick.set(runs_tick() + 1);
+                                                        break;
+                                                    }
+                                                    api::CloudJobStatus::Failure => {
+                                                        let tail = output_tail(&job.output);
+                                                        banner.set(Some((BannerKind::Err, format!("Sync #{job_id} failed. {tail}"))));
+                                                        runs_tick.set(runs_tick() + 1);
+                                                        break;
+                                                    }
+                                                },
+                                                Err(ApiError::Unauthorized) => {
+                                                    auth_ctx.signal_unauthorized();
+                                                    break;
+                                                }
+                                                Err(_) => {
+                                                    // Transient network burp — keep polling.
+                                                    continue;
+                                                }
+                                            }
                                         }
                                     });
                                 }
@@ -195,6 +249,38 @@ pub fn CloudPage() -> Element {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        div { class: "section-header", style: "margin-top: 1.6em",
+            h2 { "Recent runs" }
+            span { class: "spacer" }
+            button {
+                class: "ghost",
+                "data-tip": "Re-fetch the recent-runs list.",
+                onclick: move |_| runs_tick.set(runs_tick() + 1),
+                Icon { name: "rotate-cw" }
+                "Refresh"
+            }
+        }
+        if runs.read().is_empty() {
+            p { class: "empty", "No runs yet. Trigger one with the ↻ button on a sync entry, or wait for a scheduled run to fire." }
+        } else {
+            table { class: "rows",
+                thead {
+                    tr {
+                        th { "Job" }
+                        th { "Status" }
+                        th { "Started" }
+                        th { "Finished" }
+                        th { "Label" }
+                    }
+                }
+                tbody {
+                    for j in runs.read().iter().take(20) {
+                        RunRow { key: "{j.id}", job: j.clone() }
                     }
                 }
             }
@@ -344,6 +430,69 @@ fn SyncRow(props: SyncRowProps) -> Element {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- Run row
+
+#[derive(Props, Clone, PartialEq)]
+struct RunRowProps {
+    job: api::CloudJob,
+}
+
+#[component]
+fn RunRow(props: RunRowProps) -> Element {
+    let j = &props.job;
+    let status_class: String = format!("badge {}", j.status.css());
+    let started = format_unix_short(j.started_unix);
+    let finished = j
+        .finished_unix
+        .map(format_unix_short)
+        .unwrap_or_else(|| "—".into());
+    let label = if j.label.is_empty() {
+        format!("sync row {}", j.sync_idx)
+    } else {
+        j.label.clone()
+    };
+    rsx! {
+        tr {
+            td { code { "#{j.id}" } }
+            td { span { class: "{status_class}", "{j.status.label()}" } }
+            td { code { "{started}" } }
+            td { code { "{finished}" } }
+            td { span { class: "muted", "{label}" } }
+        }
+    }
+}
+
+/// Last non-empty line of the job's combined output, trimmed to ~120
+/// chars. Used in the toast banner so a successful run shows the
+/// "Transferred:" summary, and a failure shows the rclone error.
+fn output_tail(output: &str) -> String {
+    let line = output
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    if line.len() > 120 {
+        format!("{}…", &line[..120])
+    } else {
+        line.to_string()
+    }
+}
+
+/// Render a unix timestamp as HH:MM:SS in the browser's local zone.
+/// JavaScript's `Date` does the heavy lifting; we just stringify a
+/// Date object via `toLocaleTimeString`.
+fn format_unix_short(ts: i64) -> String {
+    if ts <= 0 {
+        return "—".into();
+    }
+    // JS Date takes milliseconds. Use a minimal locale string so the
+    // table doesn't blow out width on long timezones.
+    let date = js_sys::Date::new(&((ts * 1000) as f64).into());
+    date.to_locale_time_string("en-GB")
+        .as_string()
+        .unwrap_or_default()
 }
 
 // rsx! parses `{...}` in string literals as format args; we use a const
