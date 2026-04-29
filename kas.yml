@@ -80,6 +80,17 @@ local_conf_header:
     DL_DIR ?= "${TOPDIR}/downloads"
     SSTATE_DIR ?= "${TOPDIR}/sstate-cache"
 
+    # Hash equivalence: keep sstate hits across metadata changes that
+    # don't actually alter task outputs (rewording a comment, bumping
+    # a license header, reformatting a recipe). The default basehash
+    # signature handler invalidates sstate on any file change, even
+    # cosmetic ones. OEEquivHash sends a hash of the actual task
+    # output to a local server (auto-spawned by `auto`) and reuses
+    # sstate when the output hash matches a previous build. ~5–15 min
+    # saved per cold-cache bake on top of plain sstate hits.
+    BB_HASHSERVE = "auto"
+    BB_SIGNATURE_HANDLER = "OEEquivHash"
+
     # Output an SD-card-flashable wic image alongside the rootfs tarball.
     # The release pipeline tars the .wic into bananas-image-armv7.tar.gz
     # so operators get one consistent .tar.gz format across every release
