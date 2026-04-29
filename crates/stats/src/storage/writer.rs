@@ -29,8 +29,10 @@ impl Writer {
         let mut buf: Vec<Snapshot> = Vec::with_capacity(64);
         let mut flush = interval(Duration::from_millis(self.cfg.flush_interval_ms.max(500)));
         // First retention pass 60 s after start, then every 10 min.
-        let mut retention =
-            interval_at(Instant::now() + Duration::from_secs(60), Duration::from_secs(600));
+        let mut retention = interval_at(
+            Instant::now() + Duration::from_secs(60),
+            Duration::from_secs(600),
+        );
 
         loop {
             tokio::select! {
@@ -94,9 +96,8 @@ fn insert_batch(conn: &mut rusqlite::Connection, snaps: &[Snapshot]) -> Result<(
         let mut part_stmt = tx.prepare_cached(
             "INSERT OR REPLACE INTO part_samples (ts, mount, device, used, total) VALUES (?,?,?,?,?)",
         )?;
-        let mut cpu_stmt = tx.prepare_cached(
-            "INSERT OR REPLACE INTO cpu_samples (ts, busy_pct) VALUES (?,?)",
-        )?;
+        let mut cpu_stmt =
+            tx.prepare_cached("INSERT OR REPLACE INTO cpu_samples (ts, busy_pct) VALUES (?,?)")?;
         let mut mem_stmt = tx.prepare_cached(
             "INSERT OR REPLACE INTO mem_samples (ts, total, used, available, free) VALUES (?,?,?,?,?)",
         )?;
@@ -184,14 +185,38 @@ fn run_retention(conn: &mut rusqlite::Connection, cfg: &StorageCfg) -> Result<()
         FROM temp_samples GROUP BY (ts/60)*60, sensor;
         ",
     )?;
-    tx.execute("DELETE FROM net_samples  WHERE ts < ?1", params![raw_cutoff])?;
-    tx.execute("DELETE FROM disk_samples WHERE ts < ?1", params![raw_cutoff])?;
-    tx.execute("DELETE FROM part_samples WHERE ts < ?1", params![raw_cutoff])?;
-    tx.execute("DELETE FROM temp_samples WHERE ts < ?1", params![raw_cutoff])?;
-    tx.execute("DELETE FROM net_samples_1m  WHERE ts < ?1", params![agg_cutoff])?;
-    tx.execute("DELETE FROM disk_samples_1m WHERE ts < ?1", params![agg_cutoff])?;
-    tx.execute("DELETE FROM part_samples_1m WHERE ts < ?1", params![agg_cutoff])?;
-    tx.execute("DELETE FROM temp_samples_1m WHERE ts < ?1", params![agg_cutoff])?;
+    tx.execute(
+        "DELETE FROM net_samples  WHERE ts < ?1",
+        params![raw_cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM disk_samples WHERE ts < ?1",
+        params![raw_cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM part_samples WHERE ts < ?1",
+        params![raw_cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM temp_samples WHERE ts < ?1",
+        params![raw_cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM net_samples_1m  WHERE ts < ?1",
+        params![agg_cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM disk_samples_1m WHERE ts < ?1",
+        params![agg_cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM part_samples_1m WHERE ts < ?1",
+        params![agg_cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM temp_samples_1m WHERE ts < ?1",
+        params![agg_cutoff],
+    )?;
     tx.commit()?;
 
     conn.execute("PRAGMA incremental_vacuum", [])?;
@@ -211,7 +236,9 @@ pub fn enforce_size_budget(conn: &mut rusqlite::Connection, budget_bytes: u64) -
 
         // Pick the oldest 1m timestamp across the three aggregate tables.
         let oldest: Option<i64> = oldest_agg_ts(conn)?;
-        let Some(cutoff_start) = oldest else { return Ok(()); };
+        let Some(cutoff_start) = oldest else {
+            return Ok(());
+        };
         let cutoff = cutoff_start + 3600; // drop one hour at a time
 
         let tx = conn.transaction()?;
@@ -261,16 +288,28 @@ mod tests {
             mem: Default::default(),
             network: vec![NetIface {
                 name: "eth0".into(),
-                rx_bps: 1000, tx_bps: 500, rx_total: 0, tx_total: 0,
+                rx_bps: 1000,
+                tx_bps: 500,
+                rx_total: 0,
+                tx_total: 0,
             }],
             disks: vec![DiskIo {
-                device: "sda".into(), bus: "sata".into(),
-                read_bps: 1024, write_bps: 2048, read_iops: 1, write_iops: 2, util_pct: 5.0,
+                device: "sda".into(),
+                bus: "sata".into(),
+                read_bps: 1024,
+                write_bps: 2048,
+                read_iops: 1,
+                write_iops: 2,
+                util_pct: 5.0,
             }],
             parts: vec![Partition {
-                device: "/dev/sda1".into(), parent: "sda".into(),
-                mount: "/mnt/data".into(), fs: "ext4".into(),
-                total: 1_000_000, used: 250_000, free: 750_000,
+                device: "/dev/sda1".into(),
+                parent: "sda".into(),
+                mount: "/mnt/data".into(),
+                fs: "ext4".into(),
+                total: 1_000_000,
+                used: 250_000,
+                free: 750_000,
             }],
             temps: vec![],
         }
@@ -298,7 +337,8 @@ mod tests {
                 tx.execute(
                     "INSERT INTO net_samples_1m (ts, iface, rx_bps, tx_bps) VALUES (?,?,?,?)",
                     params![ts, "eth0", 100i64, 100i64],
-                ).unwrap();
+                )
+                .unwrap();
             }
             tx.commit().unwrap();
         });
@@ -310,7 +350,8 @@ mod tests {
         // bails when it can't make further progress; in-memory page overhead
         // alone exceeds 1 byte).
         let count: i64 = db.with(|c| {
-            c.query_row("SELECT COUNT(*) FROM net_samples_1m", [], |r| r.get(0)).unwrap()
+            c.query_row("SELECT COUNT(*) FROM net_samples_1m", [], |r| r.get(0))
+                .unwrap()
         });
         assert!(count <= 1, "expected ≤1 row, got {count}");
     }
@@ -320,7 +361,9 @@ mod tests {
         use crate::config::Storage;
         let db = open_test_db();
         let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let snaps = vec![
             snap(now - 100_000), // older than 24h => should be pruned
             snap(now - 10),

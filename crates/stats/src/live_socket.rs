@@ -75,8 +75,7 @@ async fn handle_client(mut stream: UnixStream, mut rx: watch::Receiver<Snapshot>
 }
 
 async fn send_snapshot(stream: &mut UnixStream, snap: &Snapshot) -> std::io::Result<()> {
-    let mut payload = serde_json::to_vec(snap)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let mut payload = serde_json::to_vec(snap).map_err(std::io::Error::other)?;
     payload.push(b'\n');
     stream.write_all(&payload).await
 }

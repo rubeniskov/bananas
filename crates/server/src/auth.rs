@@ -45,10 +45,7 @@ struct MeResponse {
     username: String,
 }
 
-pub async fn login(
-    State(state): State<AppState>,
-    Json(req): Json<LoginRequest>,
-) -> Response {
+pub async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>) -> Response {
     if req.username.is_empty() || req.password.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -63,7 +60,11 @@ pub async fn login(
     };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse { ok: true, .. }) => {
-            let ttl = if req.remember { TTL_REMEMBER_SECS } else { TTL_SHORT_SECS };
+            let ttl = if req.remember {
+                TTL_REMEMBER_SECS
+            } else {
+                TTL_SHORT_SECS
+            };
             let value = Session::sign(&state.session_key, &req.username, ttl);
             let mut headers = HeaderMap::new();
             headers.insert(
@@ -101,18 +102,17 @@ pub async fn logout() -> Response {
 
 pub async fn me(headers: HeaderMap, State(state): State<AppState>) -> Response {
     match current_session(&headers, &state.session_key) {
-        Some(s) => Json(MeResponse { username: s.username }).into_response(),
+        Some(s) => Json(MeResponse {
+            username: s.username,
+        })
+        .into_response(),
         None => (StatusCode::UNAUTHORIZED, Json(json!({ "ok": false }))).into_response(),
     }
 }
 
 /// Tower middleware: pass through if the request is for a public route or
 /// carries a valid session cookie; 401 otherwise.
-pub async fn require_session(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_session(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
     if PUBLIC_ROUTES.iter().any(|p| path == *p) {
         return next.run(req).await;

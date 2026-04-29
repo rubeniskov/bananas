@@ -96,8 +96,8 @@ pub fn serialize(rows: &[Row]) -> String {
 /// flags.
 #[derive(Debug, Clone, Default)]
 pub struct Opts {
-    pub rw: bool,             // rw vs ro
-    pub sync: bool,           // sync vs async
+    pub rw: bool,   // rw vs ro
+    pub sync: bool, // sync vs async
     pub no_subtree_check: bool,
     pub squash: Squash,
     pub anonuid: Option<u32>,
@@ -142,10 +142,22 @@ impl Opts {
         let mut saw_sync = false;
         for tok in input.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             match tok {
-                "rw" => { o.rw = true; saw_access = true; }
-                "ro" => { o.rw = false; saw_access = true; }
-                "sync" => { o.sync = true; saw_sync = true; }
-                "async" => { o.sync = false; saw_sync = true; }
+                "rw" => {
+                    o.rw = true;
+                    saw_access = true;
+                }
+                "ro" => {
+                    o.rw = false;
+                    saw_access = true;
+                }
+                "sync" => {
+                    o.sync = true;
+                    saw_sync = true;
+                }
+                "async" => {
+                    o.sync = false;
+                    saw_sync = true;
+                }
                 "no_subtree_check" => o.no_subtree_check = true,
                 "subtree_check" => o.no_subtree_check = false,
                 "no_root_squash" => o.squash = Squash::NoRootSquash,
@@ -163,15 +175,23 @@ impl Opts {
             }
         }
         // NFS man-page defaults: `ro` and `sync` if unset. Match those.
-        if !saw_access { o.rw = false; }
-        if !saw_sync { o.sync = true; }
+        if !saw_access {
+            o.rw = false;
+        }
+        if !saw_sync {
+            o.sync = true;
+        }
         o
     }
 
     pub fn to_options_string(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
         parts.push(if self.rw { "rw".into() } else { "ro".into() });
-        parts.push(if self.sync { "sync".into() } else { "async".into() });
+        parts.push(if self.sync {
+            "sync".into()
+        } else {
+            "async".into()
+        });
         if self.no_subtree_check {
             parts.push("no_subtree_check".into());
         }

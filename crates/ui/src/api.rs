@@ -149,7 +149,11 @@ pub async fn logout() -> Result<(), String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    if resp.ok() { Ok(()) } else { Err(format!("HTTP {}", resp.status())) }
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(format!("HTTP {}", resp.status()))
+    }
 }
 
 // --- Exports ---------------------------------------------------------------
@@ -299,7 +303,9 @@ pub async fn fetch_config_toml() -> Result<String, ApiError> {
         let txt = resp.text().await.unwrap_or_default();
         return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
     }
-    resp.text().await.map_err(|e| ApiError::Other(e.to_string()))
+    resp.text()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))
 }
 
 pub async fn upload_config_toml(toml_body: &str) -> Result<ImportSummary, ApiError> {
@@ -550,7 +556,9 @@ pub struct TempSeriesPoint {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct PointsEnvelope<T> { points: Vec<T> }
+struct PointsEnvelope<T> {
+    points: Vec<T>,
+}
 
 pub async fn fetch_stats_snapshot() -> Result<StatsSnapshot, ApiError> {
     let resp = Request::get("/api/stats/snapshot")
@@ -590,14 +598,20 @@ pub async fn fetch_net_range(iface: &str, window: &str) -> Result<Vec<NetSeriesP
         urlencode(iface),
         urlencode(window)
     );
-    let resp = Request::get(&url).send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let resp = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     if resp.status() == 401 {
         return Err(ApiError::Unauthorized);
     }
     if !resp.ok() {
         return Err(ApiError::Other(format!("HTTP {}", resp.status())));
     }
-    let env: PointsEnvelope<NetSeriesPoint> = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let env: PointsEnvelope<NetSeriesPoint> = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     Ok(env.points)
 }
 
@@ -646,44 +660,66 @@ pub fn open_stats_ws() -> Result<StatsWs, ApiError> {
     let proto = web_sys::window()
         .and_then(|w| w.location().protocol().ok())
         .unwrap_or_else(|| "http:".into());
-    let ws_proto = if proto.starts_with("https") { "wss" } else { "ws" };
+    let ws_proto = if proto.starts_with("https") {
+        "wss"
+    } else {
+        "ws"
+    };
     let url = format!("{ws_proto}://{location}/api/stats/live");
     let inner = gloo_net::websocket::futures::WebSocket::open(&url)
         .map_err(|e| ApiError::Other(format!("ws open: {e}")))?;
     Ok(StatsWs { inner })
 }
 
-pub async fn fetch_disk_range(device: &str, window: &str) -> Result<Vec<DiskSeriesPoint>, ApiError> {
+pub async fn fetch_disk_range(
+    device: &str,
+    window: &str,
+) -> Result<Vec<DiskSeriesPoint>, ApiError> {
     let url = format!(
         "/api/stats/range?metric=disk&key={}&window={}",
         urlencode(device),
         urlencode(window)
     );
-    let resp = Request::get(&url).send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let resp = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     if resp.status() == 401 {
         return Err(ApiError::Unauthorized);
     }
     if !resp.ok() {
         return Err(ApiError::Other(format!("HTTP {}", resp.status())));
     }
-    let env: PointsEnvelope<DiskSeriesPoint> = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let env: PointsEnvelope<DiskSeriesPoint> = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     Ok(env.points)
 }
 
-pub async fn fetch_temp_range(sensor: &str, window: &str) -> Result<Vec<TempSeriesPoint>, ApiError> {
+pub async fn fetch_temp_range(
+    sensor: &str,
+    window: &str,
+) -> Result<Vec<TempSeriesPoint>, ApiError> {
     let url = format!(
         "/api/stats/range?metric=temp&key={}&window={}",
         urlencode(sensor),
         urlencode(window)
     );
-    let resp = Request::get(&url).send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let resp = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     if resp.status() == 401 {
         return Err(ApiError::Unauthorized);
     }
     if !resp.ok() {
         return Err(ApiError::Other(format!("HTTP {}", resp.status())));
     }
-    let env: PointsEnvelope<TempSeriesPoint> = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let env: PointsEnvelope<TempSeriesPoint> = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     Ok(env.points)
 }
 
@@ -867,13 +903,10 @@ pub async fn delete_export(idx: usize) -> Result<(), ApiError> {
 }
 
 pub async fn browse(path: &str) -> Result<Listing, ApiError> {
-    let resp = Request::get(&format!(
-        "/api/browse?path={}",
-        urlencode(path)
-    ))
-    .send()
-    .await
-    .map_err(|e| ApiError::Other(e.to_string()))?;
+    let resp = Request::get(&format!("/api/browse?path={}", urlencode(path)))
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     if resp.status() == 401 {
         return Err(ApiError::Unauthorized);
     }
@@ -896,7 +929,9 @@ pub struct CloudProvider {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ProvidersResp { providers: Vec<CloudProvider> }
+struct ProvidersResp {
+    providers: Vec<CloudProvider>,
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct CloudAccount {
@@ -908,7 +943,9 @@ pub struct CloudAccount {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct AccountsResp { accounts: Vec<CloudAccount> }
+struct AccountsResp {
+    accounts: Vec<CloudAccount>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AddCloudAccount {
@@ -928,7 +965,9 @@ pub struct CloudSync {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct SyncsResp { syncs: Vec<CloudSync> }
+struct SyncsResp {
+    syncs: Vec<CloudSync>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AddCloudSync {
@@ -941,61 +980,101 @@ pub struct AddCloudSync {
 
 pub async fn list_cloud_providers() -> Result<Vec<CloudProvider>, ApiError> {
     let resp = Request::get("/api/cloud/providers")
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
-    if resp.status() == 401 { return Err(ApiError::Unauthorized); }
-    if !resp.ok() { return Err(ApiError::Other(format!("HTTP {}", resp.status()))); }
-    let body: ProvidersResp = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    let body: ProvidersResp = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     Ok(body.providers)
 }
 
 pub async fn list_cloud_accounts() -> Result<Vec<CloudAccount>, ApiError> {
     let resp = Request::get("/api/cloud/accounts")
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
-    if resp.status() == 401 { return Err(ApiError::Unauthorized); }
-    if !resp.ok() { return Err(ApiError::Other(format!("HTTP {}", resp.status()))); }
-    let body: AccountsResp = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    let body: AccountsResp = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     Ok(body.accounts)
 }
 
 pub async fn add_cloud_account(req: &AddCloudAccount) -> Result<(), ApiError> {
     let resp = Request::post("/api/cloud/accounts")
-        .json(req).map_err(|e| ApiError::Other(e.to_string()))?
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .json(req)
+        .map_err(|e| ApiError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     helper_status(resp).await
 }
 
 pub async fn delete_cloud_account(name: &str) -> Result<(), ApiError> {
     let resp = Request::delete(&format!("/api/cloud/accounts/{}", urlencode(name)))
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     helper_status(resp).await
 }
 
 pub async fn list_cloud_syncs() -> Result<Vec<CloudSync>, ApiError> {
     let resp = Request::get("/api/cloud/syncs")
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
-    if resp.status() == 401 { return Err(ApiError::Unauthorized); }
-    if !resp.ok() { return Err(ApiError::Other(format!("HTTP {}", resp.status()))); }
-    let body: SyncsResp = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    let body: SyncsResp = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     Ok(body.syncs)
 }
 
 pub async fn add_cloud_sync(req: &AddCloudSync) -> Result<(), ApiError> {
     let resp = Request::post("/api/cloud/syncs")
-        .json(req).map_err(|e| ApiError::Other(e.to_string()))?
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .json(req)
+        .map_err(|e| ApiError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     helper_status(resp).await
 }
 
 pub async fn update_cloud_sync(idx: usize, req: &AddCloudSync) -> Result<(), ApiError> {
     let resp = Request::put(&format!("/api/cloud/syncs/{idx}"))
-        .json(req).map_err(|e| ApiError::Other(e.to_string()))?
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .json(req)
+        .map_err(|e| ApiError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     helper_status(resp).await
 }
 
 pub async fn delete_cloud_sync(idx: usize) -> Result<(), ApiError> {
     let resp = Request::delete(&format!("/api/cloud/syncs/{idx}"))
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     helper_status(resp).await
 }
 
@@ -1004,17 +1083,30 @@ pub async fn run_cloud_sync(idx: usize) -> Result<String, ApiError> {
     // rclone and waits for it to finish. Big trees can take a while;
     // gloo-net's default timeout is generous (no client-side limit).
     let resp = Request::post(&format!("/api/cloud/syncs/{idx}/run"))
-        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     if resp.status() == 401 {
         return Err(ApiError::Unauthorized);
     }
-    let txt = resp.text().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let txt = resp
+        .text()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
     let body: serde_json::Value = serde_json::from_str(&txt)
         .unwrap_or_else(|_| serde_json::json!({ "ok": false, "error": txt }));
     if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(body.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string())
+        Ok(body
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string())
     } else {
-        let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("rclone failed").to_string();
+        let msg = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("rclone failed")
+            .to_string();
         Err(ApiError::Other(msg))
     }
 }

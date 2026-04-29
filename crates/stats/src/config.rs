@@ -133,7 +133,9 @@ pub struct LiveSocket {
 
 impl Default for LiveSocket {
     fn default() -> Self {
-        Self { path: crate::live_socket::default_socket_path() }
+        Self {
+            path: crate::live_socket::default_socket_path(),
+        }
     }
 }
 
@@ -152,7 +154,10 @@ fn default_db_path() -> PathBuf {
     // BPI default: under the bananas service user's StateDirectory.
     // Falls back to a HOME-relative path on dev hosts (no /var/lib/bananas).
     let bpi = PathBuf::from("/var/lib/bananas/stats.db");
-    if std::fs::metadata("/var/lib/bananas").map(|m| m.is_dir()).unwrap_or(false) {
+    if std::fs::metadata("/var/lib/bananas")
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
+    {
         return bpi;
     }
     let home = std::env::var_os("HOME")

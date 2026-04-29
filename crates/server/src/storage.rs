@@ -97,7 +97,9 @@ fn parse_disk(entry: &Value) -> Disk {
     let mut disk = Disk {
         name: get_str(entry, "name").unwrap_or_default(),
         kname: get_str(entry, "kname").unwrap_or_default(),
-        model: get_str(entry, "model").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        model: get_str(entry, "model")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         size: get_u64(entry, "size"),
         readonly: matches!(get_bool_or_str(entry, "ro"), Some(true)),
         partitions: vec![],
@@ -145,7 +147,9 @@ async fn run_lsblk() -> anyhow::Result<Value> {
     use anyhow::Context;
     let out = tokio::process::Command::new("lsblk")
         .args([
-            "-J", "-b", "-o",
+            "-J",
+            "-b",
+            "-o",
             "NAME,KNAME,SIZE,MODEL,TYPE,MOUNTPOINT,FSTYPE,LABEL,UUID,RO",
         ])
         .output()
@@ -161,11 +165,13 @@ async fn run_lsblk() -> anyhow::Result<Value> {
 }
 
 async fn fetch_smart(state: &AppState, device: &str) -> Result<Value, String> {
-    let cmd = Command::Smart { device: device.to_string() };
+    let cmd = Command::Smart {
+        device: device.to_string(),
+    };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => {
-            serde_json::from_str(&output).map_err(|e| format!("smartctl JSON: {e}"))
-        }
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => serde_json::from_str(&output).map_err(|e| format!("smartctl JSON: {e}")),
         Ok(HelperResponse { error, .. }) => Err(error.unwrap_or_else(|| "smartctl failed".into())),
         Err(e) => Err(format!("helper call: {e}")),
     }
@@ -191,13 +197,20 @@ fn statvfs_for(path: &str) -> Option<VfsStats> {
     let available = stat.f_bavail as u64 * bsize;
     let free = stat.f_bfree as u64 * bsize;
     let used = total.saturating_sub(free);
-    Some(VfsStats { used, available, total })
+    Some(VfsStats {
+        used,
+        available,
+        total,
+    })
 }
 
 // --- small helpers for digging into lsblk's loose JSON --------------------
 
 fn get_str(entry: &Value, key: &str) -> Option<String> {
-    entry.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+    entry
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 fn get_u64(entry: &Value, key: &str) -> Option<u64> {

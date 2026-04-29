@@ -53,7 +53,9 @@ struct LiveSocket {
 }
 impl Default for LiveSocket {
     fn default() -> Self {
-        Self { path: "/run/bananas-stats/live.sock".into() }
+        Self {
+            path: "/run/bananas-stats/live.sock".into(),
+        }
     }
 }
 
@@ -63,7 +65,9 @@ struct Sampling {
     interval_ms: u64,
 }
 impl Default for Sampling {
-    fn default() -> Self { Self { interval_ms: 1000 } }
+    fn default() -> Self {
+        Self { interval_ms: 1000 }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,7 +100,10 @@ struct Devices {
 }
 impl Default for Devices {
     fn default() -> Self {
-        Self { include_buses: vec!["sata".into(), "usb".into()], exclude_names: vec![] }
+        Self {
+            include_buses: vec!["sata".into(), "usb".into()],
+            exclude_names: vec![],
+        }
     }
 }
 
@@ -108,7 +115,10 @@ struct Network {
 }
 impl Default for Network {
     fn default() -> Self {
-        Self { include_patterns: vec!["eth*".into(), "en*".into()], exclude_names: vec![] }
+        Self {
+            include_patterns: vec!["eth*".into(), "en*".into()],
+            exclude_names: vec![],
+        }
     }
 }
 
@@ -124,7 +134,8 @@ struct Ui {
 impl Default for Ui {
     fn default() -> Self {
         Self {
-            width: 800, height: 480,
+            width: 800,
+            height: 480,
             title: "bananas-dashboard".into(),
             theme: "auto".into(),
             spark_window: 60,
@@ -177,21 +188,26 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
     // First-load hydrate: pull /api/stats/config, parse into Cfg, push
     // each field into the form signals.
     use_effect(move || {
-        if hydrated() { return; }
+        if hydrated() {
+            return;
+        }
         spawn(async move {
             match Request::get("/api/stats/config").send().await {
                 Ok(r) if r.status() == 401 => auth_ctx.signal_unauthorized(),
                 Ok(r) if r.ok() => match r.json::<ConfigResp>().await {
                     Ok(body) => {
-                        let parsed: Cfg = toml::from_str(&body.config)
-                            .unwrap_or_default();
+                        let parsed: Cfg = toml::from_str(&body.config).unwrap_or_default();
                         interval_ms.set(parsed.sampling.interval_ms.to_string());
                         storage_path.set(parsed.storage.path.clone());
                         raw_hours.set(parsed.storage.raw_retention_hours.to_string());
                         agg_days.set(parsed.storage.agg_retention_days.to_string());
                         flush_ms.set(parsed.storage.flush_interval_ms.to_string());
                         max_db_mb.set(
-                            parsed.storage.max_db_mb.map(|n| n.to_string()).unwrap_or_default(),
+                            parsed
+                                .storage
+                                .max_db_mb
+                                .map(|n| n.to_string())
+                                .unwrap_or_default(),
                         );
                         devices_buses.set(join_csv(&parsed.devices.include_buses));
                         devices_excl.set(join_csv(&parsed.devices.exclude_names));
@@ -251,7 +267,9 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
     let preview = composed_toml();
 
     let mut submit = move |_| {
-        if busy() || !hydrated() { return; }
+        if busy() || !hydrated() {
+            return;
+        }
         busy.set(true);
         error.set(None);
         let body = json!({ "config": composed_toml() });
@@ -276,7 +294,11 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
                     busy.set(false);
                     let payload = r.text().await.unwrap_or_default();
                     let summary = match serde_json::from_str::<serde_json::Value>(&payload) {
-                        Ok(v) => v.get("output").and_then(|o| o.as_str()).unwrap_or("Saved.").to_string(),
+                        Ok(v) => v
+                            .get("output")
+                            .and_then(|o| o.as_str())
+                            .unwrap_or("Saved.")
+                            .to_string(),
                         Err(_) => "Saved.".into(),
                     };
                     props.on_saved.call(summary);

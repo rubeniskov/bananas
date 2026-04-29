@@ -41,7 +41,9 @@ pub struct ConfigBundle {
     pub cloud: crate::cloud::CloudConfig,
 }
 
-fn default_version() -> u32 { 1 }
+fn default_version() -> u32 {
+    1
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportEntry {
@@ -102,14 +104,14 @@ pub async fn export_config(State(state): State<AppState>) -> Response {
                 .into_response();
         }
     };
-    let filename = format!(
-        "bananas-config-{}.toml",
-        chrono_compact_now()
-    );
+    let filename = format!("bananas-config-{}.toml", chrono_compact_now());
     (
         StatusCode::OK,
         [
-            ("content-type", "application/toml; charset=utf-8".to_string()),
+            (
+                "content-type",
+                "application/toml; charset=utf-8".to_string(),
+            ),
             (
                 "content-disposition",
                 format!("attachment; filename=\"{filename}\""),
@@ -184,7 +186,9 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
     let exports_content = exports::serialize(&export_rows);
     match bananas_helper::call(
         &state.helper_socket,
-        &Command::WriteExports { content: exports_content },
+        &Command::WriteExports {
+            content: exports_content,
+        },
     )
     .await
     {
@@ -201,7 +205,9 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
         }
         Err(e) => {
             summary.ok = false;
-            summary.notes.push(format!("exports: helper unreachable: {e}"));
+            summary
+                .notes
+                .push(format!("exports: helper unreachable: {e}"));
         }
     }
 
@@ -247,7 +253,9 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
     let fstab_content = format!("{}{}", header, fstab::serialize(&fstab_rows));
     match bananas_helper::call(
         &state.helper_socket,
-        &Command::WriteFstab { content: fstab_content },
+        &Command::WriteFstab {
+            content: fstab_content,
+        },
     )
     .await
     {
@@ -264,7 +272,9 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
         }
         Err(e) => {
             summary.ok = false;
-            summary.notes.push(format!("fstab: helper unreachable: {e}"));
+            summary
+                .notes
+                .push(format!("fstab: helper unreachable: {e}"));
         }
     }
 
@@ -301,7 +311,9 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
             Err(e) => {
                 summary.ok = false;
                 summary.users_skipped += 1;
-                summary.notes.push(format!("{}: helper unreachable: {e}", entry.username));
+                summary
+                    .notes
+                    .push(format!("{}: helper unreachable: {e}", entry.username));
             }
         }
     }
@@ -321,7 +333,10 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
     if !cloud_toml.is_empty() {
         match bananas_helper::call(
             &state.helper_socket,
-            &Command::WriteServiceConfig { name: "cloud".into(), content: cloud_toml },
+            &Command::WriteServiceConfig {
+                name: "cloud".into(),
+                content: cloud_toml,
+            },
         )
         .await
         {
@@ -339,12 +354,18 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
             }
             Err(e) => {
                 summary.ok = false;
-                summary.notes.push(format!("cloud: helper unreachable: {e}"));
+                summary
+                    .notes
+                    .push(format!("cloud: helper unreachable: {e}"));
             }
         }
     }
 
-    let status = if summary.ok { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR };
+    let status = if summary.ok {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
     (status, Json(summary)).into_response()
 }
 
@@ -381,7 +402,9 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
     // backup actually round-trips a working account. /api/users continues
     // to use ListUsers, which omits hashes.
     let users = match bananas_helper::call(&state.helper_socket, &Command::ExportUsers).await {
-        Ok(HelperResponse { ok: true, output, .. }) => parse_users_payload(&output),
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => parse_users_payload(&output),
         Ok(HelperResponse { error, .. }) => {
             return Err(error.unwrap_or_else(|| "helper rejected export-users".into()));
         }
@@ -394,11 +417,15 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
     // is optional and the absence of the file is a valid state.
     let cloud = match bananas_helper::call(
         &state.helper_socket,
-        &Command::ReadServiceConfig { name: "cloud".into() },
+        &Command::ReadServiceConfig {
+            name: "cloud".into(),
+        },
     )
     .await
     {
-        Ok(HelperResponse { ok: true, output, .. }) => {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => {
             if output.trim().is_empty() {
                 crate::cloud::CloudConfig::default()
             } else {
@@ -477,7 +504,11 @@ fn chrono_compact_now() -> String {
     // Cheap UTC components — avoids pulling chrono just for a filename.
     let days = (secs / 86_400) as i64;
     let z = days + 719_468;
-    let era = if z >= 0 { z / 146_097 } else { (z - 146_096) / 146_097 };
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let y = yoe as i64 + era * 400;

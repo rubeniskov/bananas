@@ -52,7 +52,12 @@ impl Sampler {
         network: Network,
         tx: watch::Sender<Snapshot>,
     ) -> Self {
-        Self { cfg, devices, network, tx }
+        Self {
+            cfg,
+            devices,
+            network,
+            tx,
+        }
     }
 
     /// On non-Linux dev hosts (macOS / Windows) the /proc-based
@@ -141,5 +146,4 @@ impl Sampler {
             let _ = self.tx.send(snap);
         }
     }
-
 }

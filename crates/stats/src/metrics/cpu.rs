@@ -26,8 +26,14 @@ pub struct Counters {
 
 impl Counters {
     pub fn total(self) -> u64 {
-        self.user + self.nice + self.system + self.idle
-            + self.iowait + self.irq + self.softirq + self.steal
+        self.user
+            + self.nice
+            + self.system
+            + self.idle
+            + self.iowait
+            + self.irq
+            + self.softirq
+            + self.steal
     }
     pub fn busy(self) -> u64 {
         self.user + self.nice + self.system + self.irq + self.softirq + self.steal
@@ -52,7 +58,10 @@ fn read_proc_stat() -> Result<String> {
 pub fn parse(text: &str) -> Counters {
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("cpu ") {
-            let nums: Vec<u64> = rest.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+            let nums: Vec<u64> = rest
+                .split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .collect();
             if nums.len() < 4 {
                 return Counters::default();
             }
@@ -80,7 +89,12 @@ pub fn compute(text: &str, prev: &Counters) -> (CpuStats, Counters) {
     } else {
         (dt_busy as f32 / dt_total as f32) * 100.0
     };
-    (CpuStats { busy_pct: pct.clamp(0.0, 100.0) }, cur)
+    (
+        CpuStats {
+            busy_pct: pct.clamp(0.0, 100.0),
+        },
+        cur,
+    )
 }
 
 #[cfg(test)]

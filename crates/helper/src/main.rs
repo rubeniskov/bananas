@@ -50,7 +50,9 @@ async fn main() -> Result<()> {
             tracing::warn!(error=%e, "failed to chown socket to root:bananas");
         }
     } else {
-        tracing::warn!("group 'bananas' not found in /etc/group — frontend won't be able to connect");
+        tracing::warn!(
+            "group 'bananas' not found in /etc/group — frontend won't be able to connect"
+        );
     }
 
     tracing::info!(
@@ -119,8 +121,22 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(json) => Response::ok(json),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
-        Command::CreateUser { username, password, full_name, admin, password_is_hash } => {
-            match create_user(&username, &password, full_name.as_deref(), admin, password_is_hash).await {
+        Command::CreateUser {
+            username,
+            password,
+            full_name,
+            admin,
+            password_is_hash,
+        } => {
+            match create_user(
+                &username,
+                &password,
+                full_name.as_deref(),
+                admin,
+                password_is_hash,
+            )
+            .await
+            {
                 Ok(()) => Response::ok(format!("created {username}")),
                 Err(e) => Response::err(e.to_string(), String::new()),
             }
@@ -146,12 +162,16 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(json) => Response::ok(json),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
-        Command::SetPermissions { path, uid, gid, mode, recursive } => {
-            match set_permissions(&path, uid, gid, mode.as_deref(), recursive).await {
-                Ok(out) => Response::ok(out),
-                Err(e) => Response::err(e.to_string(), String::new()),
-            }
-        }
+        Command::SetPermissions {
+            path,
+            uid,
+            gid,
+            mode,
+            recursive,
+        } => match set_permissions(&path, uid, gid, mode.as_deref(), recursive).await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::ReadServiceConfig { name } => match read_service_config(&name).await {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
@@ -187,7 +207,10 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
     let dir = exports_path.parent().unwrap_or_else(|| Path::new("/"));
     let tmp = dir.join(format!(
         ".{}.tmp",
-        exports_path.file_name().and_then(|s| s.to_str()).unwrap_or("exports")
+        exports_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("exports")
     ));
     fs::write(&tmp, content)
         .await
@@ -199,8 +222,15 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
         .await
         .with_context(|| format!("renaming {} -> {}", tmp.display(), exports_path.display()))?;
 
-    let reload = exportfs_reload().await.unwrap_or_else(|e| format!("(exportfs failed: {e})"));
-    Ok(format!("wrote {} ({} bytes)\n{}", exports_path.display(), content.len(), reload))
+    let reload = exportfs_reload()
+        .await
+        .unwrap_or_else(|e| format!("(exportfs failed: {e})"));
+    Ok(format!(
+        "wrote {} ({} bytes)\n{}",
+        exports_path.display(),
+        content.len(),
+        reload
+    ))
 }
 
 /// Reject obviously malformed exports content before atomic-replacing the
@@ -215,9 +245,16 @@ fn validate_exports(content: &str) -> Result<()> {
         // First whitespace-separated field is the export path; bail if it
         // doesn't start with '/' (no relative paths, no shell metacharacters
         // we forgot to escape).
-        let first = line.split_whitespace().next().unwrap_or("").trim_matches('"');
+        let first = line
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
         if !first.starts_with('/') {
-            anyhow::bail!("line {}: export path must be absolute (got {first:?})", i + 1);
+            anyhow::bail!(
+                "line {}: export path must be absolute (got {first:?})",
+                i + 1
+            );
         }
     }
     Ok(())
@@ -250,7 +287,11 @@ async fn authenticate(username: &str, password: &str) -> Result<()> {
             let mut fields = line.splitn(3, ':');
             let user = fields.next()?;
             let pw = fields.next()?;
-            if user == username { Some(pw.to_string()) } else { None }
+            if user == username {
+                Some(pw.to_string())
+            } else {
+                None
+            }
         })
         .ok_or_else(|| anyhow::anyhow!("user not found"))?;
 
@@ -260,7 +301,10 @@ async fn authenticate(username: &str, password: &str) -> Result<()> {
         anyhow::bail!("account locked");
     }
     if !hash.starts_with("$6$") {
-        anyhow::bail!("only SHA-512 ($6$) hashes are supported, got prefix {:?}", &hash[..hash.find('$').map(|i| i + 1).unwrap_or(0).min(hash.len())]);
+        anyhow::bail!(
+            "only SHA-512 ($6$) hashes are supported, got prefix {:?}",
+            &hash[..hash.find('$').map(|i| i + 1).unwrap_or(0).min(hash.len())]
+        );
     }
 
     sha_crypt::sha512_check(password, &hash).map_err(|_| anyhow::anyhow!("password mismatch"))?;
@@ -286,7 +330,11 @@ async fn is_in_group(username: &str, group: &str) -> Result<bool> {
         let name = fields.next()?;
         let _passwd = fields.next()?;
         let gid_s = fields.next()?;
-        if name == group { gid_s.parse().ok() } else { None }
+        if name == group {
+            gid_s.parse().ok()
+        } else {
+            None
+        }
     });
     for line in group_file.lines() {
         let mut fields = line.splitn(4, ':');
@@ -372,30 +420,44 @@ fn ensure_password_safe(password: &str) -> Result<()> {
 }
 
 async fn list_users(include_hashes: bool) -> Result<String> {
-    let passwd = fs::read_to_string("/etc/passwd").await.context("reading /etc/passwd")?;
-    let group = fs::read_to_string("/etc/group").await.context("reading /etc/group")?;
-    let shadow = fs::read_to_string("/etc/shadow").await.context("reading /etc/shadow")?;
+    let passwd = fs::read_to_string("/etc/passwd")
+        .await
+        .context("reading /etc/passwd")?;
+    let group = fs::read_to_string("/etc/group")
+        .await
+        .context("reading /etc/group")?;
+    let shadow = fs::read_to_string("/etc/shadow")
+        .await
+        .context("reading /etc/shadow")?;
 
     // Build a name → primary-group lookup table for the GID column.
     let mut gid_to_name: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
     // user → secondary groups (where they appear in `members`).
-    let mut user_groups: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut user_groups: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for line in group.lines() {
         let mut fields = line.splitn(4, ':');
         let Some(name) = fields.next() else { continue };
         let _passwd = fields.next();
         let Some(gid_s) = fields.next() else { continue };
-        let Ok(gid) = gid_s.parse::<u32>() else { continue };
+        let Ok(gid) = gid_s.parse::<u32>() else {
+            continue;
+        };
         gid_to_name.entry(gid).or_insert_with(|| name.to_string());
         if let Some(members) = fields.next() {
             for m in members.split(',').filter(|s| !s.is_empty()) {
-                user_groups.entry(m.to_string()).or_default().push(name.to_string());
+                user_groups
+                    .entry(m.to_string())
+                    .or_default()
+                    .push(name.to_string());
             }
         }
     }
 
-    let mut shadow_locked: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
-    let mut shadow_hashes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut shadow_locked: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
+    let mut shadow_hashes: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for line in shadow.lines() {
         let mut fields = line.splitn(3, ':');
         let Some(name) = fields.next() else { continue };
@@ -414,8 +476,12 @@ async fn list_users(include_hashes: bool) -> Result<String> {
             continue;
         }
         let name = fields[0].to_string();
-        let Ok(uid) = fields[2].parse::<u32>() else { continue };
-        let Ok(gid) = fields[3].parse::<u32>() else { continue };
+        let Ok(uid) = fields[2].parse::<u32>() else {
+            continue;
+        };
+        let Ok(gid) = fields[3].parse::<u32>() else {
+            continue;
+        };
         let gecos = fields[4].split(',').next().unwrap_or("").to_string();
         let home = fields[5].to_string();
         let shell = fields[6].to_string();
@@ -522,9 +588,15 @@ async fn chpasswd_encrypted(username: &str, hash: &str) -> Result<()> {
         .context("spawning chpasswd -e")?;
     let mut stdin = child.stdin.take().context("chpasswd stdin missing")?;
     let line = format!("{}:{}\n", username, hash);
-    stdin.write_all(line.as_bytes()).await.context("writing chpasswd stdin")?;
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .context("writing chpasswd stdin")?;
     drop(stdin);
-    let out = child.wait_with_output().await.context("waiting on chpasswd")?;
+    let out = child
+        .wait_with_output()
+        .await
+        .context("waiting on chpasswd")?;
     if !out.status.success() {
         anyhow::bail!(
             "chpasswd -e failed: {}",
@@ -603,9 +675,15 @@ async fn chpasswd(username: &str, password: &str) -> Result<()> {
         .context("spawning chpasswd")?;
     let mut stdin = child.stdin.take().context("chpasswd stdin missing")?;
     let line = format!("{}:{}\n", username, password);
-    stdin.write_all(line.as_bytes()).await.context("writing chpasswd stdin")?;
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .context("writing chpasswd stdin")?;
     drop(stdin);
-    let out = child.wait_with_output().await.context("waiting on chpasswd")?;
+    let out = child
+        .wait_with_output()
+        .await
+        .context("waiting on chpasswd")?;
     if !out.status.success() {
         anyhow::bail!(
             "chpasswd failed: {}",
@@ -620,7 +698,9 @@ async fn user_exists(username: &str) -> Result<bool> {
 }
 
 async fn uid_of(username: &str) -> Result<Option<u32>> {
-    let passwd = fs::read_to_string("/etc/passwd").await.context("reading /etc/passwd")?;
+    let passwd = fs::read_to_string("/etc/passwd")
+        .await
+        .context("reading /etc/passwd")?;
     for line in passwd.lines() {
         let fields: Vec<&str> = line.splitn(7, ':').collect();
         if fields.len() < 7 {
@@ -662,15 +742,19 @@ async fn stat_path(path: &str) -> Result<String> {
         anyhow::bail!("path not allowed: {path}");
     }
     use std::os::unix::fs::MetadataExt;
-    let md = std::fs::symlink_metadata(path)
-        .with_context(|| format!("stat {path}"))?;
+    let md = std::fs::symlink_metadata(path).with_context(|| format!("stat {path}"))?;
     let uid = md.uid();
     let gid = md.gid();
     let mode = md.mode() & 0o7777;
-    let kind = if md.is_dir() { "dir" }
-        else if md.file_type().is_symlink() { "symlink" }
-        else if md.is_file() { "file" }
-        else { "other" };
+    let kind = if md.is_dir() {
+        "dir"
+    } else if md.file_type().is_symlink() {
+        "symlink"
+    } else if md.is_file() {
+        "file"
+    } else {
+        "other"
+    };
     let user = lookup_user(uid).unwrap_or_default();
     let group = lookup_group_name(gid).unwrap_or_default();
     Ok(serde_json::to_string(&serde_json::json!({
@@ -707,7 +791,9 @@ async fn set_permissions(
             gid.map(|n| n.to_string()).unwrap_or_default()
         );
         let mut cmd = TokioCommand::new("chown");
-        if recursive { cmd.arg("-R"); }
+        if recursive {
+            cmd.arg("-R");
+        }
         cmd.args([owner.as_str(), path]);
         let out = cmd.output().await.context("spawning chown")?;
         if !out.status.success() {
@@ -716,7 +802,10 @@ async fn set_permissions(
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        steps.push(format!("chown {owner} {}", if recursive { "-R " } else { "" }.to_string() + path));
+        steps.push(format!(
+            "chown {owner} {}",
+            if recursive { "-R " } else { "" }.to_string() + path
+        ));
     }
 
     if let Some(mode_str) = mode {
@@ -727,7 +816,9 @@ async fn set_permissions(
             anyhow::bail!("mode must be numeric (octal), got {mode_str:?}");
         }
         let mut cmd = TokioCommand::new("chmod");
-        if recursive { cmd.arg("-R"); }
+        if recursive {
+            cmd.arg("-R");
+        }
         cmd.args([mode_arg, path]);
         let out = cmd.output().await.context("spawning chmod")?;
         if !out.status.success() {
@@ -736,7 +827,10 @@ async fn set_permissions(
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        steps.push(format!("chmod {mode_arg} {}", if recursive { "-R " } else { "" }.to_string() + path));
+        steps.push(format!(
+            "chmod {mode_arg} {}",
+            if recursive { "-R " } else { "" }.to_string() + path
+        ));
     }
     Ok(steps.join("\n"))
 }
@@ -954,8 +1048,7 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
         schedule: String,
     }
 
-    let cfg: Cfg =
-        toml::from_str(&raw).context("parsing /etc/bananas/cloud.toml")?;
+    let cfg: Cfg = toml::from_str(&raw).context("parsing /etc/bananas/cloud.toml")?;
     let entry = cfg
         .syncs
         .get(idx)
@@ -1125,8 +1218,7 @@ async fn write_service_config(name: &str, content: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("unknown service config {name:?}"))?;
     // Validate as TOML before touching the disk — invalid syntax would
     // crash the service on next start.
-    toml::from_str::<toml::Value>(content)
-        .with_context(|| format!("invalid TOML for {name}"))?;
+    toml::from_str::<toml::Value>(content).with_context(|| format!("invalid TOML for {name}"))?;
     // Ensure parent dir exists (e.g. /etc/bananas/ on a fresh install).
     if let Some(parent) = std::path::Path::new(path).parent() {
         tokio::fs::create_dir_all(parent)

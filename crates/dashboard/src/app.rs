@@ -24,7 +24,10 @@ struct History {
 
 impl History {
     fn new(cap: usize) -> Self {
-        Self { buf: HashMap::new(), cap }
+        Self {
+            buf: HashMap::new(),
+            cap,
+        }
     }
     fn push(&mut self, key: &str, v: u64) {
         let q = self.buf.entry(key.to_string()).or_default();
@@ -55,7 +58,8 @@ pub fn launch(
     local_offset: time::UtcOffset,
 ) -> Result<()> {
     let main = MainWindow::new()?;
-    main.window().set_size(slint::PhysicalSize::new(cfg.width, cfg.height));
+    main.window()
+        .set_size(slint::PhysicalSize::new(cfg.width, cfg.height));
     main.set_ts_text(SharedString::from("--:--:--"));
 
     // Seed the theme from config. "auto" picks dark/light from the local
@@ -135,7 +139,14 @@ pub fn launch(
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    apply_snapshot(&w, &snap, net_rx_norm, net_tx_norm, disk_r_norm, disk_w_norm);
+                    apply_snapshot(
+                        &w,
+                        &snap,
+                        net_rx_norm,
+                        net_tx_norm,
+                        disk_r_norm,
+                        disk_w_norm,
+                    );
                 }
             });
         }
@@ -240,9 +251,13 @@ fn apply_snapshot(
         .temps
         .iter()
         .map(|t| {
-            let kind: &'static str = if t.celsius >= 75.0 { "danger" }
-                else if t.celsius >= 60.0 { "warn" }
-                else { "ok" };
+            let kind: &'static str = if t.celsius >= 75.0 {
+                "danger"
+            } else if t.celsius >= 60.0 {
+                "warn"
+            } else {
+                "ok"
+            };
             // Friendly label: collapse `cpu_thermal` / `cpu0-thermal`
             // / similar to "CPU"; everything else (block devices) keeps
             // its raw sensor name.
@@ -277,10 +292,7 @@ fn spark_model(rows: Vec<Vec<f32>>) -> ModelRc<ModelRc<f32>> {
 
 /// True when the current local hour is in the PM half (12:00 – 23:59).
 fn is_pm_local(offset: time::UtcOffset) -> bool {
-    time::OffsetDateTime::now_utc()
-        .to_offset(offset)
-        .hour()
-        >= 12
+    time::OffsetDateTime::now_utc().to_offset(offset).hour() >= 12
 }
 
 fn format_ts(ts_unix: i64) -> String {
@@ -341,12 +353,12 @@ fn format_rate_split(bps: u64) -> (String, String) {
 /// labels fall on tidy values (10 KB, 200 KB, 1 MB) rather than 437 B.
 fn peak_labels(history: Option<&Vec<f32>>, current_bps: u64) -> (String, String) {
     let peak = history
-        .and_then(|h| h.iter().copied().fold(None, |acc, v| {
-            Some(acc.map_or(v, |a: f32| a.max(v)))
-        }))
-        .map(|max_norm| {
-            (max_norm * current_bps as f32).max(current_bps as f32)
+        .and_then(|h| {
+            h.iter()
+                .copied()
+                .fold(None, |acc, v| Some(acc.map_or(v, |a: f32| a.max(v))))
         })
+        .map(|max_norm| (max_norm * current_bps as f32).max(current_bps as f32))
         .unwrap_or(current_bps as f32)
         .max(1.0);
 
@@ -368,16 +380,27 @@ fn nice_ceiling_binary(v: f32) -> f32 {
         bucket *= 1024.0;
     }
     let m = v / bucket;
-    let n = if m <= 1.0 { 1.0 }
-            else if m <= 2.0 { 2.0 }
-            else if m <= 5.0 { 5.0 }
-            else if m <= 10.0 { 10.0 }
-            else if m <= 20.0 { 20.0 }
-            else if m <= 50.0 { 50.0 }
-            else if m <= 100.0 { 100.0 }
-            else if m <= 200.0 { 200.0 }
-            else if m <= 500.0 { 500.0 }
-            else { 1024.0 };
+    let n = if m <= 1.0 {
+        1.0
+    } else if m <= 2.0 {
+        2.0
+    } else if m <= 5.0 {
+        5.0
+    } else if m <= 10.0 {
+        10.0
+    } else if m <= 20.0 {
+        20.0
+    } else if m <= 50.0 {
+        50.0
+    } else if m <= 100.0 {
+        100.0
+    } else if m <= 200.0 {
+        200.0
+    } else if m <= 500.0 {
+        500.0
+    } else {
+        1024.0
+    };
     n * bucket
 }
 

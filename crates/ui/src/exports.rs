@@ -7,7 +7,10 @@
 
 use dioxus::prelude::*;
 
-use crate::{AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon, nfs_help, permissions::PermissionsModal};
+use crate::{
+    AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon,
+    nfs_help, permissions::PermissionsModal,
+};
 
 /// What the form modal is currently doing — None means closed; Some
 /// carries either an existing row (edit) or a placeholder for create.
@@ -40,7 +43,10 @@ pub fn ExportsPage() -> Element {
                     preview.set(list.preview);
                 }
                 Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(err) => banner.set(Some((BannerKind::Err, format!("Loading exports failed: {err}")))),
+                Err(err) => banner.set(Some((
+                    BannerKind::Err,
+                    format!("Loading exports failed: {err}"),
+                ))),
             }
         });
     });
@@ -143,9 +149,17 @@ pub fn ExportsPage() -> Element {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum BannerKind { Ok, Err }
+enum BannerKind {
+    Ok,
+    Err,
+}
 impl BannerKind {
-    fn css(self) -> &'static str { match self { BannerKind::Ok => "ok", BannerKind::Err => "err" } }
+    fn css(self) -> &'static str {
+        match self {
+            BannerKind::Ok => "ok",
+            BannerKind::Err => "err",
+        }
+    }
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -200,7 +214,9 @@ fn web_sys_confirm(msg: &str) -> bool {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct OptionBadgesProps { opts: api::ExportOpts }
+struct OptionBadgesProps {
+    opts: api::ExportOpts,
+}
 
 #[component]
 fn OptionBadges(props: OptionBadgesProps) -> Element {
@@ -266,12 +282,22 @@ fn ExportFormModal(props: ExportFormModalProps) -> Element {
     };
 
     let mut path = use_signal(|| initial.path.clone());
-    let mut host = use_signal(|| if initial.host.is_empty() { "*".into() } else { initial.host.clone() });
+    let mut host = use_signal(|| {
+        if initial.host.is_empty() {
+            "*".into()
+        } else {
+            initial.host.clone()
+        }
+    });
     let mut rw = use_signal(|| initial.parsed.rw);
     let mut sync = use_signal(|| initial.parsed.sync);
     let mut no_subtree_check = use_signal(|| initial.parsed.no_subtree_check);
     let mut squash = use_signal(|| {
-        if initial.parsed.squash.is_empty() { "all_squash".into() } else { initial.parsed.squash.clone() }
+        if initial.parsed.squash.is_empty() {
+            "all_squash".into()
+        } else {
+            initial.parsed.squash.clone()
+        }
     });
     let mut anonuid = use_signal(|| initial.parsed.anonuid.or(Some(1000)));
     let mut anongid = use_signal(|| initial.parsed.anongid.or(Some(1000)));
@@ -283,12 +309,20 @@ fn ExportFormModal(props: ExportFormModalProps) -> Element {
         Some(idx) => format!("Edit export — row {idx}"),
         None => "Add a new export".into(),
     };
-    let submit_label = if editing_idx.is_some() { "Save changes" } else { "Add export" };
+    let submit_label = if editing_idx.is_some() {
+        "Save changes"
+    } else {
+        "Add export"
+    };
 
     let mut submit = move |_| {
-        if busy() { return; }
+        if busy() {
+            return;
+        }
         if path().trim().is_empty() {
-            props.on_error.call("Pick a directory via the Browse button".into());
+            props
+                .on_error
+                .call("Pick a directory via the Browse button".into());
             return;
         }
         if host().trim().is_empty() {
@@ -471,4 +505,3 @@ fn default_export_row() -> api::ExportRow {
         },
     }
 }
-

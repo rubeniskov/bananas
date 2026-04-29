@@ -52,7 +52,9 @@ pub async fn put_perms(State(state): State<AppState>, Json(req): Json<SetPerms>)
 
 async fn proxy(state: &AppState, cmd: Command) -> Response {
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => match serde_json::from_str::<Value>(&output) {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => match serde_json::from_str::<Value>(&output) {
             Ok(value) => Json(value).into_response(),
             // Action commands return a human-readable string; wrap so
             // the UI gets a consistent JSON shape either way.

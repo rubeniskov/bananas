@@ -7,7 +7,10 @@
 use dioxus::prelude::*;
 use web_sys::window;
 
-use crate::{AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon, permissions::PermissionsModal};
+use crate::{
+    AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon,
+    permissions::PermissionsModal,
+};
 
 #[derive(Clone, PartialEq)]
 enum FormMode {
@@ -39,7 +42,10 @@ pub fn MountsSection() -> Element {
                     preview.set(list.preview);
                 }
                 Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => banner.set(Some((BannerKind::Err, format!("Loading fstab failed: {e}")))),
+                Err(e) => banner.set(Some((
+                    BannerKind::Err,
+                    format!("Loading fstab failed: {e}"),
+                ))),
             }
         });
     });
@@ -169,13 +175,23 @@ pub fn MountsSection() -> Element {
 }
 
 fn confirm(msg: &str) -> bool {
-    window().and_then(|w| w.confirm_with_message(msg).ok()).unwrap_or(false)
+    window()
+        .and_then(|w| w.confirm_with_message(msg).ok())
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum BannerKind { Ok, Err }
+enum BannerKind {
+    Ok,
+    Err,
+}
 impl BannerKind {
-    fn css(self) -> &'static str { match self { BannerKind::Ok => "ok", BannerKind::Err => "err" } }
+    fn css(self) -> &'static str {
+        match self {
+            BannerKind::Ok => "ok",
+            BannerKind::Err => "err",
+        }
+    }
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -245,7 +261,9 @@ fn FstabRowView(props: FstabRowViewProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct FstabOptionBadgesProps { opts: api::FstabOpts }
+struct FstabOptionBadgesProps {
+    opts: api::FstabOpts,
+}
 
 #[component]
 fn FstabOptionBadges(props: FstabOptionBadgesProps) -> Element {
@@ -272,7 +290,12 @@ fn FstabOptionBadges(props: FstabOptionBadgesProps) -> Element {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum SourceKind { Label, Uuid, Path, Other }
+enum SourceKind {
+    Label,
+    Uuid,
+    Path,
+    Other,
+}
 
 impl SourceKind {
     fn from_str(s: &str) -> Self {
@@ -408,10 +431,18 @@ fn FstabFormModal(props: FstabFormModalProps) -> Element {
     // the user toggle modes without losing typed text.
     let mut source_kind = use_signal(|| init_kind);
     let mut source_choice = use_signal(|| {
-        if matches!(init_kind_for_choice, SourceKind::Other) { String::new() } else { init_value.clone() }
+        if matches!(init_kind_for_choice, SourceKind::Other) {
+            String::new()
+        } else {
+            init_value.clone()
+        }
     });
     let mut source_custom = use_signal(|| {
-        if matches!(init_kind_for_choice, SourceKind::Other) { init_value } else { String::new() }
+        if matches!(init_kind_for_choice, SourceKind::Other) {
+            init_value
+        } else {
+            String::new()
+        }
     });
     let mut mountpoint = use_signal(|| initial.mountpoint.clone());
     let mut fstype = use_signal(|| initial.fstype.clone());
@@ -442,17 +473,25 @@ fn FstabFormModal(props: FstabFormModalProps) -> Element {
         Some(idx) => format!("Edit mount — row {idx}"),
         None => "Add a mount".into(),
     };
-    let submit_label = if editing_idx.is_some() { "Save changes" } else { "Add mount" };
+    let submit_label = if editing_idx.is_some() {
+        "Save changes"
+    } else {
+        "Add mount"
+    };
 
     let mut submit = move |_| {
-        if busy() { return; }
+        if busy() {
+            return;
+        }
         let src = computed_source();
         if src.trim().is_empty() {
             props.on_error.call("Source/device is required".into());
             return;
         }
         if !mountpoint().starts_with('/') {
-            props.on_error.call("Mountpoint must be an absolute path".into());
+            props
+                .on_error
+                .call("Mountpoint must be an absolute path".into());
             return;
         }
         if fstype().trim().is_empty() {
@@ -738,4 +777,3 @@ fn default_fstab_row() -> api::FstabRow {
         protected: false,
     }
 }
-

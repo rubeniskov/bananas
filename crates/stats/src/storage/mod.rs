@@ -38,7 +38,10 @@ impl Database {
             db_path = %cfg.path.display(),
             "db size budget"
         );
-        Ok(Self { inner: Arc::new(Mutex::new(conn)), budget_bytes })
+        Ok(Self {
+            inner: Arc::new(Mutex::new(conn)),
+            budget_bytes,
+        })
     }
 
     pub fn open_in_memory() -> Result<Self> {
@@ -46,7 +49,10 @@ impl Database {
         Self::tune(&conn)?;
         conn.execute_batch(SCHEMA)?;
         let budget_bytes = budget::ensure_budget(&conn, Path::new("/tmp/in-memory"), None)?;
-        Ok(Self { inner: Arc::new(Mutex::new(conn)), budget_bytes })
+        Ok(Self {
+            inner: Arc::new(Mutex::new(conn)),
+            budget_bytes,
+        })
     }
 
     /// Open the DB read-only — used by readers (web admin, dashboard)
@@ -63,7 +69,10 @@ impl Database {
         // don't trigger small per-page reads.
         conn.pragma_update(None, "mmap_size", 64_000_000_i64).ok();
         conn.pragma_update(None, "temp_store", "MEMORY").ok();
-        Ok(Self { inner: Arc::new(Mutex::new(conn)), budget_bytes: 0 })
+        Ok(Self {
+            inner: Arc::new(Mutex::new(conn)),
+            budget_bytes: 0,
+        })
     }
 
     pub fn budget_bytes(&self) -> u64 {

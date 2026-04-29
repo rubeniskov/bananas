@@ -96,8 +96,12 @@ pub struct SyncEntry {
     pub schedule: String,
 }
 
-fn default_direction() -> String { "push".into() }
-fn default_schedule() -> String { "manual".into() }
+fn default_direction() -> String {
+    "push".into()
+}
+fn default_schedule() -> String {
+    "manual".into()
+}
 
 // ---------------- Provider catalog ----------------
 
@@ -112,9 +116,13 @@ pub async fn providers() -> Response {
 // ---------------- Read / write helpers ----------------
 
 async fn load(state: &AppState) -> Result<CloudConfig, String> {
-    let cmd = Command::ReadServiceConfig { name: "cloud".into() };
+    let cmd = Command::ReadServiceConfig {
+        name: "cloud".into(),
+    };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => {
             if output.trim().is_empty() {
                 return Ok(CloudConfig::default());
             }
@@ -128,8 +136,7 @@ async fn load(state: &AppState) -> Result<CloudConfig, String> {
 }
 
 async fn save(state: &AppState, cfg: &CloudConfig) -> Result<(), String> {
-    let body = toml::to_string_pretty(cfg)
-        .map_err(|e| format!("serializing cloud.toml: {e}"))?;
+    let body = toml::to_string_pretty(cfg).map_err(|e| format!("serializing cloud.toml: {e}"))?;
     let cmd = Command::WriteServiceConfig {
         name: "cloud".into(),
         content: body,
@@ -161,11 +168,17 @@ pub async fn list_accounts(State(state): State<AppState>) -> Response {
         Ok(c) => c,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
-    let accounts: Vec<serde_json::Value> = cfg.accounts.iter().map(|a| json!({
-        "name": a.name,
-        "provider": a.provider,
-        "token_present": !a.token.is_empty(),
-    })).collect();
+    let accounts: Vec<serde_json::Value> = cfg
+        .accounts
+        .iter()
+        .map(|a| {
+            json!({
+                "name": a.name,
+                "provider": a.provider,
+                "token_present": !a.token.is_empty(),
+            })
+        })
+        .collect();
     Json(json!({ "accounts": accounts })).into_response()
 }
 
@@ -251,14 +264,21 @@ pub async fn list_syncs(State(state): State<AppState>) -> Response {
         Ok(c) => c,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
-    let with_idx: Vec<serde_json::Value> = cfg.syncs.iter().enumerate().map(|(i, s)| json!({
-        "idx": i,
-        "account": s.account,
-        "local_path": s.local_path,
-        "remote_path": s.remote_path,
-        "direction": s.direction,
-        "schedule": s.schedule,
-    })).collect();
+    let with_idx: Vec<serde_json::Value> = cfg
+        .syncs
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            json!({
+                "idx": i,
+                "account": s.account,
+                "local_path": s.local_path,
+                "remote_path": s.remote_path,
+                "direction": s.direction,
+                "schedule": s.schedule,
+            })
+        })
+        .collect();
     Json(json!({ "syncs": with_idx })).into_response()
 }
 
@@ -289,10 +309,7 @@ fn validate_sync(req: &AddSyncReq) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn add_sync(
-    State(state): State<AppState>,
-    Json(req): Json<AddSyncReq>,
-) -> Response {
+pub async fn add_sync(State(state): State<AppState>, Json(req): Json<AddSyncReq>) -> Response {
     if let Err(e) = validate_sync(&req) {
         return err(StatusCode::BAD_REQUEST, e);
     }
@@ -359,15 +376,12 @@ pub async fn delete_sync(
     Json(json!({ "ok": true })).into_response()
 }
 
-pub async fn run_sync(
-    State(state): State<AppState>,
-    AxumPath(idx): AxumPath<usize>,
-) -> Response {
+pub async fn run_sync(State(state): State<AppState>, AxumPath(idx): AxumPath<usize>) -> Response {
     let cmd = Command::RunCloudSync { idx };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => {
-            Json(json!({ "ok": true, "output": output })).into_response()
-        }
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
         Ok(HelperResponse { error, output, .. }) => err(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!(

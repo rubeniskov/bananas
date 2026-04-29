@@ -47,7 +47,9 @@ pub fn list(target: &Path) -> std::io::Result<Listing> {
     // Canonicalise to a real, absolute path so symlinks don't confuse the
     // breadcrumb. Fall back to the raw path if canonicalize fails (e.g.
     // permission denied somewhere along the chain).
-    let target = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
+    let target = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
 
     let read = std::fs::read_dir(&target)?;
     let mut entries: Vec<Entry> = read
@@ -83,15 +85,15 @@ pub fn list(target: &Path) -> std::io::Result<Listing> {
 }
 
 fn build_breadcrumb(path: &Path) -> Vec<Crumb> {
-    let mut crumbs = vec![Crumb { name: "/".into(), path: "/".into() }];
+    let mut crumbs = vec![Crumb {
+        name: "/".into(),
+        path: "/".into(),
+    }];
     let mut acc = PathBuf::from("/");
-    for comp in path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
-            _ => None,
-        })
-    {
+    for comp in path.components().filter_map(|c| match c {
+        std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+        _ => None,
+    }) {
         acc.push(&comp);
         crumbs.push(Crumb {
             name: comp,

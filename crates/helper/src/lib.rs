@@ -126,11 +126,19 @@ pub struct Response {
 
 impl Response {
     pub fn ok(output: impl Into<String>) -> Self {
-        Self { ok: true, output: output.into(), error: None }
+        Self {
+            ok: true,
+            output: output.into(),
+            error: None,
+        }
     }
 
     pub fn err(msg: impl Into<String>, output: impl Into<String>) -> Self {
-        Self { ok: false, output: output.into(), error: Some(msg.into()) }
+        Self {
+            ok: false,
+            output: output.into(),
+            error: Some(msg.into()),
+        }
     }
 }
 
@@ -142,11 +150,17 @@ pub async fn call(socket: &Path, cmd: &Command) -> Result<Response> {
     let (read_half, mut write_half) = stream.into_split();
     let mut req = serde_json::to_vec(cmd).context("serializing command")?;
     req.push(b'\n');
-    write_half.write_all(&req).await.context("writing request")?;
+    write_half
+        .write_all(&req)
+        .await
+        .context("writing request")?;
     write_half.shutdown().await.ok();
 
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
-    reader.read_line(&mut line).await.context("reading response")?;
+    reader
+        .read_line(&mut line)
+        .await
+        .context("reading response")?;
     serde_json::from_str(line.trim()).context("parsing response")
 }

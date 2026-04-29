@@ -16,7 +16,9 @@ pub fn StoragePage() -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-pub struct DiskCardProps { pub disk: api::Disk }
+pub struct DiskCardProps {
+    pub disk: api::Disk,
+}
 
 #[component]
 pub fn DiskCard(props: DiskCardProps) -> Element {
@@ -66,7 +68,9 @@ pub fn DiskCard(props: DiskCardProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct PartitionRowProps { part: api::Partition }
+struct PartitionRowProps {
+    part: api::Partition,
+}
 
 #[component]
 fn PartitionRow(props: PartitionRowProps) -> Element {
@@ -101,13 +105,26 @@ fn PartitionRow(props: PartitionRowProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct UsageBarProps { used: u64, total: u64 }
+struct UsageBarProps {
+    used: u64,
+    total: u64,
+}
 
 #[component]
 fn UsageBar(props: UsageBarProps) -> Element {
-    let pct = if props.total == 0 { 0.0 } else { (props.used as f64 / props.total as f64) * 100.0 };
+    let pct = if props.total == 0 {
+        0.0
+    } else {
+        (props.used as f64 / props.total as f64) * 100.0
+    };
     let pct_clamped = pct.clamp(0.0, 100.0);
-    let kind = if pct >= 90.0 { "danger" } else if pct >= 75.0 { "warn" } else { "ok" };
+    let kind = if pct >= 90.0 {
+        "danger"
+    } else if pct >= 75.0 {
+        "warn"
+    } else {
+        "ok"
+    };
     let used_label = format_bytes(props.used);
     let total_label = format_bytes(props.total);
     let pct_label = format!("{:.0}%", pct);
@@ -135,7 +152,9 @@ struct SmartSummary {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct SmartBadgeProps { summary: SmartSummary }
+struct SmartBadgeProps {
+    summary: SmartSummary,
+}
 
 #[component]
 fn SmartBadge(props: SmartBadgeProps) -> Element {
@@ -160,7 +179,11 @@ fn smart_summary(disk: &api::Disk) -> SmartSummary {
         };
     }
     let Some(smart) = &disk.smart else {
-        return SmartSummary { kind: "unknown", label: "n/a".into(), detail: String::new() };
+        return SmartSummary {
+            kind: "unknown",
+            label: "n/a".into(),
+            detail: String::new(),
+        };
     };
     let passed = smart
         .get("smart_status")
@@ -180,7 +203,11 @@ fn smart_summary(disk: &api::Disk) -> SmartSummary {
         None => {
             // Some firmwares only export raw attributes, not the boolean.
             // Surface that as "unknown" rather than misleadingly green.
-            let warn = smart.get("messages").and_then(|m| m.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
+            let warn = smart
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
             SmartSummary {
                 kind: if warn { "warn" } else { "unknown" },
                 label: "unknown".into(),
@@ -192,7 +219,11 @@ fn smart_summary(disk: &api::Disk) -> SmartSummary {
 
 fn smart_detail_summary(smart: &serde_json::Value) -> String {
     let mut bits: Vec<String> = Vec::new();
-    if let Some(temp) = smart.get("temperature").and_then(|t| t.get("current")).and_then(|t| t.as_i64()) {
+    if let Some(temp) = smart
+        .get("temperature")
+        .and_then(|t| t.get("current"))
+        .and_then(|t| t.as_i64())
+    {
         bits.push(format!("Temp: {}°C", temp));
     }
     if let Some(hours) = smart
@@ -202,10 +233,7 @@ fn smart_detail_summary(smart: &serde_json::Value) -> String {
     {
         bits.push(format!("Power-on: {} h", hours));
     }
-    if let Some(start_stop) = smart
-        .get("power_cycle_count")
-        .and_then(|v| v.as_u64())
-    {
+    if let Some(start_stop) = smart.get("power_cycle_count").and_then(|v| v.as_u64()) {
         bits.push(format!("Power cycles: {}", start_stop));
     }
     if bits.is_empty() {

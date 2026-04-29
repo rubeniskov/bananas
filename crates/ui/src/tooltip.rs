@@ -12,8 +12,8 @@
 
 use std::sync::OnceLock;
 
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use web_sys::{Element, HtmlElement};
 
 /// Idempotent: safe to call multiple times. Subsequent calls are no-ops.
@@ -51,20 +51,16 @@ fn install() -> Result<(), JsValue> {
             }
         }
     });
-    document
-        .add_event_listener_with_callback("mouseover", on_enter.as_ref().unchecked_ref())?;
-    document
-        .add_event_listener_with_callback("focusin", on_enter.as_ref().unchecked_ref())?;
+    document.add_event_listener_with_callback("mouseover", on_enter.as_ref().unchecked_ref())?;
+    document.add_event_listener_with_callback("focusin", on_enter.as_ref().unchecked_ref())?;
     on_enter.forget();
 
     let tip_for_hide = tip.clone();
     let on_leave = Closure::<dyn FnMut(web_sys::Event)>::new(move |_evt: web_sys::Event| {
         let _ = tip_for_hide.set_attribute("data-show", "0");
     });
-    document
-        .add_event_listener_with_callback("mouseout", on_leave.as_ref().unchecked_ref())?;
-    document
-        .add_event_listener_with_callback("focusout", on_leave.as_ref().unchecked_ref())?;
+    document.add_event_listener_with_callback("mouseout", on_leave.as_ref().unchecked_ref())?;
+    document.add_event_listener_with_callback("focusout", on_leave.as_ref().unchecked_ref())?;
     on_leave.forget();
 
     // Hide on scroll/resize too — the cached bounding rect goes stale otherwise.
@@ -103,12 +99,8 @@ fn show_tip(tip: &Element, anchor: &Element) -> Result<(), JsValue> {
 
     // Reset transform so getBoundingClientRect reports the natural size.
     let html_tip: HtmlElement = tip.clone().dyn_into()?;
-    html_tip
-        .style()
-        .set_property("left", "-9999px")?;
-    html_tip
-        .style()
-        .set_property("top", "-9999px")?;
+    html_tip.style().set_property("left", "-9999px")?;
+    html_tip.style().set_property("top", "-9999px")?;
 
     let html_anchor: HtmlElement = anchor.clone().dyn_into()?;
     let anchor_rect = html_anchor.get_bounding_client_rect();
@@ -178,9 +170,7 @@ fn show_tip(tip: &Element, anchor: &Element) -> Result<(), JsValue> {
     }
 
     tip.set_attribute("data-pos", pos)?;
-    let style = format!(
-        "left: {left:.1}px; top: {top:.1}px; --tip-arrow-x: {arrow_x:.1}px;"
-    );
+    let style = format!("left: {left:.1}px; top: {top:.1}px; --tip-arrow-x: {arrow_x:.1}px;");
     tip.set_attribute("style", &style)?;
     Ok(())
 }

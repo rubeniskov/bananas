@@ -152,11 +152,20 @@ mod tests {
 ";
 
     fn filter_sata_usb() -> DeviceFilter {
-        use crate::metrics::devices::{build_filter, BlockDevice};
+        use crate::metrics::devices::{BlockDevice, build_filter};
         let devs = vec![
-            BlockDevice { name: "sda".into(), bus: Bus::Sata },
-            BlockDevice { name: "sdb".into(), bus: Bus::Usb },
-            BlockDevice { name: "mmcblk0".into(), bus: Bus::Mmc },
+            BlockDevice {
+                name: "sda".into(),
+                bus: Bus::Sata,
+            },
+            BlockDevice {
+                name: "sdb".into(),
+                bus: Bus::Usb,
+            },
+            BlockDevice {
+                name: "mmcblk0".into(),
+                bus: Bus::Mmc,
+            },
         ];
         build_filter(
             &devs,
@@ -193,7 +202,7 @@ mod tests {
     fn util_pct_caps_at_100() {
         // io_ms delta 200 over 100ms interval -> would be 200% un-capped.
         let prev_text = "8 0 sda 0 0 0 0 0 0 0 0 0 0 0\n";
-        let cur_text  = "8 0 sda 0 0 0 0 0 0 0 0 0 200 0\n";
+        let cur_text = "8 0 sda 0 0 0 0 0 0 0 0 0 200 0\n";
         let prev = parse_diskstats(prev_text);
         let (rows, _) = compute(cur_text, &prev, &filter_sata_usb(), 100);
         let sda = rows.iter().find(|r| r.device == "sda").unwrap();
@@ -204,7 +213,7 @@ mod tests {
     fn handles_counter_wrap_with_saturating_sub() {
         // 32-bit kernels can wrap counters; saturating_sub keeps us at 0.
         let prev_text = "8 0 sda 100 0 100 0 100 0 100 0 0 100 0\n";
-        let cur_text  = "8 0 sda  50 0  50 0  50 0  50 0 0  50 0\n";
+        let cur_text = "8 0 sda  50 0  50 0  50 0  50 0 0  50 0\n";
         let prev = parse_diskstats(prev_text);
         let (rows, _) = compute(cur_text, &prev, &filter_sata_usb(), 1000);
         let sda = &rows[0];

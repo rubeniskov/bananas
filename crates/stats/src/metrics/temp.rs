@@ -48,7 +48,9 @@ fn sample_thermal_zones(out: &mut Vec<TempReading>) {
     };
     for entry in dir.flatten() {
         let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
         if !name.starts_with("thermal_zone") {
             continue;
         }
@@ -57,9 +59,14 @@ fn sample_thermal_zones(out: &mut Vec<TempReading>) {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| name.replacen("thermal_", "", 1));
-        let Ok(s) = std::fs::read_to_string(path.join("temp")) else { continue };
-        if let Some(milli) = s.trim().parse::<i32>().ok() {
-            out.push(TempReading { sensor: typ, celsius: milli as f32 / 1000.0 });
+        let Ok(s) = std::fs::read_to_string(path.join("temp")) else {
+            continue;
+        };
+        if let Ok(milli) = s.trim().parse::<i32>() {
+            out.push(TempReading {
+                sensor: typ,
+                celsius: milli as f32 / 1000.0,
+            });
         }
     }
 }
@@ -81,12 +88,19 @@ fn sample_block_hwmon(out: &mut Vec<TempReading>) {
             continue;
         }
         let hwmon_dir = blk.path().join("device").join("hwmon");
-        let Ok(entries) = std::fs::read_dir(&hwmon_dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&hwmon_dir) else {
+            continue;
+        };
         for hw in entries.flatten() {
             let temp_path = hw.path().join("temp1_input");
-            let Ok(s) = std::fs::read_to_string(&temp_path) else { continue };
+            let Ok(s) = std::fs::read_to_string(&temp_path) else {
+                continue;
+            };
             if let Ok(milli) = s.trim().parse::<i32>() {
-                out.push(TempReading { sensor: bname_s.clone(), celsius: milli as f32 / 1000.0 });
+                out.push(TempReading {
+                    sensor: bname_s.clone(),
+                    celsius: milli as f32 / 1000.0,
+                });
                 break; // first hwmon per block dev is enough
             }
         }

@@ -39,9 +39,7 @@ impl SessionKey {
                 tracing::info!(path=%path.display(), "generating new session key");
                 Self::generate_and_save(path)
             }
-            Err(e) => {
-                Err(e).with_context(|| format!("reading {}", path.display()))
-            }
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
     }
 
@@ -55,8 +53,7 @@ impl SessionKey {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        std::fs::write(path, bytes)
-            .with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

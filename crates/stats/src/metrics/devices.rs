@@ -11,7 +11,7 @@
 use crate::config::Devices;
 use anyhow::Result;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bus {
@@ -50,7 +50,10 @@ pub struct DeviceFilter {
 
 impl DeviceFilter {
     pub fn allow_all() -> Self {
-        Self { pass_all: true, ..Self::default() }
+        Self {
+            pass_all: true,
+            ..Self::default()
+        }
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -120,7 +123,7 @@ fn enumerate_block_devices(_root: &std::path::Path) -> Result<Vec<BlockDevice>> 
 }
 
 /// Classify a canonical sysfs path. Public for testing.
-pub fn classify_path(path: &PathBuf, name: &str) -> Bus {
+pub fn classify_path(path: &Path, name: &str) -> Bus {
     let s = path.to_string_lossy();
     if name.starts_with("mmcblk") || s.contains("/mmc_host/") {
         Bus::Mmc
@@ -136,31 +139,47 @@ pub fn classify_path(path: &PathBuf, name: &str) -> Bus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn classifies_mmc_by_name() {
-        let p = PathBuf::from("/sys/devices/platform/soc/1c0f000.mmc/mmc_host/mmc0/mmc0:0001/block/mmcblk0");
+        let p = PathBuf::from(
+            "/sys/devices/platform/soc/1c0f000.mmc/mmc_host/mmc0/mmc0:0001/block/mmcblk0",
+        );
         assert_eq!(classify_path(&p, "mmcblk0"), Bus::Mmc);
     }
 
     #[test]
     fn classifies_usb_drive() {
-        let p = PathBuf::from("/sys/devices/platform/soc/1c1a000.usb/usb1/1-1/1-1:1.0/host3/target3:0:0/3:0:0:0/block/sdb");
+        let p = PathBuf::from(
+            "/sys/devices/platform/soc/1c1a000.usb/usb1/1-1/1-1:1.0/host3/target3:0:0/3:0:0:0/block/sdb",
+        );
         assert_eq!(classify_path(&p, "sdb"), Bus::Usb);
     }
 
     #[test]
     fn classifies_sata_drive() {
-        let p = PathBuf::from("/sys/devices/platform/soc/1c18000.sata/ata1/host0/target0:0:0/0:0:0:0/block/sda");
+        let p = PathBuf::from(
+            "/sys/devices/platform/soc/1c18000.sata/ata1/host0/target0:0:0/0:0:0:0/block/sda",
+        );
         assert_eq!(classify_path(&p, "sda"), Bus::Sata);
     }
 
     #[test]
     fn filter_keeps_only_included_buses() {
         let devs = vec![
-            BlockDevice { name: "sda".into(), bus: Bus::Sata },
-            BlockDevice { name: "sdb".into(), bus: Bus::Usb },
-            BlockDevice { name: "mmcblk0".into(), bus: Bus::Mmc },
+            BlockDevice {
+                name: "sda".into(),
+                bus: Bus::Sata,
+            },
+            BlockDevice {
+                name: "sdb".into(),
+                bus: Bus::Usb,
+            },
+            BlockDevice {
+                name: "mmcblk0".into(),
+                bus: Bus::Mmc,
+            },
         ];
         let cfg = Devices {
             include_buses: vec!["sata".into(), "usb".into()],
@@ -176,7 +195,10 @@ mod tests {
 
     #[test]
     fn exclude_names_overrides_include() {
-        let devs = vec![BlockDevice { name: "sda".into(), bus: Bus::Sata }];
+        let devs = vec![BlockDevice {
+            name: "sda".into(),
+            bus: Bus::Sata,
+        }];
         let cfg = Devices {
             include_buses: vec!["sata".into()],
             exclude_names: vec!["sda".into()],

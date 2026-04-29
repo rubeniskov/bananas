@@ -15,9 +15,7 @@
 
 use dioxus::prelude::*;
 
-use crate::{
-    AuthCtx, api, api::ApiError, browse::Browser, icons::Icon,
-};
+use crate::{AuthCtx, api, api::ApiError, browse::Browser, icons::Icon};
 
 #[component]
 pub fn CloudPage() -> Element {
@@ -37,21 +35,30 @@ pub fn CloudPage() -> Element {
             match api::list_cloud_providers().await {
                 Ok(list) => providers.set(list),
                 Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => banner.set(Some((BannerKind::Err, format!("Loading providers failed: {e}")))),
+                Err(e) => banner.set(Some((
+                    BannerKind::Err,
+                    format!("Loading providers failed: {e}"),
+                ))),
             }
         });
         spawn(async move {
             match api::list_cloud_accounts().await {
                 Ok(list) => accounts.set(list),
                 Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => banner.set(Some((BannerKind::Err, format!("Loading accounts failed: {e}")))),
+                Err(e) => banner.set(Some((
+                    BannerKind::Err,
+                    format!("Loading accounts failed: {e}"),
+                ))),
             }
         });
         spawn(async move {
             match api::list_cloud_syncs().await {
                 Ok(list) => syncs.set(list),
                 Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => banner.set(Some((BannerKind::Err, format!("Loading sync entries failed: {e}")))),
+                Err(e) => banner.set(Some((
+                    BannerKind::Err,
+                    format!("Loading sync entries failed: {e}"),
+                ))),
             }
         });
     });
@@ -225,9 +232,17 @@ pub fn CloudPage() -> Element {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum BannerKind { Ok, Err }
+enum BannerKind {
+    Ok,
+    Err,
+}
 impl BannerKind {
-    fn css(self) -> &'static str { match self { Self::Ok => "ok", Self::Err => "err" } }
+    fn css(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Err => "err",
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Account row
@@ -241,8 +256,16 @@ struct AccountRowProps {
 #[component]
 fn AccountRow(props: AccountRowProps) -> Element {
     let a = &props.account;
-    let token_class: &'static str = if a.token_present { "badge ok" } else { "badge warn" };
-    let token_text: &'static str = if a.token_present { "✓ token set" } else { "no token" };
+    let token_class: &'static str = if a.token_present {
+        "badge ok"
+    } else {
+        "badge warn"
+    };
+    let token_text: &'static str = if a.token_present {
+        "✓ token set"
+    } else {
+        "no token"
+    };
     rsx! {
         tr {
             td { code { "{a.name}" } }
@@ -342,13 +365,19 @@ struct AddAccountModalProps {
 #[component]
 fn AddAccountModal(props: AddAccountModalProps) -> Element {
     let mut name = use_signal(String::new);
-    let initial_provider = props.providers.first().map(|p| p.key.clone()).unwrap_or_default();
+    let initial_provider = props
+        .providers
+        .first()
+        .map(|p| p.key.clone())
+        .unwrap_or_default();
     let mut provider = use_signal(|| initial_provider);
     let mut token = use_signal(String::new);
     let mut busy = use_signal(|| false);
 
     let mut submit = move |_| {
-        if busy() { return; }
+        if busy() {
+            return;
+        }
         if name().trim().is_empty() {
             props.on_error.call("Name is required.".into());
             return;
@@ -473,7 +502,11 @@ fn SyncFormModal(props: SyncFormModalProps) -> Element {
         SyncFormMode::Edit(s) => s.clone(),
         SyncFormMode::Create => api::CloudSync {
             idx: 0,
-            account: props.accounts.first().map(|a| a.name.clone()).unwrap_or_default(),
+            account: props
+                .accounts
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_default(),
             local_path: String::new(),
             remote_path: String::new(),
             direction: "push".into(),
@@ -493,10 +526,16 @@ fn SyncFormModal(props: SyncFormModalProps) -> Element {
         Some(idx) => format!("Edit sync entry — row {idx}"),
         None => "Add sync entry".into(),
     };
-    let submit_label: &'static str = if editing_idx.is_some() { "Save changes" } else { "Add sync entry" };
+    let submit_label: &'static str = if editing_idx.is_some() {
+        "Save changes"
+    } else {
+        "Add sync entry"
+    };
 
     let mut submit = move |_| {
-        if busy() { return; }
+        if busy() {
+            return;
+        }
         if !local_path().starts_with('/') {
             props.on_error.call("Local path must be absolute.".into());
             return;

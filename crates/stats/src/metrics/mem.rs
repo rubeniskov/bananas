@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemStats {
-    pub total: u64,      // bytes
+    pub total: u64, // bytes
     pub used: u64,
     pub available: u64,
     pub free: u64,
@@ -46,7 +46,12 @@ pub fn parse(text: &str) -> MemStats {
     // On older kernels MemAvailable is missing; fall back to MemFree.
     let effective_avail = if available == 0 { free } else { available };
     let used = total.saturating_sub(effective_avail);
-    MemStats { total, used, available: effective_avail, free }
+    MemStats {
+        total,
+        used,
+        available: effective_avail,
+        free,
+    }
 }
 
 fn parse_kb(line: &str) -> u64 {

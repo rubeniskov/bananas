@@ -13,7 +13,9 @@
 
 use dioxus::prelude::*;
 
-use crate::{AuthCtx, api, api::ApiError, icons::Icon, stats_config::StatsConfigModal, storage::DiskCard};
+use crate::{
+    AuthCtx, api, api::ApiError, icons::Icon, stats_config::StatsConfigModal, storage::DiskCard,
+};
 
 const SPARKLINE_WINDOW: &str = "5m";
 
@@ -179,13 +181,17 @@ fn push_err(errors: &mut Signal<Vec<String>>, msg: String) {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct LiveTilesProps { snap: api::StatsSnapshot }
+struct LiveTilesProps {
+    snap: api::StatsSnapshot,
+}
 
 #[component]
 fn LiveTiles(props: LiveTilesProps) -> Element {
     let s = &props.snap;
     let cpu_pct = s.cpu.busy_pct.clamp(0.0, 100.0);
-    let mem_pct = if s.mem.total == 0 { 0.0 } else {
+    let mem_pct = if s.mem.total == 0 {
+        0.0
+    } else {
         (s.mem.used as f32 / s.mem.total as f32 * 100.0).clamp(0.0, 100.0)
     };
     rsx! {
@@ -213,9 +219,13 @@ struct GaugeProps {
 
 #[component]
 fn Gauge(props: GaugeProps) -> Element {
-    let kind = if props.pct >= 90.0 { "danger" }
-        else if props.pct >= 75.0 { "warn" }
-        else { "ok" };
+    let kind = if props.pct >= 90.0 {
+        "danger"
+    } else if props.pct >= 75.0 {
+        "warn"
+    } else {
+        "ok"
+    };
     let pct_clamped = props.pct.clamp(0.0, 100.0);
     rsx! {
         div { class: "tile gauge-tile",
@@ -232,7 +242,9 @@ fn Gauge(props: GaugeProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct TempTilesProps { snap: api::StatsSnapshot }
+struct TempTilesProps {
+    snap: api::StatsSnapshot,
+}
 
 /// Per-sensor temperature card grid. Shows live °C for every sensor
 /// the kernel exposed (CPU thermal zone + drivetemp readings for each
@@ -266,14 +278,16 @@ struct TempTileProps {
 
 #[component]
 fn TempTile(props: TempTileProps) -> Element {
-    let kind = if props.celsius >= 75.0 { "danger" }
-        else if props.celsius >= 60.0 { "warn" }
-        else { "ok" };
+    let kind = if props.celsius >= 75.0 {
+        "danger"
+    } else if props.celsius >= 60.0 {
+        "warn"
+    } else {
+        "ok"
+    };
     // Map 30 °C -> 0% / 90 °C -> 100% so the bar reads at a glance.
     let pct = (((props.celsius - 30.0) / 60.0) * 100.0).clamp(0.0, 100.0);
-    let pretty_label = if props.sensor.starts_with("cpu")
-        || props.sensor.contains("thermal")
-    {
+    let pretty_label = if props.sensor.starts_with("cpu") || props.sensor.contains("thermal") {
         "CPU".to_string()
     } else {
         format!("/dev/{}", props.sensor)
@@ -293,7 +307,10 @@ fn TempTile(props: TempTileProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct NetworkSparklinesProps { ifaces: Vec<String>, snap: api::StatsSnapshot }
+struct NetworkSparklinesProps {
+    ifaces: Vec<String>,
+    snap: api::StatsSnapshot,
+}
 
 #[component]
 fn NetworkSparklines(props: NetworkSparklinesProps) -> Element {
@@ -315,7 +332,10 @@ fn NetworkSparklines(props: NetworkSparklinesProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct NetSparkCardProps { name: String, current: Option<api::NetIface> }
+struct NetSparkCardProps {
+    name: String,
+    current: Option<api::NetIface>,
+}
 
 #[component]
 fn NetSparkCard(props: NetSparkCardProps) -> Element {
@@ -357,11 +377,15 @@ fn NetSparkCard(props: NetSparkCardProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct NetSparkSvgProps { points: Vec<api::NetSeriesPoint> }
+struct NetSparkSvgProps {
+    points: Vec<api::NetSeriesPoint>,
+}
 
 #[component]
 fn NetSparkSvg(props: NetSparkSvgProps) -> Element {
-    let max = props.points.iter()
+    let max = props
+        .points
+        .iter()
         .map(|p| p.rx_bps.max(p.tx_bps))
         .max()
         .unwrap_or(1)
@@ -380,7 +404,10 @@ fn NetSparkSvg(props: NetSparkSvgProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct DiskSparklinesProps { disks: Vec<String>, snap: api::StatsSnapshot }
+struct DiskSparklinesProps {
+    disks: Vec<String>,
+    snap: api::StatsSnapshot,
+}
 
 #[component]
 fn DiskSparklines(props: DiskSparklinesProps) -> Element {
@@ -402,7 +429,10 @@ fn DiskSparklines(props: DiskSparklinesProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct DiskSparkCardProps { device: String, current: Option<api::DiskIo> }
+struct DiskSparkCardProps {
+    device: String,
+    current: Option<api::DiskIo>,
+}
 
 #[component]
 fn DiskSparkCard(props: DiskSparkCardProps) -> Element {
@@ -445,11 +475,15 @@ fn DiskSparkCard(props: DiskSparkCardProps) -> Element {
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct DiskSparkSvgProps { points: Vec<api::DiskSeriesPoint> }
+struct DiskSparkSvgProps {
+    points: Vec<api::DiskSeriesPoint>,
+}
 
 #[component]
 fn DiskSparkSvg(props: DiskSparkSvgProps) -> Element {
-    let max = props.points.iter()
+    let max = props
+        .points
+        .iter()
         .map(|p| p.read_bps.max(p.write_bps))
         .max()
         .unwrap_or(1)
@@ -492,7 +526,9 @@ where
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct ExportSummaryRowProps { row: api::ExportRow }
+struct ExportSummaryRowProps {
+    row: api::ExportRow,
+}
 
 #[component]
 fn ExportSummaryRow(props: ExportSummaryRowProps) -> Element {
@@ -500,12 +536,26 @@ fn ExportSummaryRow(props: ExportSummaryRowProps) -> Element {
     let p = &r.parsed;
     let mut bits: Vec<String> = Vec::new();
     bits.push((if p.rw { "rw" } else { "ro" }).into());
-    if p.sync { bits.push("sync".into()); } else { bits.push("async".into()); }
-    if p.no_subtree_check { bits.push("no_subtree_check".into()); }
-    if !p.squash.is_empty() { bits.push(p.squash.clone()); }
-    if let Some(uid) = p.anonuid { bits.push(format!("anonuid={uid}")); }
-    if let Some(gid) = p.anongid { bits.push(format!("anongid={gid}")); }
-    if p.insecure { bits.push("insecure".into()); }
+    if p.sync {
+        bits.push("sync".into());
+    } else {
+        bits.push("async".into());
+    }
+    if p.no_subtree_check {
+        bits.push("no_subtree_check".into());
+    }
+    if !p.squash.is_empty() {
+        bits.push(p.squash.clone());
+    }
+    if let Some(uid) = p.anonuid {
+        bits.push(format!("anonuid={uid}"));
+    }
+    if let Some(gid) = p.anongid {
+        bits.push(format!("anongid={gid}"));
+    }
+    if p.insecure {
+        bits.push("insecure".into());
+    }
     let summary = bits.join(", ");
     rsx! {
         tr {
@@ -518,10 +568,15 @@ fn ExportSummaryRow(props: ExportSummaryRowProps) -> Element {
 
 fn format_bytes(b: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    if b == 0 { return "0 B".into(); }
+    if b == 0 {
+        return "0 B".into();
+    }
     let mut idx = 0;
     let mut v = b as f64;
-    while v >= 1024.0 && idx < UNITS.len() - 1 { v /= 1024.0; idx += 1; }
+    while v >= 1024.0 && idx < UNITS.len() - 1 {
+        v /= 1024.0;
+        idx += 1;
+    }
     if v >= 100.0 || idx == 0 {
         format!("{:.0} {}", v, UNITS[idx])
     } else {
@@ -531,7 +586,9 @@ fn format_bytes(b: u64) -> String {
 
 /// Bytes per second formatted as the most readable rate (B/s, KB/s, …).
 fn format_rate(bps: u64) -> String {
-    if bps == 0 { return "—".into(); }
+    if bps == 0 {
+        return "—".into();
+    }
     let s = format_bytes(bps);
     format!("{s}/s")
 }

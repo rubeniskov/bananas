@@ -1,7 +1,9 @@
 //! Read-side helpers for the UI history view.
 
 use super::Database;
-use crate::metrics::{cpu::CpuStats, disk::DiskIo, mem::MemStats, net::NetIface, partitions::Partition, Snapshot};
+use crate::metrics::{
+    Snapshot, cpu::CpuStats, disk::DiskIo, mem::MemStats, net::NetIface, partitions::Partition,
+};
 use anyhow::Result;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -119,24 +121,25 @@ pub struct SeriesKeys {
 pub fn series_keys(db: &Database) -> Result<SeriesKeys> {
     db.with(|c| {
         let interfaces = {
-            let mut stmt =
-                c.prepare("SELECT DISTINCT iface FROM net_samples ORDER BY iface")?;
+            let mut stmt = c.prepare("SELECT DISTINCT iface FROM net_samples ORDER BY iface")?;
             stmt.query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
         let disks = {
-            let mut stmt =
-                c.prepare("SELECT DISTINCT device FROM disk_samples ORDER BY device")?;
+            let mut stmt = c.prepare("SELECT DISTINCT device FROM disk_samples ORDER BY device")?;
             stmt.query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
         let temps = {
-            let mut stmt =
-                c.prepare("SELECT DISTINCT sensor FROM temp_samples ORDER BY sensor")?;
+            let mut stmt = c.prepare("SELECT DISTINCT sensor FROM temp_samples ORDER BY sensor")?;
             stmt.query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        Ok(SeriesKeys { interfaces, disks, temps })
+        Ok(SeriesKeys {
+            interfaces,
+            disks,
+            temps,
+        })
     })
 }
 

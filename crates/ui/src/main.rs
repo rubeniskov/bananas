@@ -69,7 +69,13 @@ impl AuthCtx {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Page { Stats, Exports, Storage, Users, Cloud }
+enum Page {
+    Stats,
+    Exports,
+    Storage,
+    Users,
+    Cloud,
+}
 
 impl Page {
     /// URL-hash slug used to make the current page survive a full-page
@@ -103,7 +109,9 @@ impl Page {
 /// from earlier builds land on Stats and get rewritten by the
 /// canonicalize step below.
 fn read_page_from_url() -> Page {
-    let Some(window) = web_sys::window() else { return Page::Stats };
+    let Some(window) = web_sys::window() else {
+        return Page::Stats;
+    };
     let hash = window.location().hash().unwrap_or_default();
     let slug = hash.trim_start_matches('#').trim_start_matches('/');
     Page::from_slug(slug).unwrap_or(Page::Stats)
@@ -115,19 +123,19 @@ fn read_page_from_url() -> Page {
 /// instead of `set_hash` so the path component is also normalized and
 /// nav-tab clicks don't push a history entry per click.
 fn canonicalize_url(page: Page) {
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let target = format!("/#{}", page.slug());
     if let Ok(history) = window.history() {
-        let _ = history.replace_state_with_url(
-            &wasm_bindgen::JsValue::NULL,
-            "",
-            Some(&target),
-        );
+        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&target));
     }
 }
 
 #[derive(Props, Clone, PartialEq)]
-struct SignedInShellProps { username: String }
+struct SignedInShellProps {
+    username: String,
+}
 
 #[component]
 fn SignedInShell(props: SignedInShellProps) -> Element {
@@ -141,19 +149,18 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
         canonicalize_url(page());
     });
     use_effect(move || {
-        use wasm_bindgen::closure::Closure;
         use wasm_bindgen::JsCast;
-        let Some(window) = web_sys::window() else { return };
+        use wasm_bindgen::closure::Closure;
+        let Some(window) = web_sys::window() else {
+            return;
+        };
         let cb = Closure::<dyn FnMut()>::new(move || {
             let next = read_page_from_url();
             if *page.peek() != next {
                 page.set(next);
             }
         });
-        let _ = window.add_event_listener_with_callback(
-            "hashchange",
-            cb.as_ref().unchecked_ref(),
-        );
+        let _ = window.add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref());
         cb.forget();
     });
     let mut config_banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
@@ -170,8 +177,13 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
         spawn(async move {
             match api::fetch_config_toml().await {
                 Ok(toml) => match download_text(&toml, "application/toml") {
-                    Ok(()) => config_banner.set(Some((BannerKind::Ok, "Saved config to your downloads.".into()))),
-                    Err(e) => config_banner.set(Some((BannerKind::Err, format!("Download failed: {e}")))),
+                    Ok(()) => config_banner.set(Some((
+                        BannerKind::Ok,
+                        "Saved config to your downloads.".into(),
+                    ))),
+                    Err(e) => {
+                        config_banner.set(Some((BannerKind::Err, format!("Download failed: {e}"))))
+                    }
                 },
                 Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
                 Err(e) => config_banner.set(Some((BannerKind::Err, e.to_string()))),
@@ -184,10 +196,18 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     // download). Look up the input element by id from the global DOM.
     let load_change = move |_: dioxus::prelude::Event<dioxus::prelude::FormData>| {
         use wasm_bindgen::JsCast;
-        let Some(window) = web_sys::window() else { return };
-        let Some(document) = window.document() else { return };
-        let Some(el) = document.get_element_by_id("load-config-input") else { return };
-        let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { return };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let Some(el) = document.get_element_by_id("load-config-input") else {
+            return;
+        };
+        let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else {
+            return;
+        };
         let Some(files) = input.files() else { return };
         let Some(file) = files.get(0) else { return };
         let promise = file.text();
@@ -211,7 +231,11 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                                 msg.push_str("\n\n");
                                 msg.push_str(&summary.notes.join("\n"));
                             }
-                            let kind = if summary.ok { BannerKind::Ok } else { BannerKind::Err };
+                            let kind = if summary.ok {
+                                BannerKind::Ok
+                            } else {
+                                BannerKind::Err
+                            };
                             config_banner.set(Some((kind, msg)));
                             // Tell every page subscribing to the refresh
                             // tick (Exports, Mounts, Users, Storage) to
@@ -294,9 +318,17 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum BannerKind { Ok, Err }
+enum BannerKind {
+    Ok,
+    Err,
+}
 impl BannerKind {
-    fn css(self) -> &'static str { match self { BannerKind::Ok => "ok", BannerKind::Err => "err" } }
+    fn css(self) -> &'static str {
+        match self {
+            BannerKind::Ok => "ok",
+            BannerKind::Err => "err",
+        }
+    }
 }
 
 /// Trigger a browser download of `text` as `application/toml`. Builds a
@@ -374,7 +406,11 @@ fn App() -> Element {
     let mut auth: Signal<AuthState> = use_signal(|| AuthState::Loading);
     let mut me: Signal<Option<api::Me>> = use_signal(|| None);
     let refresh: Signal<u32> = use_signal(|| 0);
-    use_context_provider(|| AuthCtx { state: auth, me, refresh });
+    use_context_provider(|| AuthCtx {
+        state: auth,
+        me,
+        refresh,
+    });
 
     use_effect(move || {
         spawn(async move {

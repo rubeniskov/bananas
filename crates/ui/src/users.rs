@@ -184,7 +184,9 @@ pub fn UsersPage() -> Element {
 }
 
 fn confirm(msg: &str) -> bool {
-    window().and_then(|w| w.confirm_with_message(msg).ok()).unwrap_or(false)
+    window()
+        .and_then(|w| w.confirm_with_message(msg).ok())
+        .unwrap_or(false)
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -200,11 +202,19 @@ fn UserRow(props: UserRowProps) -> Element {
     let u = &props.user;
     let is_admin = u.name == "root" || u.groups.iter().any(|g| g == "bananas-admin");
     let admin_locked = u.name == "root";
-    let groups = if u.groups.is_empty() { "—".into() } else { u.groups.join(", ") };
+    let groups = if u.groups.is_empty() {
+        "—".into()
+    } else {
+        u.groups.join(", ")
+    };
     let full = u.full_name.clone().unwrap_or_default();
     let status_class = if u.locked { "badge ro" } else { "badge rw" };
     let status_label = if u.locked { "locked" } else { "active" };
-    let admin_btn_class: &'static str = if is_admin { "btn-icon warn" } else { "btn-icon ok" };
+    let admin_btn_class: &'static str = if is_admin {
+        "btn-icon warn"
+    } else {
+        "btn-icon ok"
+    };
     let admin_btn_tip: &'static str = if is_admin {
         "Revoke this user's BanaNAS sign-in privilege."
     } else {
@@ -279,9 +289,13 @@ fn AddUserModal(props: AddUserModalProps) -> Element {
     let mut busy = use_signal(|| false);
 
     let mut submit = move |_| {
-        if busy() { return; }
+        if busy() {
+            return;
+        }
         if username().is_empty() || password().is_empty() {
-            props.on_error.call("username and password are required".into());
+            props
+                .on_error
+                .call("username and password are required".into());
             return;
         }
         if password() != confirm_pw() {
@@ -292,7 +306,11 @@ fn AddUserModal(props: AddUserModalProps) -> Element {
         let body = api::CreateUser {
             username: username(),
             password: password(),
-            full_name: if full_name().is_empty() { None } else { Some(full_name()) },
+            full_name: if full_name().is_empty() {
+                None
+            } else {
+                Some(full_name())
+            },
             admin: grant_admin(),
         };
         let on_created = props.on_created.clone();
@@ -407,7 +425,9 @@ fn ChangePasswordModal(props: ChangePasswordModalProps) -> Element {
 
     let username_for_submit = props.username.clone();
     let mut submit = move |_| {
-        if busy() { return; }
+        if busy() {
+            return;
+        }
         if password().is_empty() {
             props.on_error.call("password must not be empty".into());
             return;

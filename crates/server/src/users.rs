@@ -20,8 +20,9 @@ use crate::AppState;
 /// JSON, returns it. Maps helper failures to a 400 with the error string.
 async fn proxy(state: &AppState, cmd: Command) -> Response {
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => match serde_json::from_str::<Value>(&output)
-        {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => match serde_json::from_str::<Value>(&output) {
             Ok(value) => Json(value).into_response(),
             // ListUsers returns a JSON blob; the action commands return a
             // human-readable string. Wrap the latter so the client gets a
@@ -88,7 +89,10 @@ pub async fn set_admin(
 ) -> Response {
     proxy(
         &state,
-        Command::SetAdmin { username, admin: req.admin },
+        Command::SetAdmin {
+            username,
+            admin: req.admin,
+        },
     )
     .await
 }

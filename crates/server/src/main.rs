@@ -125,13 +125,19 @@ async fn main() -> Result<()> {
         .route("/exports", get(get_exports).post(post_export))
         .route("/exports/{idx}", delete(delete_export).put(put_export))
         .route("/browse", get(get_browse))
-        .route("/permissions", get(permissions::get_perms).put(permissions::put_perms))
+        .route(
+            "/permissions",
+            get(permissions::get_perms).put(permissions::put_perms),
+        )
         .route("/storage", get(get_storage))
         .route("/stats/snapshot", get(stats::snapshot))
         .route("/stats/range", get(stats::range))
         .route("/stats/series", get(stats::series))
         .route("/stats/live", get(stats_ws::live))
-        .route("/stats/config", get(stats::get_config).put(stats::put_config))
+        .route(
+            "/stats/config",
+            get(stats::get_config).put(stats::put_config),
+        )
         .route("/fstab", get(get_fstab).post(post_fstab))
         .route("/fstab/{idx}", delete(delete_fstab).put(put_fstab))
         .route("/users", get(users::list).post(users::create))
@@ -139,12 +145,21 @@ async fn main() -> Result<()> {
         .route("/users/{username}/password", put(users::set_password))
         .route("/users/{username}/admin", put(users::set_admin))
         .route("/cloud/providers", get(cloud::providers))
-        .route("/cloud/accounts", get(cloud::list_accounts).post(cloud::add_account))
+        .route(
+            "/cloud/accounts",
+            get(cloud::list_accounts).post(cloud::add_account),
+        )
         .route("/cloud/accounts/{name}", delete(cloud::delete_account))
         .route("/cloud/syncs", get(cloud::list_syncs).post(cloud::add_sync))
-        .route("/cloud/syncs/{idx}", put(cloud::update_sync).delete(cloud::delete_sync))
+        .route(
+            "/cloud/syncs/{idx}",
+            put(cloud::update_sync).delete(cloud::delete_sync),
+        )
         .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
-        .route("/config", get(config::export_config).post(config::import_config))
+        .route(
+            "/config",
+            get(config::export_config).post(config::import_config),
+        )
         .route_layer(from_fn_with_state(state.clone(), auth::require_session))
         .with_state(state);
 
@@ -292,10 +307,7 @@ async fn post_export(
     apply(&state, &rows).await
 }
 
-async fn delete_export(
-    State(state): State<AppState>,
-    Path(idx): Path<usize>,
-) -> impl IntoResponse {
+async fn delete_export(State(state): State<AppState>, Path(idx): Path<usize>) -> impl IntoResponse {
     let raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
     let mut rows = exports::rows(&raw);
     if idx >= rows.len() {
@@ -347,9 +359,9 @@ async fn apply(state: &AppState, rows: &[Row]) -> axum::response::Response {
     let content = exports::serialize(rows);
     let cmd = Command::WriteExports { content };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => {
-            Json(json!({ "ok": true, "output": output })).into_response()
-        }
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
         Ok(HelperResponse { error, output, .. }) => api_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!(
@@ -387,7 +399,11 @@ fn default_browse_path() -> String {
 async fn get_storage(State(state): State<AppState>) -> impl IntoResponse {
     match storage::get_storage(&state).await {
         Ok(report) => Json(report).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
     }
 }
 
@@ -494,12 +510,11 @@ struct AddFstab {
     dump: u32,
 }
 
-fn default_pass() -> u32 { 2 }
+fn default_pass() -> u32 {
+    2
+}
 
-async fn post_fstab(
-    State(state): State<AppState>,
-    Json(req): Json<AddFstab>,
-) -> impl IntoResponse {
+async fn post_fstab(State(state): State<AppState>, Json(req): Json<AddFstab>) -> impl IntoResponse {
     if req.source.trim().is_empty() {
         return api_err(StatusCode::BAD_REQUEST, "device/source is required");
     }
@@ -544,10 +559,7 @@ async fn post_fstab(
     apply_fstab(&state, &rows).await
 }
 
-async fn delete_fstab(
-    State(state): State<AppState>,
-    Path(idx): Path<usize>,
-) -> impl IntoResponse {
+async fn delete_fstab(State(state): State<AppState>, Path(idx): Path<usize>) -> impl IntoResponse {
     let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
     let mut rows = fstab::rows(&raw);
     if idx >= rows.len() {
@@ -647,9 +659,9 @@ async fn apply_fstab(state: &AppState, rows: &[fstab::Row]) -> axum::response::R
 
     let cmd = Command::WriteFstab { content };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => {
-            Json(json!({ "ok": true, "output": output })).into_response()
-        }
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
         Ok(HelperResponse { error, output, .. }) => api_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!(

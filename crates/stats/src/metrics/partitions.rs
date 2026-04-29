@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Partition {
-    pub device: String,    // "/dev/sda1"
-    pub parent: String,    // "sda"
-    pub mount: String,     // "/mnt/data"
-    pub fs: String,        // "ext4"
+    pub device: String, // "/dev/sda1"
+    pub parent: String, // "sda"
+    pub mount: String,  // "/mnt/data"
+    pub fs: String,     // "ext4"
     pub total: u64,
     pub used: u64,
     pub free: u64,
@@ -169,7 +169,10 @@ tmpfs /run tmpfs rw 0 0
 ";
         let entries = parse_mounts(text);
         assert_eq!(entries.len(), 4);
-        let real: Vec<_> = entries.iter().filter(|e| is_real_device(&e.device)).collect();
+        let real: Vec<_> = entries
+            .iter()
+            .filter(|e| is_real_device(&e.device))
+            .collect();
         assert_eq!(real.len(), 2);
         assert_eq!(real[1].mount, "/mnt/usb drive");
     }

@@ -51,19 +51,8 @@ const PROTECTED_MOUNTPOINTS: &[&str] = &[
 ];
 
 const PROTECTED_FSTYPES: &[&str] = &[
-    "proc",
-    "sysfs",
-    "devpts",
-    "devtmpfs",
-    "cgroup",
-    "cgroup2",
-    "efivarfs",
-    "tracefs",
-    "debugfs",
-    "configfs",
-    "fusectl",
-    "pstore",
-    "mqueue",
+    "proc", "sysfs", "devpts", "devtmpfs", "cgroup", "cgroup2", "efivarfs", "tracefs", "debugfs",
+    "configfs", "fusectl", "pstore", "mqueue",
 ];
 
 /// Returns true if this row represents a system mount the UI must not
@@ -142,10 +131,14 @@ pub fn serialize(rows: &[Row]) -> String {
             };
             format!(
                 "{}{}  {}{}  {}{}  {}{}  {}  {}\n",
-                row[0], pad(0),
-                row[1], pad(1),
-                row[2], pad(2),
-                row[3], pad(3),
+                row[0],
+                pad(0),
+                row[1],
+                pad(1),
+                row[2],
+                pad(2),
+                row[3],
+                pad(3),
                 r.dump,
                 r.pass,
             )
@@ -175,7 +168,14 @@ fn parse_line(line: &str) -> Option<Row> {
     let options = fields[3].to_string();
     let dump = fields.get(4).and_then(|s| s.parse().ok()).unwrap_or(0u32);
     let pass = fields.get(5).and_then(|s| s.parse().ok()).unwrap_or(0u32);
-    Some(Row { source, mountpoint, fstype, options, dump, pass })
+    Some(Row {
+        source,
+        mountpoint,
+        fstype,
+        options,
+        dump,
+        pass,
+    })
 }
 
 fn unescape(s: &str) -> String {
@@ -193,8 +193,8 @@ pub struct Opts {
     pub defaults: bool,
     pub noatime: bool,
     pub nofail: bool,
-    pub ro: bool,            // ro vs rw
-    pub discard: bool,       // SSD trim
+    pub ro: bool,      // ro vs rw
+    pub discard: bool, // SSD trim
     pub noexec: bool,
     pub nosuid: bool,
     pub nodev: bool,
@@ -435,11 +435,7 @@ mod tests {
     fn user_managed_mounts_are_not_protected() {
         assert!(!is_protected(&row("LABEL=media", "/srv/media", "ext4")));
         assert!(!is_protected(&row("UUID=abc", "/mnt/x", "ext4")));
-        assert!(!is_protected(&row(
-            "192.168.1.5:/share",
-            "/mnt/nas",
-            "nfs"
-        )));
+        assert!(!is_protected(&row("192.168.1.5:/share", "/mnt/nas", "nfs")));
     }
 
     #[test]

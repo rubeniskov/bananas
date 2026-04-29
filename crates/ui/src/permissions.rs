@@ -40,10 +40,20 @@ pub fn PermissionsModal(props: PermissionsModalProps) -> Element {
 
     // First-load hydrate: pull values from /api/permissions once.
     use_effect(move || {
-        if hydrated() { return; }
+        if hydrated() {
+            return;
+        }
         if let Some(Ok(p)) = info.read_unchecked().as_ref() {
-            user_or_uid.set(if p.user.is_empty() { p.uid.to_string() } else { p.user.clone() });
-            group_or_gid.set(if p.group.is_empty() { p.gid.to_string() } else { p.group.clone() });
+            user_or_uid.set(if p.user.is_empty() {
+                p.uid.to_string()
+            } else {
+                p.user.clone()
+            });
+            group_or_gid.set(if p.group.is_empty() {
+                p.gid.to_string()
+            } else {
+                p.group.clone()
+            });
             mode.set(p.mode.clone());
             hydrated.set(true);
         }
@@ -51,21 +61,28 @@ pub fn PermissionsModal(props: PermissionsModalProps) -> Element {
 
     let path_for_submit = props.path.clone();
     let mut submit = move |_| {
-        if busy() { return; }
+        if busy() {
+            return;
+        }
         error.set(None);
         // Parse owner: accept either a numeric UID or a username — the
         // server's helper currently only takes numeric, so we do a
         // best-effort UID lookup against the loaded info if a name is
         // supplied. Falls back to "must be numeric" hint if we can't
         // parse and the name doesn't match the loaded user.
-        let info_now = info.read_unchecked().as_ref().and_then(|r| r.as_ref().ok().cloned());
+        let info_now = info
+            .read_unchecked()
+            .as_ref()
+            .and_then(|r| r.as_ref().ok().cloned());
         let uid: Option<u32> = match user_or_uid().trim().parse::<u32>() {
             Ok(n) => Some(n),
             Err(_) => match &info_now {
                 Some(p) if user_or_uid().trim() == p.user => Some(p.uid),
                 Some(p) if user_or_uid().trim().is_empty() => Some(p.uid),
                 _ => {
-                    error.set(Some("Owner must be a numeric UID for now (or the existing username).".into()));
+                    error.set(Some(
+                        "Owner must be a numeric UID for now (or the existing username).".into(),
+                    ));
                     return;
                 }
             },
@@ -76,7 +93,9 @@ pub fn PermissionsModal(props: PermissionsModalProps) -> Element {
                 Some(p) if group_or_gid().trim() == p.group => Some(p.gid),
                 Some(p) if group_or_gid().trim().is_empty() => Some(p.gid),
                 _ => {
-                    error.set(Some("Group must be a numeric GID for now (or the existing group).".into()));
+                    error.set(Some(
+                        "Group must be a numeric GID for now (or the existing group).".into(),
+                    ));
                     return;
                 }
             },

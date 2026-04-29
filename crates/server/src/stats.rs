@@ -33,11 +33,16 @@ impl StatsState {
     /// transparently rather than panicking at boot.
     pub fn open(path: &std::path::Path) -> Self {
         if !path.exists() {
-            tracing::warn!(?path, "stats DB not found — /api/stats/* will return empty until bananas-stats writes its first row");
+            tracing::warn!(
+                ?path,
+                "stats DB not found — /api/stats/* will return empty until bananas-stats writes its first row"
+            );
             return Self { db: None };
         }
         match storage::Database::open_readonly(path) {
-            Ok(db) => Self { db: Some(Arc::new(db)) },
+            Ok(db) => Self {
+                db: Some(Arc::new(db)),
+            },
             Err(e) => {
                 tracing::warn!(error = ?e, ?path, "could not open stats DB read-only");
                 Self { db: None }
@@ -60,21 +65,22 @@ pub async fn snapshot(State(state): State<AppState>) -> Response {
 
 #[derive(Debug, Deserialize)]
 pub struct RangeParams {
-    pub metric: String,        // "net" | "disk" | "temp"
-    pub key: String,           // iface name, device name, or sensor name
+    pub metric: String, // "net" | "disk" | "temp"
+    pub key: String,    // iface name, device name, or sensor name
     #[serde(default = "default_window")]
-    pub window: String,        // "5m" | "1h" | "24h" — parsed in seconds
+    pub window: String, // "5m" | "1h" | "24h" — parsed in seconds
     #[serde(default = "default_resolution")]
-    pub resolution: String,    // "raw" | "1m"
+    pub resolution: String, // "raw" | "1m"
 }
 
-fn default_window() -> String { "5m".into() }
-fn default_resolution() -> String { "raw".into() }
+fn default_window() -> String {
+    "5m".into()
+}
+fn default_resolution() -> String {
+    "raw".into()
+}
 
-pub async fn range(
-    State(state): State<AppState>,
-    Query(p): Query<RangeParams>,
-) -> Response {
+pub async fn range(State(state): State<AppState>, Query(p): Query<RangeParams>) -> Response {
     let Some(db) = state.stats.db.as_ref() else {
         return Json(json!({ "points": [] })).into_response();
     };
@@ -86,10 +92,12 @@ pub async fn range(
         ("disk", "1m") => "disk_samples_1m",
         ("temp", "raw") => "temp_samples",
         ("temp", "1m") => "temp_samples_1m",
-        _ => return err_400(format!(
-            "unknown metric/resolution combination: metric={:?} resolution={:?}",
-            p.metric, p.resolution
-        )),
+        _ => {
+            return err_400(format!(
+                "unknown metric/resolution combination: metric={:?} resolution={:?}",
+                p.metric, p.resolution
+            ));
+        }
     };
     let now = chrono_now();
     let from = now - secs as i64;
@@ -153,9 +161,13 @@ fn empty_snapshot() -> Response {
 /// textarea without parsing.
 pub async fn get_config(State(state): State<AppState>) -> Response {
     use bananas_helper::{Command, Response as HelperResponse};
-    let cmd = Command::ReadServiceConfig { name: "stats".into() };
+    let cmd = Command::ReadServiceConfig {
+        name: "stats".into(),
+    };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => {
             // Empty output means /etc/bananas/stats.toml doesn't exist
             // yet (the helper returns "" rather than an error). Fall
             // back to serializing the daemon's compiled-in defaults so
@@ -169,9 +181,9 @@ pub async fn get_config(State(state): State<AppState>) -> Response {
             };
             Json(json!({ "config": body })).into_response()
         }
-        Ok(HelperResponse { error, .. }) => err_500(
-            error.unwrap_or_else(|| "helper rejected ReadServiceConfig".into()),
-        ),
+        Ok(HelperResponse { error, .. }) => {
+            err_500(error.unwrap_or_else(|| "helper rejected ReadServiceConfig".into()))
+        }
         Err(e) => err_500(format!("helper unreachable: {e}")),
     }
 }
@@ -192,19 +204,16 @@ pub struct PutConfig {
 /// PUT /api/stats/config — replace stats.toml and bounce the service.
 /// Returns `{ok, output}` mirroring the helper's response so the UI can
 /// surface systemctl's stdout in the success banner.
-pub async fn put_config(
-    State(state): State<AppState>,
-    Json(req): Json<PutConfig>,
-) -> Response {
+pub async fn put_config(State(state): State<AppState>, Json(req): Json<PutConfig>) -> Response {
     use bananas_helper::{Command, Response as HelperResponse};
     let cmd = Command::WriteServiceConfig {
         name: "stats".into(),
         content: req.config,
     };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, output, .. }) => {
-            Json(json!({ "ok": true, "output": output })).into_response()
-        }
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
         Ok(HelperResponse { error, output, .. }) => err_400(format!(
             "{}\n\n{}",
             error.unwrap_or_else(|| "helper rejected WriteServiceConfig".into()),
@@ -215,7 +224,11 @@ pub async fn put_config(
 }
 
 fn err_500(msg: String) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": msg }))).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": msg })),
+    )
+        .into_response()
 }
 
 fn err_400(msg: String) -> Response {

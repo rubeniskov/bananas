@@ -32,8 +32,7 @@ fn main() -> Result<()> {
     // Local offset must be read before tokio spawns worker threads —
     // `time::UtcOffset::current_local_offset()` is only sound while the
     // process is single-threaded.
-    let local_offset = time::UtcOffset::current_local_offset()
-        .unwrap_or(time::UtcOffset::UTC);
+    let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
 
     let cfg_path = std::env::args()
         .skip_while(|a| a != "--config")

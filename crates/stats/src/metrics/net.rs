@@ -42,7 +42,10 @@ impl NetFilter {
 
     /// Allow-all filter (used as a fallback if config parsing fails).
     pub fn allow_all() -> Self {
-        Self { include: vec!["*".into()], exclude: HashSet::new() }
+        Self {
+            include: vec!["*".into()],
+            exclude: HashSet::new(),
+        }
     }
 
     pub fn allows(&self, name: &str) -> bool {
@@ -90,19 +93,27 @@ pub fn parse(text: &str) -> Counters {
     let mut out = Counters::default();
     // First two lines are headers.
     for line in text.lines().skip(2) {
-        let Some((name, rest)) = line.split_once(':') else { continue };
+        let Some((name, rest)) = line.split_once(':') else {
+            continue;
+        };
         let name = name.trim().to_string();
         if name == "lo" {
             continue;
         }
-        let nums: Vec<u64> = rest.split_whitespace().filter_map(|f| f.parse().ok()).collect();
+        let nums: Vec<u64> = rest
+            .split_whitespace()
+            .filter_map(|f| f.parse().ok())
+            .collect();
         // Receive bytes is field 0, transmit bytes is field 8.
         if nums.len() < 9 {
             continue;
         }
         out.per_iface.insert(
             name,
-            RawCounters { rx_bytes: nums[0], tx_bytes: nums[8] },
+            RawCounters {
+                rx_bytes: nums[0],
+                tx_bytes: nums[8],
+            },
         );
     }
     out
@@ -156,7 +167,9 @@ Inter-|   Receive                                                |  Transmit
  wlan0:   500    5    0    0    0     0          0         0        300      3    0    0    0     0       0          0
 ";
 
-    fn allow_all() -> NetFilter { NetFilter::allow_all() }
+    fn allow_all() -> NetFilter {
+        NetFilter::allow_all()
+    }
 
     #[test]
     fn skips_loopback() {

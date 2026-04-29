@@ -5,7 +5,7 @@
 //! - `metrics` — `/proc` / `/sys` samplers + the `Snapshot` wire shape
 //! - `storage` — WAL-mode SQLite writer/reader + retention budget
 //! - `config`  — TOML config types (sampling intervals, retention windows,
-//!                device filters, network filters, UI prefs)
+//!   device filters, network filters, UI prefs)
 //!
 //! Two binaries depend on this lib: the daemon at `bin/main.rs` (writer)
 //! and `crates/dashboard` (reader, LCD UI). The HTTP admin
