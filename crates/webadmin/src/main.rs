@@ -175,6 +175,10 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     });
     let mut config_banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
     let mut reboot_confirm = use_signal(|| false);
+    // Dropdown that consolidates Save/Load config, Reboot, and Sign out
+    // behind one menu trigger at the top-right. Closes on backdrop click
+    // or after any of the actions fires.
+    let mut menu_open = use_signal(|| false);
 
     let logout = move |_| {
         spawn(async move {
@@ -205,7 +209,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     // File input → read selected file via web_sys (Dioxus' FileData
     // abstraction is finicky in 0.7, and we already use web_sys for the
     // download). Look up the input element by id from the global DOM.
-    let load_change = move |_: dioxus::prelude::Event<dioxus::prelude::FormData>| {
+    let mut load_change = move |_: dioxus::prelude::Event<dioxus::prelude::FormData>| {
         use wasm_bindgen::JsCast;
         let Some(window) = web_sys::window() else {
             return;
@@ -286,64 +290,94 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
                     on_click: move |_| page.set(Page::Settings) }
                 span { class: "spacer" }
-                div { class: "nav-actions",
+                div { class: "user-menu",
+                    span { class: "user-greeting", "Welcome, ", strong { "{props.username}" }, "!" }
                     button {
-                        class: "ghost",
-                        "data-tip": "Download the current exports + fstab + users as a TOML backup.",
+                        class: "user-menu-trigger ghost",
+                        "data-tip": "Account & system actions",
                         disabled: auth_ctx.busy.read().clone(),
-                        onclick: move |_| save_config(()),
-                        icons::Icon { name: "download" }
-                        "Save config"
+                        onclick: move |_| menu_open.set(!menu_open()),
+                        "aria-expanded": "{menu_open()}",
+                        "aria-haspopup": "menu",
+                        icons::Icon { name: "circle-user-round" }
+                        icons::Icon { name: "chevron-down", class: "user-menu-chevron" }
                     }
-                    {
-                        // While a load is in flight, swap the upload <label> for a
-                        // disabled button so re-clicking can't fire a second
-                        // import. The pointer-events: none on .busy-overlay is the
-                        // primary guard but disabling the trigger keeps the UI
-                        // honest about state.
-                        let busy = auth_ctx.busy.read().clone();
-                        if busy {
-                            rsx! {
-                                button { class: "ghost", disabled: true,
-                                    icons::Icon { name: "upload" }
-                                    "Load config"
-                                }
+                    if menu_open() {
+                        div {
+                            class: "user-menu-backdrop",
+                            onclick: move |_| menu_open.set(false),
+                        }
+                        div { class: "user-menu-popover", role: "menu",
+                            button {
+                                class: "user-menu-item",
+                                role: "menuitem",
+                                disabled: auth_ctx.busy.read().clone(),
+                                onclick: move |_| {
+                                    menu_open.set(false);
+                                    save_config(());
+                                },
+                                icons::Icon { name: "download" }
+                                span { "Save config" }
                             }
-                        } else {
-                            rsx! {
-                                label {
-                                    class: "ghost button-like",
-                                    "data-tip": "Pick a TOML file to apply. Restores exports + fstab + users.",
-                                    icons::Icon { name: "upload" }
-                                    "Load config"
-                                    input {
-                                        id: "load-config-input",
-                                        r#type: "file",
-                                        accept: ".toml,application/toml,text/plain",
-                                        style: "display: none",
-                                        onchange: load_change,
+                            {
+                                let busy = auth_ctx.busy.read().clone();
+                                if busy {
+                                    rsx! {
+                                        button {
+                                            class: "user-menu-item",
+                                            role: "menuitem",
+                                            disabled: true,
+                                            icons::Icon { name: "upload" }
+                                            span { "Load config" }
+                                        }
+                                    }
+                                } else {
+                                    rsx! {
+                                        label {
+                                            class: "user-menu-item",
+                                            role: "menuitem",
+                                            icons::Icon { name: "upload" }
+                                            span { "Load config" }
+                                            input {
+                                                id: "load-config-input",
+                                                r#type: "file",
+                                                accept: ".toml,application/toml,text/plain",
+                                                style: "display: none",
+                                                onchange: move |evt: dioxus::prelude::Event<dioxus::prelude::FormData>| {
+                                                    menu_open.set(false);
+                                                    load_change(evt);
+                                                },
+                                            }
+                                        }
                                     }
                                 }
                             }
+                            div { class: "user-menu-sep" }
+                            button {
+                                class: "user-menu-item danger",
+                                role: "menuitem",
+                                disabled: auth_ctx.busy.read().clone(),
+                                onclick: move |_| {
+                                    menu_open.set(false);
+                                    reboot_confirm.set(true);
+                                },
+                                icons::Icon { name: "power" }
+                                span { "Reboot" }
+                            }
+                            button {
+                                class: "user-menu-item",
+                                role: "menuitem",
+                                disabled: auth_ctx.busy.read().clone(),
+                                onclick: move |evt| {
+                                    menu_open.set(false);
+                                    logout(evt);
+                                },
+                                icons::Icon { name: "log-out" }
+                                span { "Sign out" }
+                            }
                         }
                     }
-                    button {
-                        class: "ghost",
-                        "data-tip": "Soft-reboot the BPI via systemctl. The web UI drops for ~30 s while the system comes back.",
-                        disabled: auth_ctx.busy.read().clone(),
-                        onclick: move |_| reboot_confirm.set(true),
-                        icons::Icon { name: "power" }
-                        "Reboot"
-                    }
-                    button {
-                        class: "ghost",
-                        disabled: auth_ctx.busy.read().clone(),
-                        onclick: logout,
-                        icons::Icon { name: "log-out" }
-                        "Sign out"
-                    }
                 }
-                span { class: "nav-user", "{props.username}" }
             }
 
             if let Some((kind, msg)) = config_banner() {

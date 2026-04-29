@@ -164,6 +164,14 @@ fn paths_for(name: &str) -> Element {
             path { d: "m15 9-6 6" }
             path { d: "m9 9 6 6" }
         },
+        "chevron-down" => rsx! {
+            path { d: "m6 9 6 6 6-6" }
+        },
+        "circle-user-round" => rsx! {
+            path { d: "M18 20a6 6 0 0 0-12 0" }
+            circle { cx: "12", cy: "10", r: "4" }
+            circle { cx: "12", cy: "12", r: "10" }
+        },
         // Fallback: render an empty group so unknown names don't break layout.
         _ => rsx! { g {} },
     }
