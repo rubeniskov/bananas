@@ -29,12 +29,17 @@ SYSTEMD_AUTO_ENABLE = "enable"
 # fontique font discovery), libudev + libinput (input device
 # enumeration), libxkbcommon (keymap). libdrm/libgbm only enter the
 # graph if we re-enable Slint's femtovg renderer for GPU acceleration.
+#
+# `dejavu-fonts-ttf-sans` provides actual TTF files at /usr/share/fonts/.
+# Without a real font package, fontconfig returns no matches and
+# fontique panics with `NoMatch` before the dashboard's first paint.
 RDEPENDS:${PN} += " \
     bananas-stats \
     fontconfig \
     libudev \
     libxkbcommon \
     libinput \
+    dejavu-fonts-ttf-sans \
 "
 
 do_compile[noexec] = "1"

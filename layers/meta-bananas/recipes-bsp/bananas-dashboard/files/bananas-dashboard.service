@@ -19,10 +19,13 @@ Group=bananas
 SupplementaryGroups=video render input
 ExecStart=/usr/bin/bananas-dashboard
 Environment=RUST_LOG=info
-# Slint linuxkms picks the device automatically; the explicit env var
-# below makes the choice deterministic on multi-card systems and is
-# documented for posterity even if there's only one card.
-Environment=SLINT_BACKEND=linuxkms-noseat
+# SLINT_BACKEND format is <backend>-<renderer>. The `-noseat` Cargo
+# feature only changes whether libseatd is linked at build time —
+# at RUNTIME the backend name is plain `linuxkms`, and we only built
+# the software renderer in, so `linuxkms-software` is the explicit
+# choice. (Setting `linuxkms-noseat` makes Slint warn
+# "unrecognized renderer noseat, falling back default" and fail.)
+Environment=SLINT_BACKEND=linuxkms-software
 Environment=SLINT_KMS_DEVICE=/dev/dri/card0
 # Re-attempt forever — if the panel is briefly unavailable during a
 # hot-plug the dashboard should come back, not give up.
