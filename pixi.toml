@@ -21,8 +21,38 @@ info = "python --version && kas --version"
 # sstate still convinces bitbake the deploy step is done: the image's
 # WORKDIR is preserved by RM_WORK_EXCLUDE in kas.yml, so we can copy from
 # there if deploy/ is missing the tarball.
+# `build`: full Yocto image bake. Runs `kas build kas.yml` twice — first
+# to force `do_rootfs`, then a second pass for image-complete deps.
+#
+# `set -e` is the load-bearing bit here: bitbake QA failures (e.g. a
+# patch missing Upstream-Status) bubble up as a non-zero exit code, so
+# iterate aborts instead of silently shipping a stale rootfs from a
+# previous bake. The earlier version of this command swallowed bitbake
+# failures via a `;` between the two `kas build` calls and an
+# `|| true`-guarded fallback copy — that meant a failed bake would
+# happily reboot the BPI onto last-known-good, masking the real error.
+#
+# The work/-to-deploy/ fallback only runs AFTER both bake passes
+# succeeded, and only if the deploy/ tarball is older than the
+# image-complete output (occasionally bitbake doesn't republish to
+# deploy/ on a clean rebuild). That keeps the fast-path correct
+# without papering over real failures.
 [tasks.build]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; kas build kas.yml -- -c rootfs -f bananas-image && kas build kas.yml; ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz; if [ ! -f \"$ROOTFS\" ] || [ \"$ROOTFS\" -ot $(ls -t build/tmp/work/bananapro-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/bananas-image-bananapro.rootfs-*.tar.gz 2>/dev/null | head -1) ]; then echo \"deploy/ tarball stale or missing — copying from work/\"; mkdir -p build/tmp/deploy/images/bananapro; cp -f build/tmp/work/bananapro-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/* build/tmp/deploy/images/bananapro/ 2>/dev/null || true; fi'"
+cmd = """bash -c '
+set -e
+set -a; [ -f .env ] && . .env; set +a
+kas build kas.yml -- -c rootfs -f bananas-image
+kas build kas.yml
+ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz
+WORK_LATEST=$(ls -t build/tmp/work/bananapro-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/bananas-image-bananapro.rootfs-*.tar.gz 2>/dev/null | head -1)
+if [ -n \"$WORK_LATEST\" ]; then
+  if [ ! -f \"$ROOTFS\" ] || [ \"$WORK_LATEST\" -nt \"$ROOTFS\" ]; then
+    echo \"deploy/ tarball stale or missing — copying from work/\"
+    mkdir -p build/tmp/deploy/images/bananapro
+    cp -f \"$WORK_LATEST\" \"$ROOTFS\"
+  fi
+fi
+'"""
 
 [tasks.setup-fel]
 cmd = "test -d vendor/sunxi-tools || git clone --depth 1 https://github.com/linux-sunxi/sunxi-tools.git vendor/sunxi-tools && make -C vendor/sunxi-tools tools"
