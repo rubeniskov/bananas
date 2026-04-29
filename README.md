@@ -1,7 +1,13 @@
 <div align="center">
-  <img src="assets/splashscreen.png" alt="BanaNAS" width="380" />
+  <img src="assets/splashscreen.png" alt="BanaNAS" width="640" />
 
   <h1>BanaNAS</h1>
+
+  <p>
+    <a href="https://github.com/rubeniskov/bananas/actions/workflows/ci.yml"><img src="https://github.com/rubeniskov/bananas/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"/></a>
+    <a href="https://github.com/rubeniskov/bananas/releases/latest"><img src="https://img.shields.io/github/v/release/rubeniskov/bananas?display_name=tag&sort=semver" alt="Latest release"/></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/rubeniskov/bananas" alt="License: MIT"/></a>
+  </p>
 
   <p>
     <strong>A Yocto-based, batteries-included NAS distribution for the Banana Pro (BPI-M1+, Allwinner A20).</strong><br/>
@@ -58,7 +64,7 @@ Reproducibility, low idle power, no cloud lock-in, and "your own data, your own 
 
 ### LCD dashboard (`crates/dashboard`)
 
-- Slint 1.16 app on the 5″ panel, software renderer (Mali-400 GPU acceleration scaffolding present, gated behind a feature flag — see [memory backlog](#-status--roadmap)).
+- Slint 1.16 app on the 5″ panel, software renderer (Mali-400 GPU acceleration scaffolding is present but gated behind a feature flag — flip it once a working lima userspace ships in our sysroot).
 - Renders straight to `/dev/dri/card0` via `linuxkms-noseat` — no X server, no Wayland.
 - Live tiles: **CPU**, **Memory**, **Network** sparklines (per iface), **Disk I/O** sparklines (per device), **Partitions** with usage bars, **Temperatures** chip strip (CPU on-die + per-disk SMART via the kernel `drivetemp` module).
 - Subscribes to bananas-stats's Unix socket — no SQLite reads on the live path.
@@ -194,42 +200,41 @@ openssl passwd -6 -salt $(openssl rand -hex 8)
 
 ## 🏗 Architecture
 
-```
-                      ┌──────────────────────────────┐
-              wired   │   Banana Pro (BPI-M1+)       │
-NFS clients ─ Gb Eth ─┤                              │
-                      │  systemd ┐                   │
-                      │          ├ bananas-server    │
-                      │          │   (Rust + axum)   │
-                      │          │   port 8080       │
-                      │          │   /api/* + SPA    │
-                      │          │      └─ WS bus    │
-                      │          │                   │
-                      │          ├ bananas-helper    │
-                      │          │   (root, Unix     │
-                      │          │    socket RPC)    │
-                      │          │                   │
-                      │          ├ bananas-stats     │
-                      │          │   (sampler +      │
-                      │          │    SQLite WAL +   │
-                      │          │    live socket)   │
-                      │          │                   │
-                      │          ├ bananas-dashboard │
-                      │          │   (Slint LCD app  │
-                      │          │    on /dev/fb0)   │
-                      │          │                   │
-                      │          ├ rclone (for       │
-                      │          │   /api/cloud/*    │
-                      │          │   on-demand runs) │
-                      │          │                   │
-                      │          └ nfsd, sshd, …     │
-                      │                              │
-                      │  Mainline Linux 6.6          │
-                      │  + sun4i-drm + drivetemp     │
-                      │  + lima (Mali-400 GPU)       │
-                      │                              │
-                      │  U-Boot 2024.01 + splash.bmp │
-                      └──────────────────────────────┘
+```mermaid
+flowchart LR
+    Clients["NFS clients<br/>(LAN, gigabit)"]
+    Browser["Browser / phone<br/>(http://&lt;bpi&gt;:8080)"]
+    LCD["5″ RGB888 panel<br/>(/dev/dri/card0)"]
+    Cloud["Cloud providers<br/>(Drive, Dropbox, S3, …)"]
+
+    subgraph BPI["Banana Pro (BPI-M1+) — Mainline Linux 6.6 + sun4i-drm + drivetemp + lima · U-Boot 2024.01 + splash.bmp"]
+        direction TB
+        subgraph Userspace["systemd-managed services"]
+            direction TB
+            Server["bananas-server<br/>(Rust + axum, port 8080)<br/>/api/* + wasm SPA + WS bus"]
+            Helper["bananas-helper<br/>(root, Unix socket RPC)"]
+            Stats["bananas-stats<br/>(sampler + SQLite WAL<br/>+ live socket)"]
+            Dashboard["bananas-dashboard<br/>(Slint app, software<br/>renderer on KMS)"]
+            Rclone["rclone<br/>(on-demand cloud sync)"]
+            Nfsd["nfsd · sshd · …"]
+        end
+    end
+
+    Clients -->|NFSv3/v4| Nfsd
+    Browser -->|HTTP + WS| Server
+    Server -->|JSON over Unix socket| Helper
+    Server -->|subscribe| Stats
+    Dashboard -->|subscribe| Stats
+    Dashboard -->|frame buffer| LCD
+    Helper -->|exec| Rclone
+    Rclone -->|HTTPS| Cloud
+
+    classDef ext fill:#fef3c7,stroke:#92400e,color:#1f2937
+    classDef svc fill:#dbeafe,stroke:#1e3a8a,color:#1f2937
+    classDef root fill:#fee2e2,stroke:#991b1b,color:#1f2937
+    class Clients,Browser,LCD,Cloud ext
+    class Server,Stats,Dashboard,Rclone,Nfsd svc
+    class Helper root
 ```
 
 ### Crate map
@@ -251,16 +256,6 @@ NFS clients ─ Gb Eth ─┤                              │
 | `meta-openembedded/{meta-oe,meta-python,meta-networking,meta-filesystems}` | 6 | Recipes for `ttf-dejavu`, runtime libs, fonts, … |
 | `meta-arm` | 5 | ARM-specific bits. |
 | `poky/{meta,meta-poky,meta-yocto-bsp}` | 5 | Yocto core. |
-
----
-
-## 🗺 Status / Roadmap
-
-Three items are explicitly deferred — see [`memory/`](https://github.com/rubeniskov/bananas/tree/main/memory) for the longer-form decision logs:
-
-- **GPT secondary header repair** on the 24 TB SATA disk — needs an off-board x86_64 host because of the BPI's 32-bit ARM 16 TiB pgoff_t cap.
-- **Mali-400 GPU acceleration** — software renderer is currently load-bearing; the lima/femtovg revival recipe lives in `memory/project_mali_gpu.md`.
-- **U-Boot → kernel handoff blackout** — visible flash on the LCD between U-Boot splash and psplash. Mitigations + the real fix (kernel patch backport) outlined.
 
 ---
 
