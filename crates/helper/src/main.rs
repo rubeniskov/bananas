@@ -1337,6 +1337,34 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     // We tee that into the per-sync progress file so the server-side
     // JobManager (and the UI's RunRow circular bar) can poll it without
     // any IPC changes to the helper protocol.
+    // The local path has to exist before rclone runs. For `push` /
+    // `bidirectional` we want the operator to fix the underlying
+    // problem (usually: their backing disk isn't mounted yet) instead
+    // of silently pushing an empty tree to the cloud — auto-mkdir-ing
+    // here would mask the real misconfiguration. For `pull` we DO
+    // create the directory because rclone is about to populate it
+    // and a missing local target is the normal "fresh restore" case.
+    let local_missing = !std::path::Path::new(&entry.local_path).is_dir();
+    if local_missing {
+        match direction {
+            "pull" => {
+                fs::create_dir_all(&entry.local_path).await.with_context(|| {
+                    format!("creating pull target {}", entry.local_path)
+                })?;
+            }
+            _ => {
+                anyhow::bail!(
+                    "local path {:?} does not exist on this device. \
+                     If the underlying disk should be mounted there, add the \
+                     fstab entry from the Mount points tab and retry. Otherwise \
+                     edit the sync entry's Local path to point somewhere that \
+                     exists.",
+                    entry.local_path,
+                );
+            }
+        }
+    }
+
     match direction {
         "push" => {
             cmd.args(["copy", &entry.local_path, &remote_arg]);
