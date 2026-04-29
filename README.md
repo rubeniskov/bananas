@@ -130,15 +130,23 @@ Head to the [latest release](https://github.com/rubeniskov/bananas/releases/late
 
 ### 2. Flash it
 
-Find your SD device (replace `/dev/sdX` below — `lsblk` will show it under the right size):
+Find your SD device (replace `/dev/sdX` below — `lsblk` will show it under the right size). One-liner that streams straight from the tarball into `dd`, no intermediate `.wic` file:
+
+```bash
+tar -xzOf bananas-image-armv7.tar.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync && sync
+```
+
+`-O` makes `tar` extract to stdout; `dd` reads it from stdin. Saves ~575 MB of disk on the host and is the same throughput as the two-step version.
+
+> ⚠️ Double-check the device — `dd` will gladly overwrite your laptop's NVMe if you point it at the wrong path.
+
+If you'd rather verify the inner `.wic` before flashing (or you want to keep a copy on disk):
 
 ```bash
 tar -xzf bananas-image-armv7.tar.gz
 sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
 sync
 ```
-
-> ⚠️ Double-check the device — `dd` will gladly overwrite your laptop's NVMe if you point it at the wrong path.
 
 ### 3. Boot the BPI
 
