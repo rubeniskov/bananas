@@ -230,6 +230,15 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
 
 async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
     validate_exports(content)?;
+    // Make sure every export path actually exists on disk before we let
+    // nfs-server try to stat it. The image used to pre-create /srv/media
+    // and /srv/services; we removed that, and a config-bundle restore
+    // can now write rows referencing paths that the helper hasn't seen.
+    // exportfs would then fail with "Failed to stat /path: No such file
+    // or directory" and nfs-server lands in `failed`. Auto-mkdir keeps
+    // the apply atomic from the operator's point of view.
+    let mkdir_log = ensure_export_dirs(content).await;
+
     let dir = exports_path.parent().unwrap_or_else(|| Path::new("/"));
     let tmp = dir.join(format!(
         ".{}.tmp",
@@ -270,12 +279,50 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
     };
 
     Ok(format!(
-        "wrote {} ({} bytes)\n{}\n{}",
+        "wrote {} ({} bytes)\n{}{}\n{}",
         exports_path.display(),
         content.len(),
+        mkdir_log,
         nfs_state,
         reload
     ))
+}
+
+/// Walk the parsed export rows and create any path that isn't on disk
+/// yet. Owner is left at root:root (mode 0755) — operators wanting a
+/// different uid/gid use the per-row Permissions modal afterwards. The
+/// returned string lists the paths we created (or none) so the apply
+/// banner makes the side-effect visible.
+async fn ensure_export_dirs(content: &str) -> String {
+    let mut created: Vec<String> = Vec::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let path = match line.split_whitespace().next() {
+            Some(p) => p.trim_matches('"'),
+            None => continue,
+        };
+        if !path.starts_with('/') {
+            continue;
+        }
+        let p = Path::new(path);
+        if p.is_dir() {
+            continue;
+        }
+        match fs::create_dir_all(p).await {
+            Ok(()) => created.push(path.to_string()),
+            Err(e) => {
+                return format!("mkdir -p {path} failed: {e}\n");
+            }
+        }
+    }
+    if created.is_empty() {
+        String::new()
+    } else {
+        format!("created export dirs: {}\n", created.join(" "))
+    }
 }
 
 /// Lines that aren't pure whitespace or comment-only count as active
