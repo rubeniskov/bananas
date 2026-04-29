@@ -130,6 +130,11 @@ pub enum Command {
     /// non-zero exit, which the JobManager picks up and surfaces as a
     /// failed run.
     CancelCloudSync { idx: usize },
+    /// Soft-reboot the BPI via `systemctl reboot`. The helper response
+    /// fires before systemd actually reboots, so the operator's web
+    /// UI gets a confirmation banner; the connection then drops as
+    /// the daemon goes down.
+    RebootSystem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

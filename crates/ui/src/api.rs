@@ -1230,6 +1230,26 @@ struct RunsResp {
     runs: Vec<CloudJob>,
 }
 
+/// POST /api/system/reboot — soft reboot the BPI via systemd. The
+/// server returns 200 right after the helper schedules the reboot;
+/// the actual unit handler fires after our reply is on the wire, so
+/// the browser sees a normal "connection closed" a beat later.
+pub async fn reboot_system() -> Result<(), ApiError> {
+    let resp = Request::post("/api/system/reboot")
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        let status = resp.status();
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
+    }
+    Ok(())
+}
+
 /// SIGTERM the rclone process owning the given sync_idx, if any. The
 /// server forwards to the helper which reads the PID file written
 /// when the run started. Idempotent — calling on a finished run is a

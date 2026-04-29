@@ -203,6 +203,10 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::RebootSystem => match reboot_system().await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -1729,6 +1733,33 @@ async fn cancel_cloud_sync(idx: usize) -> Result<String> {
             out.status
         );
     }
+}
+
+/// `systemctl reboot` schedules a reboot through systemd. The helper
+/// returns success synchronously — systemd waits for the unit handler
+/// to finish before actually pulling the trigger, so our reply makes
+/// it back to bananas-server before the network drops. The browser
+/// just sees a connection close shortly after the apply banner.
+async fn reboot_system() -> Result<String> {
+    let out = TokioCommand::new("systemctl")
+        .arg("reboot")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .context("spawning systemctl reboot")?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        anyhow::bail!(
+            "systemctl reboot failed (status {}): {combined}",
+            out.status
+        );
+    }
+    Ok(format!("rebooting…\n{combined}"))
 }
 
 async fn exportfs_reload() -> Result<String> {

@@ -322,6 +322,30 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     }
                     button {
                         class: "ghost",
+                        "data-tip": "Soft-reboot the BPI via systemctl. The web UI drops for ~30 s while the system comes back.",
+                        disabled: auth_ctx.busy.read().clone(),
+                        onclick: move |_| {
+                            // web_sys confirm prompt — same UX as the
+                            // delete-row buttons, gives the operator
+                            // a "wait, don't" moment before pulling
+                            // the trigger.
+                            let confirm = web_sys::window()
+                                .and_then(|w| w.confirm_with_message("Reboot the BPI now? The web UI will drop for ~30 s.").ok())
+                                .unwrap_or(false);
+                            if !confirm { return; }
+                            spawn(async move {
+                                let _ = api::reboot_system().await;
+                                // Don't bother surfacing a success
+                                // banner — the server is going down
+                                // and the browser will throw a
+                                // connection error any moment.
+                            });
+                        },
+                        icons::Icon { name: "power" }
+                        "Reboot"
+                    }
+                    button {
+                        class: "ghost",
                         disabled: auth_ctx.busy.read().clone(),
                         onclick: logout,
                         icons::Icon { name: "log-out" }

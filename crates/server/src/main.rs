@@ -167,6 +167,7 @@ async fn main() -> Result<()> {
         )
         .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
         .route("/cloud/syncs/{idx}/cancel", post(cloud::cancel_sync))
+        .route("/system/reboot", post(post_reboot))
         .route("/cloud/runs", get(cloud::list_runs))
         .route("/cloud/runs/{job_id}", get(cloud::get_run))
         .route(
@@ -418,6 +419,30 @@ async fn apply(state: &AppState, rows: &[Row]) -> axum::response::Response {
                 "could not reach helper at {}: {e}",
                 state.helper_socket.display()
             ),
+        ),
+    }
+}
+
+/// Forward the `RebootSystem` helper command. The helper returns
+/// before systemd actually fires the reboot, so we get a normal 200
+/// back; the browser then sees the connection drop a beat later.
+async fn post_reboot(State(state): State<AppState>) -> impl IntoResponse {
+    let cmd = Command::RebootSystem;
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{}\n\n{}",
+                error.as_deref().unwrap_or("reboot failed"),
+                output
+            ),
+        ),
+        Err(e) => api_err(
+            StatusCode::BAD_GATEWAY,
+            format!("could not reach helper: {e}"),
         ),
     }
 }

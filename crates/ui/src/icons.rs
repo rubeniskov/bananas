@@ -89,6 +89,10 @@ fn paths_for(name: &str) -> Element {
             path { d: "M18 6 6 18" }
             path { d: "m6 6 12 12" }
         },
+        "power" => rsx! {
+            path { d: "M12 2v10" }
+            path { d: "M18.4 6.6a9 9 0 1 1-12.77.04" }
+        },
         "chart-bar" => rsx! {
             path { d: "M3 3v16a2 2 0 0 0 2 2h16" }
             path { d: "M7 16h8" }
