@@ -208,6 +208,22 @@ fn apply_snapshot(
             let (w_v, w_u) = format_rate_split(d.write_bps);
             let (r_peak, r_mid) = peak_labels(disk_r_norm.get(i), d.read_bps);
             let (w_peak, w_mid) = peak_labels(disk_w_norm.get(i), d.write_bps);
+            // Pluck the matching drivetemp from snap.temps so the disk
+            // tile reads "0% busy / 40°C" inline. Skip when missing
+            // (kernel didn't ship CONFIG_DRIVETEMP for this device).
+            let (temp_text, temp_kind) = match snap.temps.iter().find(|t| t.sensor == d.device) {
+                Some(t) => (
+                    format!(" / {:.0}°C", t.celsius),
+                    if t.celsius >= 50.0 {
+                        "danger"
+                    } else if t.celsius >= 42.0 {
+                        "warn"
+                    } else {
+                        "ok"
+                    },
+                ),
+                None => (String::new(), "ok"),
+            };
             DiskIoUi {
                 device: SharedString::from(d.device.clone()),
                 bus: SharedString::from(d.bus.to_uppercase()),
@@ -220,6 +236,8 @@ fn apply_snapshot(
                 write_peak_text: SharedString::from(w_peak),
                 write_mid_text: SharedString::from(w_mid),
                 util_text: SharedString::from(format!("{:.0}% busy", d.util_pct)),
+                temp_text: SharedString::from(temp_text),
+                temp_kind: SharedString::from(temp_kind),
             }
         })
         .collect();
@@ -247,43 +265,27 @@ fn apply_snapshot(
         .collect();
     w.set_partitions(ModelRc::new(VecModel::from(parts)));
 
-    // CPU temp now lives inline next to the CPU percent in the
-    // header bar (e.g. "50 % / 30°C"), so we pluck it out of the
-    // temps list before rendering the strip below — the strip keeps
-    // showing block-device drivetemp readings only.
-    let is_cpu = |sensor: &str| sensor.contains("cpu") || sensor.contains("thermal");
-    let temp_kind = |c: f32| -> &'static str {
-        if c >= 75.0 {
-            "danger"
-        } else if c >= 60.0 {
-            "warn"
-        } else {
-            "ok"
-        }
-    };
-    let cpu_temp = snap.temps.iter().find(|t| is_cpu(&t.sensor));
+    // CPU temp lives inline next to the CPU percent in the header
+    // bar (e.g. "50 % / 30°C"); per-disk drivetemp readings are
+    // attached to each DiskIoUi above. The dedicated TEMP strip is
+    // gone, so we no longer build a TempUi list at all.
+    let cpu_is = |sensor: &str| sensor.contains("cpu") || sensor.contains("thermal");
+    let cpu_temp = snap.temps.iter().find(|t| cpu_is(&t.sensor));
     let (cpu_temp_text, cpu_temp_kind) = match cpu_temp {
-        Some(t) => (format!(" / {:.0}°C", t.celsius), temp_kind(t.celsius)),
+        Some(t) => {
+            let kind = if t.celsius >= 75.0 {
+                "danger"
+            } else if t.celsius >= 60.0 {
+                "warn"
+            } else {
+                "ok"
+            };
+            (format!(" / {:.0}°C", t.celsius), kind)
+        }
         None => (String::new(), "ok"),
     };
     w.set_cpu_temp_text(SharedString::from(cpu_temp_text));
     w.set_cpu_temp_kind(SharedString::from(cpu_temp_kind));
-
-    let temps: Vec<TempUi> = snap
-        .temps
-        .iter()
-        .filter(|t| !is_cpu(&t.sensor))
-        .map(|t| {
-            let kind = temp_kind(t.celsius);
-            TempUi {
-                label: SharedString::from(t.sensor.to_uppercase()),
-                sensor: SharedString::from(t.sensor.clone()),
-                value: SharedString::from(format!("{:.1}", t.celsius)),
-                kind: SharedString::from(kind),
-            }
-        })
-        .collect();
-    w.set_temps(ModelRc::new(VecModel::from(temps)));
 
     w.set_net_rx_spark(spark_model(net_rx_norm));
     w.set_net_tx_spark(spark_model(net_tx_norm));

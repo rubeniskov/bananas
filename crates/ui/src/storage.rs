@@ -50,8 +50,10 @@ pub fn DiskCard(props: DiskCardProps) -> Element {
                 div { class: "disk-head-left",
                     div { class: "disk-name", code { "/dev/{d.kname}" } }
                     div { class: "disk-model", "{model}" }
-                    SmartBadge { summary: smart }
-                    if d.readonly { span { class: "badge warn", "read-only" } }
+                    div { class: "disk-smart-row",
+                        SmartBadge { summary: smart }
+                        if d.readonly { span { class: "badge warn", "read-only" } }
+                    }
                 }
                 div { class: "disk-head-right",
                     if let (Some(c), Some(kind)) = (props.temp_c, temp_kind) {

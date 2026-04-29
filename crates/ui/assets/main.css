@@ -204,16 +204,24 @@ nav.app-nav label.button-like:hover {
 }
 .disk-name { font-size: 14px; font-weight: 600; }
 .disk-model { font-size: 12px; color: var(--text-soft); margin-top: 2px; }
-/* Left band of the disk header: name + model stacked, then SMART
- * badge inline. Right band holds the live temp + the capacity pill. */
+/* Left band of the disk header — fully vertical stack:
+ *   /dev/sda
+ *   ST24000NM000C-3W   (model)
+ *   smart: passed       (badge + read-only flag inline on the smart row)
+ * Right band holds the live temp + the capacity pill on the same
+ * baseline as the kernel name on the left. */
 .disk-head-left {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: .6em;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
 }
-.disk-head-left > div { display: flex; flex-direction: column; }
+.disk-smart-row {
+  display: inline-flex;
+  align-items: center;
+  gap: .5em;
+  flex-wrap: wrap;
+}
 .disk-head-right {
   display: flex;
   align-items: center;

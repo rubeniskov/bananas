@@ -37,6 +37,12 @@ export struct DiskIoUi {
     write-peak-text: string,
     write-mid-text: string,
     util-text: string,
+    /// Drivetemp suffix appended to `util-text` (e.g. " / 40°C").
+    /// Empty string when the kernel doesn't expose drivetemp for
+    /// this device. Color picked from `temp-kind` mirrors the
+    /// CPU header inline temp's ok/warn/danger palette.
+    temp-text: string,
+    temp-kind: string,
 }
 
 export struct PartitionUi {
@@ -49,6 +55,9 @@ export struct PartitionUi {
     pct-text: string,
 }
 
+// Kept as an export only because removing it would touch every
+// downstream `use` site if the strip is ever re-introduced; the
+// type is no longer referenced in this file.
 export struct TempUi {
     /// Pretty short label rendered next to the value (e.g. "CPU", "sda").
     label: string,
@@ -398,11 +407,22 @@ component DiskIoBlock inherits HorizontalLayout {
                 font-size: 12px;
                 font-weight: 700;
             }
-            Text {
-                text: d.util-text;
-                color: Theme.text-muted;
-                font-size: 10px;
-                letter-spacing: 0.3px;
+            HorizontalLayout {
+                spacing: 0px;
+                Text {
+                    text: d.util-text;
+                    color: Theme.text-muted;
+                    font-size: 10px;
+                    letter-spacing: 0.3px;
+                }
+                Text {
+                    text: d.temp-text;
+                    color: d.temp-kind == "danger" ? Theme.danger
+                        : d.temp-kind == "warn" ? Theme.warn
+                        : Theme.text-muted;
+                    font-size: 10px;
+                    letter-spacing: 0.3px;
+                }
             }
         }
         SparkAxis {
@@ -760,7 +780,6 @@ export component MainWindow inherits Window {
     in property <[NetIfaceUi]> network;
     in property <[DiskIoUi]> disks;
     in property <[PartitionUi]> partitions;
-    in property <[TempUi]> temps;
     in property <[[float]]> net-rx-spark;
     in property <[[float]]> net-tx-spark;
     in property <[[float]]> disk-read-spark;
@@ -886,49 +905,11 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Compact temperature strip — one chip per sensor. CPU + each
-        // /dev/sd* drivetemp reading. Hidden when the kernel exposes
-        // none (e.g. dev hosts where the .cfg fragment isn't applied).
-        if root.temps.length > 0: Rectangle {
-            background: Theme.panel-bg;
-            border-color: Theme.panel-border;
-            border-width: 1px;
-            border-radius: 5px;
-            height: 28px;
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 10px;
-                spacing: 14px;
-                alignment: start;
-                Text {
-                    text: "TEMP";
-                    color: Theme.accent;
-                    font-size: 10px;
-                    font-weight: 700;
-                    letter-spacing: 1.0px;
-                    vertical-alignment: center;
-                }
-                for t in root.temps: HorizontalLayout {
-                    spacing: 4px;
-                    Text {
-                        text: t.label;
-                        color: Theme.text;
-                        font-size: 11px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: t.value + "°C";
-                        color: t.kind == "danger" ? #ff5050
-                            : t.kind == "warn" ? #ffb84a
-                            : Theme.text;
-                        font-size: 11px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
+        // (Temperature strip removed: CPU temp is inline next to the
+        // CPU% in the header bar above, and per-disk drivetemp readings
+        // are inline next to each disk's "0% busy" line in the disk
+        // carousel. Both surfaces show the temp where the operator is
+        // already looking, so a dedicated strip would be redundant.)
 
         // Top half: NETWORK + DISK I/O side by side. Each panel gets ~50%
         // of the window width; the carousels inside compute their own
