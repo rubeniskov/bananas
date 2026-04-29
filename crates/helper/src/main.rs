@@ -239,6 +239,20 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
     // the apply atomic from the operator's point of view.
     let mkdir_log = ensure_export_dirs(content).await;
 
+    // Iterate-loop dev hosts NFS-netboot the BPI, so `/` is itself an
+    // NFS mount. exportfs treats anything below an NFS root as an
+    // implicit re-export and refuses without a numeric `fsid=`:
+    //   exportfs: /srv/services requires fsid= for NFS export
+    // Inject `fsid=<line-number>` into rows that don't already carry
+    // one when /proc/mounts says rootfs is NFS. Production SD-card
+    // boots have ext4 root, so the injection is a no-op there.
+    let needs_fsid = rootfs_is_nfs().await;
+    let (effective, fsid_log) = if needs_fsid {
+        inject_fsid_into_exports(content)
+    } else {
+        (content.to_string(), String::new())
+    };
+
     let dir = exports_path.parent().unwrap_or_else(|| Path::new("/"));
     let tmp = dir.join(format!(
         ".{}.tmp",
@@ -247,7 +261,7 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
             .and_then(|s| s.to_str())
             .unwrap_or("exports")
     ));
-    fs::write(&tmp, content)
+    fs::write(&tmp, &effective)
         .await
         .with_context(|| format!("writing {}", tmp.display()))?;
     fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644))
@@ -263,7 +277,7 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
     // Both branches surface their stdout/stderr in the operator-facing
     // banner so a misbehaving export rule (or a stale unit dependency)
     // is visible without an SSH round-trip.
-    let active = count_active_exports(content);
+    let active = count_active_exports(&effective);
     let nfs_state = if active > 0 {
         ensure_nfs_server_running().await
     } else {
@@ -279,13 +293,86 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
     };
 
     Ok(format!(
-        "wrote {} ({} bytes)\n{}{}\n{}",
+        "wrote {} ({} bytes)\n{}{}{}\n{}",
         exports_path.display(),
-        content.len(),
+        effective.len(),
         mkdir_log,
+        fsid_log,
         nfs_state,
         reload
     ))
+}
+
+/// `/proc/mounts` line for `/` whose third field starts with `nfs`
+/// indicates the iterate-loop NFS netboot. exportfs's "requires fsid="
+/// gate fires whenever the export's underlying fs differs from the
+/// rootfs's fs, and an NFS root makes that gate true for every disk
+/// mount. Returns `false` on the production SD-card path (ext4 root).
+async fn rootfs_is_nfs() -> bool {
+    let s = match fs::read_to_string("/proc/mounts").await {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    s.lines().any(|line| {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        f.len() >= 3 && f[1] == "/" && (f[2] == "nfs" || f[2] == "nfs4" || f[2].starts_with("nfs"))
+    })
+}
+
+/// Inject `fsid=<n>` into each non-comment export row that doesn't
+/// already specify one. `<n>` is the row's 1-based position in the
+/// content so the same input produces the same fsids deterministically.
+/// Rows that already carry a `fsid=` are left alone — operators who
+/// pinned a specific id keep it.
+fn inject_fsid_into_exports(content: &str) -> (String, String) {
+    let mut out = String::with_capacity(content.len() + 64);
+    let mut next_fsid: u32 = 1;
+    let mut injected: Vec<String> = Vec::new();
+    for raw in content.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(raw);
+            out.push('\n');
+            continue;
+        }
+        // The fields after the path are `client(opts) [client(opts) …]`.
+        // We replace each `(...)` group's option list, adding fsid=N if
+        // missing. Operating on the raw string keeps quoting / spacing
+        // intact for the bits we don't touch.
+        let already_has = trimmed.contains("fsid=");
+        if already_has {
+            out.push_str(raw);
+            out.push('\n');
+            // Bump the counter anyway so the IDs we DO assign stay
+            // unique across operator-pinned + auto-injected rows.
+            next_fsid += 1;
+            continue;
+        }
+        let path = trimmed.split_whitespace().next().unwrap_or("").to_string();
+        let assigned = next_fsid;
+        next_fsid += 1;
+        let injected_line = if let Some(open) = raw.find('(') {
+            // Insert `fsid=<n>,` right after the first `(`. exportfs
+            // accepts duplicate option commas / leading commas so this
+            // is safe even on weirdly-spaced input.
+            let (lhs, rhs) = raw.split_at(open + 1);
+            format!("{lhs}fsid={assigned},{rhs}")
+        } else {
+            // No client(options) group — append `*(fsid=<n>)`. Treats
+            // the rare "path with no client" pattern, which exportfs
+            // would reject anyway, but at least the line is parseable.
+            format!("{raw} *(fsid={assigned})")
+        };
+        out.push_str(&injected_line);
+        out.push('\n');
+        injected.push(format!("{path}=fsid={assigned}"));
+    }
+    let log = if injected.is_empty() {
+        String::new()
+    } else {
+        format!("auto-fsid (NFS rootfs detected): {}\n", injected.join(" "))
+    };
+    (out, log)
 }
 
 /// Walk the parsed export rows and create any path that isn't on disk
@@ -1422,9 +1509,9 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     if local_missing {
         match direction {
             "pull" => {
-                fs::create_dir_all(&entry.local_path).await.with_context(|| {
-                    format!("creating pull target {}", entry.local_path)
-                })?;
+                fs::create_dir_all(&entry.local_path)
+                    .await
+                    .with_context(|| format!("creating pull target {}", entry.local_path))?;
             }
             _ => {
                 anyhow::bail!(
