@@ -1,0 +1,158 @@
+# Continuous integration: runs on every push + PR. Fast (≈5 min on a
+# default ubuntu-latest runner). The full Yocto bake is NOT exercised
+# here — it ships as a separate job in release.yml because it needs
+# >20 GB of working space and ~30 min of compile time. CI focuses on
+# the things that catch real bugs before they hit a bake:
+#
+#   - rustfmt + clippy across the workspace
+#   - cargo test across all host-side crates
+#   - smoke cross-compile of the armv7 binaries (cargo-zigbuild)
+#   - smoke wasm build of the Dioxus SPA (dx build)
+#
+# Slint dashboard cross-compile via cross-rs is intentionally NOT in
+# this workflow — it spins up a Docker container per build and the
+# multiarch fontconfig install pushes wall time over 10 min. It runs
+# in the release workflow where speed matters less.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Single-flight per ref: a force-push or follow-up commit cancels the
+# previous run so we don't waste runner minutes on stale code.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-checks:
+    name: Rust — fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.34.0
+          cache: true
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown,armv7-unknown-linux-gnueabihf
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # crates/ui is wasm-only and excluded from host workspace builds
+      # via the `-p` flags below. We still run formatting + clippy on
+      # it under the wasm target.
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (host crates)
+        run: |
+          cargo clippy --workspace \
+            --exclude bananas-ui \
+            --exclude bananas-dashboard \
+            -- -D warnings
+
+      - name: cargo test (host crates)
+        run: |
+          cargo test --workspace \
+            --exclude bananas-ui \
+            --exclude bananas-dashboard \
+            --no-fail-fast
+
+      - name: cargo check — wasm UI
+        run: cargo check -p bananas-ui --target wasm32-unknown-unknown
+
+  cross-armv7:
+    name: Cross-compile armv7 (server + helper + stats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.34.0
+          cache: true
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cross-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-cargo-
+
+      # pixi tasks already strip the conda-injected CFLAGS that would
+      # leak `-march=haswell` into the rusqlite-bundled cross-compile.
+      # We run them through pixi so CI matches local iterate exactly.
+      - name: build-server-arm
+        run: pixi run build-server-arm
+
+      - name: build-stats-arm
+        run: pixi run build-stats-arm
+
+      # Smoke-confirm the binaries are armv7 ELF — protects against
+      # the pixi env accidentally picking up the host toolchain.
+      - name: Verify ARM ELFs
+        run: |
+          file serve/bin/bananas-server | grep -q "ARM" || (echo "bananas-server is not ARM!" && exit 1)
+          file serve/bin/bananas-helper | grep -q "ARM" || (echo "bananas-helper is not ARM!" && exit 1)
+          file serve/bin/bananas-stats  | grep -q "ARM" || (echo "bananas-stats is not ARM!"  && exit 1)
+
+  wasm-ui:
+    name: Build wasm SPA (dx build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.34.0
+          cache: true
+
+      - name: Install rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-wasm-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-cargo-
+
+      - name: build-ui (dx build via pixi)
+        run: pixi run build-ui
+
+      - name: Confirm bundle exists
+        run: |
+          test -f serve/ui/index.html
+          test -f serve/bin/bananas-ui.tar.gz

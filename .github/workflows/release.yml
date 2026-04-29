@@ -1,0 +1,123 @@
+# Release pipeline: runs on push to main, ONLY when CI is green and
+# the conventional-commit history since the last tag implies a release.
+# Driven by semantic-release (see .releaserc.json) which:
+#
+#   1. Parses commit messages from `git log <last-tag>..HEAD`.
+#   2. Decides on the next version (major / minor / patch / no-release).
+#   3. Generates / updates CHANGELOG.md from the commit bodies.
+#   4. Tags the repo (`vX.Y.Z`) and pushes.
+#   5. Creates a GitHub release with the bundled artifacts attached.
+#
+# Artifacts shipped:
+#   - bananas-server-vX.Y.Z-armv7.tar.gz       (server + helper)
+#   - bananas-stats-vX.Y.Z-armv7.tar.gz        (sampler daemon)
+#   - bananas-ui-vX.Y.Z.tar.gz                 (wasm SPA)
+#   - bananas-dashboard-vX.Y.Z-armv7.tar.gz    (Slint LCD app)
+#
+# Yocto rootfs tarballs are NOT shipped from CI — they're large
+# (~150 MB) and the bake takes too long for a hosted runner. Operators
+# rebuild locally with `pixi run build` after pulling the released
+# binaries (or pin the Cargo.lock + recipe versions and bake once).
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# One release at a time. Two pushes to main in quick succession queue
+# rather than race — semantic-release's tag/push step would explode
+# otherwise.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: semantic-release
+    runs-on: ubuntu-latest
+    # Skip release if the head commit is just CHANGELOG / version
+    # bumping by semantic-release itself (the bot trailer marks them).
+    if: "!contains(github.event.head_commit.message, 'chore(release):')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # semantic-release walks tags + history to compute the next
+          # version, so it needs full history.
+          fetch-depth: 0
+          # Use a separate token if you want signed tags / PR comments —
+          # the default GITHUB_TOKEN works for normal releases.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.34.0
+          cache: true
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,armv7-unknown-linux-gnueabihf
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-
+
+      # ─── Build all the artifacts the release will publish ─────────
+      - name: build-ui
+        run: pixi run build-ui
+
+      - name: build-server-arm
+        run: pixi run build-server-arm
+
+      - name: build-stats-arm
+        run: pixi run build-stats-arm
+
+      # cross-rs needs Docker; ubuntu-latest has it preinstalled.
+      - name: build-dashboard-arm
+        run: pixi run build-dashboard-arm
+
+      # ─── Stage tarballs for semantic-release to upload ────────────
+      - name: Pack artifacts
+        run: |
+          set -e
+          mkdir -p dist
+          tar -C serve/bin -czf dist/bananas-server-armv7.tar.gz bananas-server bananas-helper
+          tar -C serve/bin -czf dist/bananas-stats-armv7.tar.gz bananas-stats
+          tar -C serve/bin -czf dist/bananas-dashboard-armv7.tar.gz bananas-dashboard
+          cp serve/bin/bananas-ui.tar.gz dist/bananas-ui.tar.gz
+          ls -la dist/
+
+      # ─── Run semantic-release ─────────────────────────────────────
+      - name: Setup Node (for semantic-release)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install semantic-release + plugins
+        run: |
+          npm install -g \
+            semantic-release@22 \
+            @semantic-release/changelog@6 \
+            @semantic-release/git@10 \
+            @semantic-release/github@9 \
+            @semantic-release/commit-analyzer@11 \
+            @semantic-release/release-notes-generator@12
+
+      - name: semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: semantic-release

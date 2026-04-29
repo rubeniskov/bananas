@@ -1,0 +1,67 @@
+{
+  "branches": ["main"],
+  "tagFormat": "v${version}",
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          { "type": "feat", "release": "minor" },
+          { "type": "fix", "release": "patch" },
+          { "type": "perf", "release": "patch" },
+          { "type": "refactor", "release": "patch" },
+          { "type": "docs", "scope": "readme", "release": "patch" },
+          { "type": "chore", "release": false },
+          { "type": "test", "release": false },
+          { "scope": "no-release", "release": false }
+        ],
+        "parserOpts": {
+          "noteKeywords": ["BREAKING CHANGE", "BREAKING CHANGES", "BREAKING"]
+        }
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits",
+        "presetConfig": {
+          "types": [
+            { "type": "feat", "section": "🚀 Features" },
+            { "type": "fix", "section": "🐛 Bug Fixes" },
+            { "type": "perf", "section": "⚡ Performance" },
+            { "type": "refactor", "section": "🧹 Refactoring" },
+            { "type": "docs", "section": "📚 Documentation" },
+            { "type": "chore", "section": "🔧 Chores", "hidden": true },
+            { "type": "test", "section": "🧪 Tests", "hidden": true }
+          ]
+        }
+      }
+    ],
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md",
+        "changelogTitle": "# CHANGELOG\n\nAll notable changes to BanaNAS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and entries are derived from [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release)."
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          { "path": "dist/bananas-server-armv7.tar.gz", "label": "bananas-server + helper (armv7)" },
+          { "path": "dist/bananas-stats-armv7.tar.gz", "label": "bananas-stats (armv7)" },
+          { "path": "dist/bananas-dashboard-armv7.tar.gz", "label": "bananas-dashboard (armv7)" },
+          { "path": "dist/bananas-ui.tar.gz", "label": "bananas-ui (wasm SPA)" }
+        ]
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["CHANGELOG.md"],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ]
+  ]
+}
