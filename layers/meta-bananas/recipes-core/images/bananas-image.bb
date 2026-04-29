@@ -165,3 +165,9 @@ IMAGE_INSTALL += " \
 IMAGE_INSTALL += " \
     kernel-modules \
 "
+
+# /etc/modprobe.d/ drop-ins (currently: blacklist brcmfmac so the missing
+# WiFi firmware doesn't spam the boot log).
+IMAGE_INSTALL += " \
+    bananas-modprobe \
+"
