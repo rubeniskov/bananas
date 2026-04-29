@@ -48,6 +48,8 @@ RDEPENDS:${PN} += " \
     libinput \
     libdrm \
     libgbm \
+    libegl \
+    libgles2 \
     mesa-megadriver \
     kernel-module-lima \
     ttf-dejavu-sans \

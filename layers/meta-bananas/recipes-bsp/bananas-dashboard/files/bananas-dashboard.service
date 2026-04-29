@@ -21,16 +21,16 @@ Group=bananas
 SupplementaryGroups=video render input
 ExecStart=/usr/bin/bananas-dashboard
 Environment=RUST_LOG=info
-# SLINT_BACKEND format is <backend>-<renderer>. We default to the
-# software rasterizer because the GPU path needs the lima Mali-400
-# userspace stack (libegl-mesa + libgbm + libdrm + the lima Gallium
-# driver loaded via /dev/dri/renderD128) — that path is on the
-# memory-backlog under project_mali_gpu.md and is NOT load-bearing
-# for a 1 Hz dashboard. The femtovg path crash-looped on a real
-# image with `Error creating EGL display: not found`; switching to
-# software is what stops the loop and lets the panel actually render.
-# Flip back to `linuxkms-femtovg` once the lima userspace ships.
-Environment=SLINT_BACKEND=linuxkms-software
+# SLINT_BACKEND format is <backend>-<renderer>. femtovg uses GLES2 on
+# top of GBM (libgbm + lima Gallium driver) — picks up the Mali-400
+# automatically once /dev/dri/renderD128 + the lima userspace are
+# present. mesa-gl_%.bbappend now adds `egl gles gbm` to mesa's
+# PACKAGECONFIG so libEGL + libGLESv2 actually ship. If the GPU path
+# fails at runtime the dashboard exits non-zero and systemd
+# Restart=always brings it back; flipping this env var to
+# `linuxkms-software` (or `mesa-gl_%.bbappend`'s previous form) is the
+# rollback if the lima userspace ever breaks again.
+Environment=SLINT_BACKEND=linuxkms-femtovg
 Environment=SLINT_KMS_DEVICE=/dev/dri/card0
 # Re-attempt forever — if the panel is briefly unavailable during a
 # hot-plug the dashboard should come back, not give up.
