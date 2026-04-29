@@ -46,11 +46,14 @@ jobs:
     # bumping by semantic-release itself (the bot trailer marks them).
     if: "!contains(github.event.head_commit.message, 'chore(release):')"
     steps:
-      # Yocto needs ≈20 GB working space for build/{tmp,sstate-cache,downloads}.
-      # Default ubuntu-latest has ~14 GB free; this action reclaims ~25 GB by
-      # purging the unused .NET / Android / Haskell SDKs, GHC, and large host
-      # caches BEFORE checkout. Must run before any other step that writes to
-      # the workspace.
+      # Yocto needs ≈20 GB working space for build/{tmp,sstate-cache,downloads}
+      # plus pixi's conda cache (~5 GB). Default ubuntu-latest has ~14 GB free
+      # on /. We DON'T pass `build-mount-path` here on purpose: that mode
+      # creates a separate LVM volume only at the workspace, which leaves
+      # pixi's cache in /home/runner/.cache stranded on the still-small root
+      # filesystem (the cause of the prior "no space left on device" failure
+      # at `pixi install`). Without `build-mount-path`, the action frees ~25 GB
+      # in place on /, which both pixi and Yocto see.
       - name: Free disk space for the Yocto bake
         uses: easimon/maximize-build-space@v10
         with:
@@ -59,9 +62,9 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
           remove-docker-images: 'true'
+          swap-size-mb: 1024
           root-reserve-mb: 4096
           temp-reserve-mb: 1024
-          build-mount-path: ${{ github.workspace }}
 
       - uses: actions/checkout@v4
         with:
