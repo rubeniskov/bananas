@@ -3,7 +3,7 @@ LICENSE = "MIT"
 
 inherit core-image
 
-IMAGE_FEATURES += "ssh-server-openssh package-management"
+IMAGE_FEATURES += "ssh-server-openssh package-management splash"
 
 # Root password (SHA-512 hash). SSH keeps PermitRootLogin = prohibit-password
 # (OpenSSH default), so this password unlocks serial / LCD console only — SSH

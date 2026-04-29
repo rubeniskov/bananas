@@ -1,0 +1,41 @@
+From: BanaNAS <noreply@anthropic.com>
+Date: Wed, 29 Apr 2026 00:00:00 +0000
+Subject: [PATCH] colors: BanaNAS palette
+
+Match the splash image's tropical/teal/yellow palette: warm cream
+background bleeds into the logo's edges, banana-yellow progress fill
+on a darker trough so the bar reads at a glance against the splash.
+
+---
+ psplash-colors.h | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/psplash-colors.h b/psplash-colors.h
+index 1111111..2222222 100644
+--- a/psplash-colors.h
++++ b/psplash-colors.h
+@@ -12,16 +12,16 @@
+ #ifndef _HAVE_PSPLASH_COLORS_H
+ #define _HAVE_PSPLASH_COLORS_H
+
+-/* This is the overall background color */
+-#define PSPLASH_BACKGROUND_COLOR 0xec,0xec,0xe1
++/* BanaNAS: matches the cream-yellow halo behind the logo */
++#define PSPLASH_BACKGROUND_COLOR 0xff,0xf6,0xd6
+
+-/* This is the color of any text output */
+-#define PSPLASH_TEXT_COLOR 0x6d,0x6d,0x70
++/* Dark teal — readable on the cream bg, matches the logo's leaves */
++#define PSPLASH_TEXT_COLOR 0x12,0x4a,0x52
+
+-/* This is the color of the progress bar indicator */
+-#define PSPLASH_BAR_COLOR 0x6d,0x6d,0x70
++/* Banana yellow */
++#define PSPLASH_BAR_COLOR 0xf2,0xc0,0x35
+
+-/* This is the color of the progress bar background */
+-#define PSPLASH_BAR_BACKGROUND_COLOR 0xec,0xec,0xe1
++/* Bar trough — slightly deeper than the bg for contrast */
++#define PSPLASH_BAR_BACKGROUND_COLOR 0xc8,0xb8,0x7f
+
+ #endif
