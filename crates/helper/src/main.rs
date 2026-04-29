@@ -207,6 +207,10 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::MakeDirectory { path } => match make_directory(&path).await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -1068,6 +1072,26 @@ fn is_safe_perms_path(path: &str) -> bool {
         // exact-match (e.g. "/srv") OR starts-with-with-slash ("/srv/x")
         path == *p || path.starts_with(&format!("{}/", p.trim_end_matches('/')))
     })
+}
+
+async fn make_directory(path: &str) -> Result<String> {
+    if !is_safe_perms_path(path) {
+        anyhow::bail!("path not allowed: {path}");
+    }
+    // Don't allow exact-match against an allowlist root — they already
+    // exist, and `mkdir -p /srv` is a no-op anyway. The point is creating
+    // children of those, e.g. `/srv/media`.
+    if PERMS_ALLOW_PREFIXES.iter().any(|p| *p == path) {
+        return Ok(format!("{path} exists (allowlist root)"));
+    }
+    if let Ok(md) = std::fs::symlink_metadata(path) {
+        if md.is_dir() {
+            return Ok(format!("{path} already exists"));
+        }
+        anyhow::bail!("{path} exists but is not a directory");
+    }
+    std::fs::create_dir_all(path).with_context(|| format!("mkdir -p {path}"))?;
+    Ok(format!("created {path}"))
 }
 
 async fn stat_path(path: &str) -> Result<String> {

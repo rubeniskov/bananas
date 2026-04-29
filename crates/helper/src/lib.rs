@@ -135,6 +135,12 @@ pub enum Command {
     /// UI gets a confirmation banner; the connection then drops as
     /// the daemon goes down.
     RebootSystem,
+    /// `mkdir -p <path>` for a fresh mountpoint. Allowlisted to the
+    /// same prefixes as Stat/SetPermissions (/srv, /mnt, /media, /home,
+    /// /opt) so the UI can pre-create a directory before adding an
+    /// fstab entry that mounts onto it. Idempotent: no-op when the
+    /// path already exists.
+    MakeDirectory { path: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

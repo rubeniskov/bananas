@@ -1230,6 +1230,27 @@ struct RunsResp {
     runs: Vec<CloudJob>,
 }
 
+/// POST /api/mkdir — pre-create a mountpoint directory before adding
+/// an fstab entry that targets it. Helper-allowlisted to /srv, /mnt,
+/// /media, /home, /opt. Idempotent: existing directories return Ok.
+pub async fn mkdir(path: &str) -> Result<(), ApiError> {
+    let resp = Request::post("/api/mkdir")
+        .json(&serde_json::json!({ "path": path }))
+        .map_err(|e| ApiError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        let status = resp.status();
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
+    }
+    Ok(())
+}
+
 /// POST /api/system/reboot — soft reboot the BPI via systemd. The
 /// server returns 200 right after the helper schedules the reboot;
 /// the actual unit handler fires after our reply is on the wire, so

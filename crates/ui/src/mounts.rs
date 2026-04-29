@@ -335,6 +335,35 @@ impl SourceKind {
     }
 }
 
+/// True when a path is *eligible* for the auto-mkdir pre-step. The
+/// helper allowlists /srv, /mnt, /media, /home, /opt; anything else
+/// (e.g. `/`, `/proc`, `none` for tmpfs swap, `tmpfs` source) we leave
+/// alone so the existing path either resolves on its own or surfaces
+/// a real permission error from the fstab apply.
+fn needs_mkdir(path: &str) -> bool {
+    let allow = ["/srv", "/mnt", "/media", "/home", "/opt"];
+    allow
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")))
+        && !path.contains("..")
+}
+
+/// Filename-safe slug for a mountpoint suffix. Strips slashes,
+/// collapses whitespace, drops anything outside [a-zA-Z0-9._-] so a
+/// LABEL of `My Disk!` becomes `My-Disk` and lands as `/srv/My-Disk`.
+fn sanitize_mp_segment(input: &str) -> String {
+    let trimmed = input.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else if ch.is_whitespace() {
+            out.push('-');
+        }
+    }
+    out
+}
+
 /// Decompose a fstab source string into (kind, value) so an existing row
 /// can pre-populate the form. Mirrors `format_source` going the other way.
 fn parse_source(source: &str) -> (SourceKind, String) {
@@ -509,10 +538,19 @@ fn FstabFormModal(props: FstabFormModalProps) -> Element {
             props.on_error.call("Filesystem type is required".into());
             return;
         }
+        let mp = mountpoint().trim().to_string();
+        // Trailing slashes are valid POSIX-wise but `/etc/fstab` rows
+        // and `mkdir`'s log line both look better without them. Trim
+        // unless the path is literally "/".
+        let mp = if mp.len() > 1 {
+            mp.trim_end_matches('/').to_string()
+        } else {
+            mp
+        };
         busy.set(true);
         let body = api::AddFstab {
             source: src,
-            mountpoint: mountpoint(),
+            mountpoint: mp.clone(),
             fstype: fstype(),
             defaults: defaults(),
             noatime: noatime(),
@@ -530,6 +568,24 @@ fn FstabFormModal(props: FstabFormModalProps) -> Element {
         let on_error = props.on_error.clone();
         let on_unauthorized = props.on_unauthorized.clone();
         spawn(async move {
+            // Best-effort: pre-create the mountpoint directory so an
+            // operator can target a fresh path like `/srv/movies`
+            // without first SSHing in. Allowlisted server-side to
+            // /srv, /mnt, /media, /home, /opt — anything else gets
+            // rejected and we fall through to the fstab call so the
+            // operator sees the actual permission error.
+            if needs_mkdir(&mp) {
+                if let Err(e) = api::mkdir(&mp).await {
+                    if matches!(e, ApiError::Unauthorized) {
+                        busy.set(false);
+                        on_unauthorized.call(());
+                        return;
+                    }
+                    busy.set(false);
+                    on_error.call(format!("Could not create {mp}: {e}"));
+                    return;
+                }
+            }
             let result = match editing_idx {
                 Some(idx) => api::update_fstab(idx, &body).await.map(|()| "updated"),
                 None => api::add_fstab(&body).await.map(|()| "added"),
@@ -635,17 +691,15 @@ fn FstabFormModal(props: FstabFormModalProps) -> Element {
                     }
 
                     div { class: "row",
-                        label { r#for: "fs-mp", "data-tip": "Absolute path where the filesystem is mounted. Use Browse to pick an existing directory.", class: "hint", "Mountpoint" }
+                        label { r#for: "fs-mp", "data-tip": "Absolute path where the filesystem is mounted. Type a new path or click Browse — non-existent directories are created automatically.", class: "hint", "Mountpoint" }
                         input {
                             id: "fs-mp",
                             r#type: "text",
-                            class: "path-display",
-                            readonly: true,
                             required: true,
-                            placeholder: "Click 'Browse…' to pick a directory",
+                            placeholder: "/srv/<name> — typed paths are mkdir -p'd on save",
                             title: "Absolute mountpoint",
                             value: "{mountpoint()}",
-                            onclick: move |_| show_browser.set(true)
+                            oninput: move |e| mountpoint.set(e.value()),
                         }
                         button {
                             r#type: "button",
@@ -654,6 +708,39 @@ fn FstabFormModal(props: FstabFormModalProps) -> Element {
                             Icon { name: "folder-open" }
                             "Browse"
                         }
+                    }
+                    div { class: "row mp-suggest",
+                        span { class: "hint mp-suggest-label",
+                            "data-tip": "Quick-fill the mountpoint with one of the writable allowlist roots, suffixed with the picked filesystem's label (or the typed Source).",
+                            "Suggest"
+                        }
+                        div { class: "mp-suggest-chips",
+                            for prefix in ["/srv/", "/mnt/", "/media/"].iter() {
+                                {
+                                    let p: &'static str = prefix;
+                                    let kind = source_kind();
+                                    let suffix: String = match kind {
+                                        SourceKind::Label => source_choice().trim().to_string(),
+                                        _ => mountpoint()
+                                            .rsplit('/')
+                                            .find(|s| !s.is_empty())
+                                            .unwrap_or("")
+                                            .to_string(),
+                                    };
+                                    let target = format!("{p}{}", sanitize_mp_segment(&suffix));
+                                    rsx! {
+                                        button {
+                                            class: "ghost mp-chip",
+                                            r#type: "button",
+                                            "data-tip": "{target}",
+                                            onclick: move |_| mountpoint.set(target.clone()),
+                                            "{p}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        span {}
                     }
 
                     div { class: "row",

@@ -947,6 +947,24 @@ textarea {
   border-top: 1px solid var(--line);
 }
 
+/* Mountpoint suggest row — sits under the Mountpoint input in the
+ * fstab form, offers /srv/, /mnt/, /media/ as quick-fill chips. */
+.mp-suggest .mp-suggest-label { color: var(--text-soft); }
+.mp-suggest-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+button.mp-chip {
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px dashed var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+button.mp-chip:hover { filter: brightness(1.05); }
+
 /* Confirm modal — narrower than the directory picker, header icon
  * inline with the title, danger CTA paints the confirm button red. */
 .modal.confirm-modal { width: min(440px, 92vw); }

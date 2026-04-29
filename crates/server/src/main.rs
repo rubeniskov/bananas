@@ -168,6 +168,7 @@ async fn main() -> Result<()> {
         .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
         .route("/cloud/syncs/{idx}/cancel", post(cloud::cancel_sync))
         .route("/system/reboot", post(post_reboot))
+        .route("/mkdir", post(post_mkdir))
         .route("/cloud/runs", get(cloud::list_runs))
         .route("/cloud/runs/{job_id}", get(cloud::get_run))
         .route(
@@ -449,6 +450,36 @@ async fn post_reboot(State(state): State<AppState>) -> impl IntoResponse {
 
 fn api_err(status: StatusCode, msg: impl Into<String>) -> axum::response::Response {
     (status, Json(json!({ "ok": false, "error": msg.into() }))).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct MkdirReq {
+    path: String,
+}
+
+async fn post_mkdir(State(state): State<AppState>, Json(req): Json<MkdirReq>) -> impl IntoResponse {
+    let path = req.path.trim().to_string();
+    if path.is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "path required");
+    }
+    let cmd = Command::MakeDirectory { path };
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => api_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{}\n\n{}",
+                error.as_deref().unwrap_or("mkdir failed"),
+                output
+            ),
+        ),
+        Err(e) => api_err(
+            StatusCode::BAD_GATEWAY,
+            format!("could not reach helper: {e}"),
+        ),
+    }
 }
 
 // --- /api/browse ------------------------------------------------------------
