@@ -124,6 +124,13 @@ jobs:
       - name: build-dashboard-arm
         run: pixi run build-dashboard-arm
 
+      # Download the upstream rclone armv7 prebuilt into serve/bin/. The
+      # bananas-rclone.bb recipe pulls from there; without this step the
+      # bake fails with "Unable to get checksum for bananas-rclone
+      # SRC_URI entry rclone: file could not be found".
+      - name: setup-rclone-arm
+        run: pixi run setup-rclone-arm
+
       # ─── Yocto bake → SD card image ───────────────────────────────
       # Cache the two big Yocto caches between runs. Cold bake takes ~30 min;
       # a warm cache (sstate hits) typically drops it to ~10 min. The cache
