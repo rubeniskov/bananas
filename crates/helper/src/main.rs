@@ -920,9 +920,14 @@ async fn exportfs_reload() -> Result<String> {
 /// UI's edit-config modal — the path/unit are NEVER taken from the
 /// request, so a malicious server can't ask the helper to write
 /// /etc/passwd or restart sshd.
-fn service_config_target(name: &str) -> Option<(&'static str, &'static str)> {
+fn service_config_target(name: &str) -> Option<(&'static str, Option<&'static str>)> {
     match name {
-        "stats" => Some(("/etc/bananas/stats.toml", "bananas-stats.service")),
+        "stats" => Some(("/etc/bananas/stats.toml", Some("bananas-stats.service"))),
+        // The cloud config is read by bananas-server itself on every
+        // /api/cloud/* call — no daemon to restart. `None` skips the
+        // post-write systemctl invocation; this also avoids the
+        // recursive "server tells helper to restart server" trap.
+        "cloud" => Some(("/etc/bananas/cloud.toml", None)),
         _ => None,
     }
 }
@@ -960,6 +965,11 @@ async fn write_service_config(name: &str, content: &str) -> Result<String> {
     tokio::fs::rename(&tmp, path)
         .await
         .with_context(|| format!("renaming {tmp} -> {path}"))?;
+    let Some(unit) = unit else {
+        // No daemon to restart — bananas-server reads this config on
+        // each request. Caller (UI) sees an immediate config change.
+        return Ok(format!("Saved {path} (live config — no restart).\n"));
+    };
     let out = TokioCommand::new("systemctl")
         .arg("restart")
         .arg(unit)

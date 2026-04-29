@@ -1,0 +1,632 @@
+//! Cloud-sync configuration UI.
+//!
+//! Two stacked panels:
+//!   - **Accounts** — list of providers the operator has configured,
+//!     each shown with its name, provider kind, and a "✓ token" /
+//!     "no token" indicator. Add via a modal that asks for a name,
+//!     provider (dropdown from /api/cloud/providers), and the
+//!     `rclone authorize` token blob (paste).
+//!   - **Sync entries** — list of (local path, remote path, direction,
+//!     schedule, account) rows. Add / edit / delete; "Run now" button
+//!     is rendered but currently 501s because the rclone runtime
+//!     wiring lands in a follow-up.
+
+#![allow(non_snake_case)]
+
+use dioxus::prelude::*;
+
+use crate::{
+    AuthCtx, api, api::ApiError, browse::Browser, icons::Icon,
+};
+
+#[component]
+pub fn CloudPage() -> Element {
+    let auth_ctx = use_context::<AuthCtx>();
+    let mut providers: Signal<Vec<api::CloudProvider>> = use_signal(Vec::new);
+    let mut accounts: Signal<Vec<api::CloudAccount>> = use_signal(Vec::new);
+    let mut syncs: Signal<Vec<api::CloudSync>> = use_signal(Vec::new);
+    let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
+    let mut tick = use_signal(|| 0u32);
+    let mut add_account_open = use_signal(|| false);
+    let mut sync_form: Signal<Option<SyncFormMode>> = use_signal(|| None);
+
+    use_effect(move || {
+        let _ = tick();
+        let _ = auth_ctx.refresh.read();
+        spawn(async move {
+            match api::list_cloud_providers().await {
+                Ok(list) => providers.set(list),
+                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                Err(e) => banner.set(Some((BannerKind::Err, format!("Loading providers failed: {e}")))),
+            }
+        });
+        spawn(async move {
+            match api::list_cloud_accounts().await {
+                Ok(list) => accounts.set(list),
+                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                Err(e) => banner.set(Some((BannerKind::Err, format!("Loading accounts failed: {e}")))),
+            }
+        });
+        spawn(async move {
+            match api::list_cloud_syncs().await {
+                Ok(list) => syncs.set(list),
+                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                Err(e) => banner.set(Some((BannerKind::Err, format!("Loading sync entries failed: {e}")))),
+            }
+        });
+    });
+
+    rsx! {
+        div { class: "section-header",
+            h2 { "Cloud accounts" }
+            span { class: "spacer" }
+            button {
+                class: "ghost",
+                "data-tip": "Re-fetch accounts + sync entries from the server.",
+                onclick: move |_| tick.set(tick() + 1),
+                Icon { name: "rotate-cw" }
+                "Refresh"
+            }
+            button {
+                class: "primary",
+                "data-tip": "Add a new cloud account. You'll need an rclone-authorize token for the chosen provider.",
+                onclick: move |_| add_account_open.set(true),
+                Icon { name: "plus" }
+                "Add account"
+            }
+        }
+
+        if let Some((kind, msg)) = banner() {
+            div { class: "banner {kind.css()}", pre { "{msg}" } }
+        }
+
+        if accounts.read().is_empty() {
+            p { class: "empty", "No cloud accounts yet. Click 'Add account' to connect one." }
+        } else {
+            table { class: "rows",
+                thead {
+                    tr { th { "Name" } th { "Provider" } th { "Token" } th {} }
+                }
+                tbody {
+                    for a in accounts.read().iter() {
+                        AccountRow {
+                            key: "{a.name}",
+                            account: a.clone(),
+                            on_delete: {
+                                let name = a.name.clone();
+                                move |_| {
+                                    let nm = name.clone();
+                                    spawn(async move {
+                                        match api::delete_cloud_account(&nm).await {
+                                            Ok(()) => {
+                                                banner.set(Some((BannerKind::Ok, format!("Removed account {nm}"))));
+                                                tick.set(tick() + 1);
+                                            }
+                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        div { class: "section-header", style: "margin-top: 1.6em",
+            h2 { "Sync entries" }
+            span { class: "spacer" }
+            button {
+                class: "primary",
+                "data-tip": "Add a directory to sync to / from a cloud account.",
+                disabled: accounts.read().is_empty(),
+                onclick: move |_| sync_form.set(Some(SyncFormMode::Create)),
+                Icon { name: "plus" }
+                "Add sync entry"
+            }
+        }
+        if accounts.read().is_empty() {
+            p { class: "preview-label", "Add at least one account before defining sync entries." }
+        } else if syncs.read().is_empty() {
+            p { class: "empty", "No sync entries yet." }
+        } else {
+            table { class: "rows",
+                thead {
+                    tr {
+                        th { "Account" }
+                        th { "Local" }
+                        th { "Remote" }
+                        th { "Direction" }
+                        th { "Schedule" }
+                        th {}
+                    }
+                }
+                tbody {
+                    for s in syncs.read().iter() {
+                        SyncRow {
+                            key: "{s.idx}",
+                            sync: s.clone(),
+                            on_edit: {
+                                let entry = s.clone();
+                                move |_| sync_form.set(Some(SyncFormMode::Edit(entry.clone())))
+                            },
+                            on_run: {
+                                let idx = s.idx;
+                                move |_| {
+                                    spawn(async move {
+                                        match api::run_cloud_sync(idx).await {
+                                            Ok(()) => banner.set(Some((BannerKind::Ok, "Sync started.".into()))),
+                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
+                                        }
+                                    });
+                                }
+                            },
+                            on_delete: {
+                                let idx = s.idx;
+                                move |_| {
+                                    spawn(async move {
+                                        match api::delete_cloud_sync(idx).await {
+                                            Ok(()) => {
+                                                banner.set(Some((BannerKind::Ok, format!("Removed sync {idx}"))));
+                                                tick.set(tick() + 1);
+                                            }
+                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if add_account_open() {
+            AddAccountModal {
+                providers: providers.read().clone(),
+                on_close: move |_| add_account_open.set(false),
+                on_saved: move |_| {
+                    add_account_open.set(false);
+                    banner.set(Some((BannerKind::Ok, "Account added.".into())));
+                    tick.set(tick() + 1);
+                },
+                on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
+                on_unauthorized: move |_| auth_ctx.signal_unauthorized()
+            }
+        }
+
+        if let Some(mode) = sync_form() {
+            SyncFormModal {
+                mode: mode,
+                accounts: accounts.read().clone(),
+                on_close: move |_| sync_form.set(None),
+                on_saved: move |verb: &'static str| {
+                    sync_form.set(None);
+                    banner.set(Some((BannerKind::Ok, format!("Sync entry {verb}"))));
+                    tick.set(tick() + 1);
+                },
+                on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
+                on_unauthorized: move |_| auth_ctx.signal_unauthorized()
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum BannerKind { Ok, Err }
+impl BannerKind {
+    fn css(self) -> &'static str { match self { Self::Ok => "ok", Self::Err => "err" } }
+}
+
+// ---------------------------------------------------------------- Account row
+
+#[derive(Props, Clone, PartialEq)]
+struct AccountRowProps {
+    account: api::CloudAccount,
+    on_delete: EventHandler<()>,
+}
+
+#[component]
+fn AccountRow(props: AccountRowProps) -> Element {
+    let a = &props.account;
+    let token_class: &'static str = if a.token_present { "badge ok" } else { "badge warn" };
+    let token_text: &'static str = if a.token_present { "✓ token set" } else { "no token" };
+    rsx! {
+        tr {
+            td { code { "{a.name}" } }
+            td { code { "{a.provider}" } }
+            td { span { class: "{token_class}", "{token_text}" } }
+            td { class: "row-actions",
+                button {
+                    class: "btn-icon delete",
+                    "data-tip": "Remove this account (and any sync entries pointing at it).",
+                    onclick: move |_| {
+                        if web_sys_confirm("Remove this account? Any sync entries using it will also be removed.") {
+                            props.on_delete.call(());
+                        }
+                    },
+                    Icon { name: "trash-2" }
+                }
+            }
+        }
+    }
+}
+
+fn web_sys_confirm(msg: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.confirm_with_message(msg).ok())
+        .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------- Sync row
+
+#[derive(Props, Clone, PartialEq)]
+struct SyncRowProps {
+    sync: api::CloudSync,
+    on_edit: EventHandler<()>,
+    on_run: EventHandler<()>,
+    on_delete: EventHandler<()>,
+}
+
+#[component]
+fn SyncRow(props: SyncRowProps) -> Element {
+    let s = &props.sync;
+    let direction_arrow: &'static str = match s.direction.as_str() {
+        "pull" => "←",
+        "bidirectional" => "↔",
+        _ => "→",
+    };
+    rsx! {
+        tr {
+            td { code { "{s.account}" } }
+            td { code { "{s.local_path}" } }
+            td { code { "{s.remote_path}" } }
+            td { span { class: "muted", "{direction_arrow} {s.direction}" } }
+            td { code { "{s.schedule}" } }
+            td { class: "row-actions",
+                button {
+                    class: "btn-icon ok",
+                    "data-tip": "Run this sync now (manual trigger).",
+                    onclick: move |_| props.on_run.call(()),
+                    Icon { name: "rotate-cw" }
+                }
+                button {
+                    class: "btn-icon edit",
+                    "data-tip": "Edit this sync entry",
+                    onclick: move |_| props.on_edit.call(()),
+                    Icon { name: "pencil" }
+                }
+                button {
+                    class: "btn-icon delete",
+                    "data-tip": "Remove this sync entry",
+                    onclick: move |_| {
+                        if web_sys_confirm("Remove this sync entry?") {
+                            props.on_delete.call(());
+                        }
+                    },
+                    Icon { name: "trash-2" }
+                }
+            }
+        }
+    }
+}
+
+// rsx! parses `{...}` in string literals as format args; we use a const
+// instead of an inline literal because the JSON example placeholder
+// contains both braces and escaped quotes that the macro can't handle.
+const TOKEN_PLACEHOLDER: &str = "{\"access_token\":\"…\",\"refresh_token\":\"…\",…}";
+
+// ---------------------------------------------------------------- Add Account modal
+
+#[derive(Props, Clone, PartialEq)]
+struct AddAccountModalProps {
+    providers: Vec<api::CloudProvider>,
+    on_close: EventHandler<()>,
+    on_saved: EventHandler<()>,
+    on_error: EventHandler<String>,
+    on_unauthorized: EventHandler<()>,
+}
+
+#[component]
+fn AddAccountModal(props: AddAccountModalProps) -> Element {
+    let mut name = use_signal(String::new);
+    let initial_provider = props.providers.first().map(|p| p.key.clone()).unwrap_or_default();
+    let mut provider = use_signal(|| initial_provider);
+    let mut token = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+
+    let mut submit = move |_| {
+        if busy() { return; }
+        if name().trim().is_empty() {
+            props.on_error.call("Name is required.".into());
+            return;
+        }
+        busy.set(true);
+        let body = api::AddCloudAccount {
+            name: name(),
+            provider: provider(),
+            token: token(),
+        };
+        let on_saved = props.on_saved.clone();
+        let on_error = props.on_error.clone();
+        let on_unauthorized = props.on_unauthorized.clone();
+        spawn(async move {
+            let r = api::add_cloud_account(&body).await;
+            busy.set(false);
+            match r {
+                Ok(()) => on_saved.call(()),
+                Err(ApiError::Unauthorized) => on_unauthorized.call(()),
+                Err(e) => on_error.call(e.to_string()),
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
+            form {
+                class: "modal user-modal",
+                onclick: move |e| e.stop_propagation(),
+                onsubmit: move |e| { e.prevent_default(); submit(()); },
+
+                div { class: "modal-header",
+                    h3 { "Add cloud account" }
+                    button { class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        Icon { name: "x" }
+                    }
+                }
+
+                div { class: "modal-body user-form",
+                    label { r#for: "cloud-name", "Name" }
+                    input {
+                        id: "cloud-name",
+                        r#type: "text",
+                        autocomplete: "off",
+                        autofocus: true,
+                        required: true,
+                        pattern: "[A-Za-z0-9_-]+",
+                        title: "Lowercase / digits / underscore / hyphen, 1–32 chars.",
+                        value: "{name()}",
+                        oninput: move |e| name.set(e.value())
+                    }
+                    p { class: "preview-label",
+                        "Used as the rclone remote name. Pick something short like ‘personal’ or ‘work-drive’."
+                    }
+
+                    label { r#for: "cloud-provider", "Provider" }
+                    select {
+                        id: "cloud-provider",
+                        value: "{provider()}",
+                        onchange: move |e| provider.set(e.value()),
+                        for p in props.providers.iter() {
+                            option { value: "{p.key}", "{p.label}" }
+                        }
+                    }
+
+                    label { r#for: "cloud-token", "Token (rclone-authorize JSON)" }
+                    textarea {
+                        id: "cloud-token",
+                        spellcheck: false,
+                        style: "min-height: 120px",
+                        placeholder: TOKEN_PLACEHOLDER,
+                        value: "{token()}",
+                        oninput: move |e| token.set(e.value())
+                    }
+                    p { class: "preview-label",
+                        "On a machine with a browser, run: "
+                        code { "rclone authorize \"{provider()}\"" }
+                        ". rclone opens an OAuth flow and prints a JSON blob — paste it here. Leave empty to add the account now and connect later."
+                    }
+                }
+
+                div { class: "modal-footer",
+                    button { class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        "Cancel"
+                    }
+                    button { class: "primary", r#type: "submit", disabled: busy(),
+                        if busy() { "Adding…" } else { "Add account" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Sync form modal
+
+#[derive(Clone, PartialEq)]
+enum SyncFormMode {
+    Create,
+    Edit(api::CloudSync),
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct SyncFormModalProps {
+    mode: SyncFormMode,
+    accounts: Vec<api::CloudAccount>,
+    on_close: EventHandler<()>,
+    on_saved: EventHandler<&'static str>,
+    on_error: EventHandler<String>,
+    on_unauthorized: EventHandler<()>,
+}
+
+#[component]
+fn SyncFormModal(props: SyncFormModalProps) -> Element {
+    let editing_idx: Option<usize> = match &props.mode {
+        SyncFormMode::Edit(s) => Some(s.idx),
+        SyncFormMode::Create => None,
+    };
+    let initial: api::CloudSync = match &props.mode {
+        SyncFormMode::Edit(s) => s.clone(),
+        SyncFormMode::Create => api::CloudSync {
+            idx: 0,
+            account: props.accounts.first().map(|a| a.name.clone()).unwrap_or_default(),
+            local_path: String::new(),
+            remote_path: String::new(),
+            direction: "push".into(),
+            schedule: "manual".into(),
+        },
+    };
+
+    let mut account = use_signal(|| initial.account.clone());
+    let mut local_path = use_signal(|| initial.local_path.clone());
+    let mut remote_path = use_signal(|| initial.remote_path.clone());
+    let mut direction = use_signal(|| initial.direction.clone());
+    let mut schedule = use_signal(|| initial.schedule.clone());
+    let mut show_browser = use_signal(|| false);
+    let mut busy = use_signal(|| false);
+
+    let title: String = match editing_idx {
+        Some(idx) => format!("Edit sync entry — row {idx}"),
+        None => "Add sync entry".into(),
+    };
+    let submit_label: &'static str = if editing_idx.is_some() { "Save changes" } else { "Add sync entry" };
+
+    let mut submit = move |_| {
+        if busy() { return; }
+        if !local_path().starts_with('/') {
+            props.on_error.call("Local path must be absolute.".into());
+            return;
+        }
+        if remote_path().trim().is_empty() {
+            props.on_error.call("Remote path is required.".into());
+            return;
+        }
+        busy.set(true);
+        let body = api::AddCloudSync {
+            account: account(),
+            local_path: local_path(),
+            remote_path: remote_path(),
+            direction: direction(),
+            schedule: schedule(),
+        };
+        let on_saved = props.on_saved.clone();
+        let on_error = props.on_error.clone();
+        let on_unauthorized = props.on_unauthorized.clone();
+        spawn(async move {
+            let result = match editing_idx {
+                Some(idx) => api::update_cloud_sync(idx, &body).await.map(|()| "updated"),
+                None => api::add_cloud_sync(&body).await.map(|()| "added"),
+            };
+            busy.set(false);
+            match result {
+                Ok(verb) => on_saved.call(verb),
+                Err(ApiError::Unauthorized) => on_unauthorized.call(()),
+                Err(e) => on_error.call(e.to_string()),
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
+            form {
+                class: "modal form-modal",
+                onclick: move |e| e.stop_propagation(),
+                onsubmit: move |e| { e.prevent_default(); submit(()); },
+
+                div { class: "modal-header",
+                    h3 { "{title}" }
+                    button { class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        Icon { name: "x" }
+                    }
+                }
+
+                div { class: "modal-body form-modal-body",
+                    div { class: "row",
+                        label { class: "hint", "data-tip": "Which connected cloud account to sync against.",
+                            "Account" }
+                        select {
+                            value: "{account()}",
+                            onchange: move |e| account.set(e.value()),
+                            for a in props.accounts.iter() {
+                                option { value: "{a.name}", "{a.name} ({a.provider})" }
+                            }
+                        }
+                        span {}
+                    }
+                    div { class: "row",
+                        label { class: "hint", "data-tip": "Absolute path on this NAS. Click to pick via the directory browser.",
+                            "Local path" }
+                        input {
+                            r#type: "text",
+                            class: "path-display",
+                            readonly: true,
+                            required: true,
+                            placeholder: "Click 'Browse…' to pick a directory",
+                            value: "{local_path()}",
+                            onclick: move |_| show_browser.set(true)
+                        }
+                        button {
+                            r#type: "button",
+                            "data-tip": "Pick a directory on the server.",
+                            onclick: move |_| show_browser.set(true),
+                            Icon { name: "folder-open" }
+                            "Browse"
+                        }
+                    }
+                    div { class: "row",
+                        label { class: "hint", "data-tip": "Path on the cloud provider. Slashes separate folders.",
+                            "Remote path" }
+                        input {
+                            r#type: "text",
+                            placeholder: "BanaNAS-backup/photos",
+                            required: true,
+                            value: "{remote_path()}",
+                            oninput: move |e| remote_path.set(e.value())
+                        }
+                        span {}
+                    }
+                    div { class: "row",
+                        label { class: "hint", "data-tip": "Push = local to remote. Pull = remote to local. Bidirectional = both, with conflict resolution by mtime.",
+                            "Direction" }
+                        select {
+                            value: "{direction()}",
+                            onchange: move |e| direction.set(e.value()),
+                            option { value: "push", "push (local → remote)" }
+                            option { value: "pull", "pull (remote → local)" }
+                            option { value: "bidirectional", "bidirectional" }
+                        }
+                        span {}
+                    }
+                    div { class: "row",
+                        label { class: "hint", "data-tip": "‘manual’ = run-on-demand only. Or a 5-field cron string like '0 2 * * *' (2 AM daily).",
+                            "Schedule" }
+                        input {
+                            r#type: "text",
+                            placeholder: "manual",
+                            value: "{schedule()}",
+                            oninput: move |e| schedule.set(e.value())
+                        }
+                        span {}
+                    }
+                }
+
+                div { class: "modal-footer",
+                    button { class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        "Cancel"
+                    }
+                    button { class: "primary", r#type: "submit", disabled: busy(),
+                        if busy() { "Saving…" } else { "{submit_label}" }
+                    }
+                }
+            }
+        }
+
+        if show_browser() {
+            Browser {
+                start: if local_path().is_empty() { "/srv".to_string() } else { local_path() },
+                on_pick: move |p: String| {
+                    local_path.set(p);
+                    show_browser.set(false);
+                },
+                on_close: move |_| show_browser.set(false)
+            }
+        }
+    }
+}

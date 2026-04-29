@@ -28,6 +28,7 @@ use serde_json::json;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
 mod auth;
+mod cloud;
 mod config;
 mod dirs;
 mod exports;
@@ -137,6 +138,12 @@ async fn main() -> Result<()> {
         .route("/users/{username}", delete(users::delete))
         .route("/users/{username}/password", put(users::set_password))
         .route("/users/{username}/admin", put(users::set_admin))
+        .route("/cloud/providers", get(cloud::providers))
+        .route("/cloud/accounts", get(cloud::list_accounts).post(cloud::add_account))
+        .route("/cloud/accounts/{name}", delete(cloud::delete_account))
+        .route("/cloud/syncs", get(cloud::list_syncs).post(cloud::add_sync))
+        .route("/cloud/syncs/{idx}", put(cloud::update_sync).delete(cloud::delete_sync))
+        .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
         .route("/config", get(config::export_config).post(config::import_config))
         .route_layer(from_fn_with_state(state.clone(), auth::require_session))
         .with_state(state);

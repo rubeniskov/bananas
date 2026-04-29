@@ -32,6 +32,13 @@ pub struct ConfigBundle {
     pub fstab: Vec<FstabEntry>,
     #[serde(default)]
     pub users: Vec<UserEntry>,
+    /// Cloud-sync accounts + sync entries from /etc/bananas/cloud.toml.
+    /// Persisted in the bundle so a fresh image's "Load config" call
+    /// fully restores the operator's setup, including OAuth tokens. Treat
+    /// the bundle as sensitive — anyone with the token can act as the
+    /// account on the configured provider.
+    #[serde(default)]
+    pub cloud: crate::cloud::CloudConfig,
 }
 
 fn default_version() -> u32 { 1 }
@@ -120,6 +127,8 @@ struct ImportSummary {
     fstab_written: usize,
     users_created: usize,
     users_skipped: usize,
+    cloud_accounts: usize,
+    cloud_syncs: usize,
     notes: Vec<String>,
 }
 
@@ -157,6 +166,8 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
         fstab_written: 0,
         users_created: 0,
         users_skipped: 0,
+        cloud_accounts: 0,
+        cloud_syncs: 0,
         notes: Vec::new(),
     };
 
@@ -295,6 +306,44 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
         }
     }
 
+    // ---- cloud -----------------------------------------------------------
+    // Replace the on-disk cloud.toml with the bundle's section. The
+    // server has no live state to invalidate (it reads cloud.toml on
+    // every /api/cloud/* call), so write-and-done is sufficient.
+    let cloud_toml = match toml::to_string_pretty(&bundle.cloud) {
+        Ok(s) => s,
+        Err(e) => {
+            summary.ok = false;
+            summary.notes.push(format!("cloud: serialize failed: {e}"));
+            String::new()
+        }
+    };
+    if !cloud_toml.is_empty() {
+        match bananas_helper::call(
+            &state.helper_socket,
+            &Command::WriteServiceConfig { name: "cloud".into(), content: cloud_toml },
+        )
+        .await
+        {
+            Ok(HelperResponse { ok: true, .. }) => {
+                summary.cloud_accounts = bundle.cloud.accounts.len();
+                summary.cloud_syncs = bundle.cloud.syncs.len();
+            }
+            Ok(HelperResponse { error, output, .. }) => {
+                summary.ok = false;
+                summary.notes.push(format!(
+                    "cloud: {}\n{}",
+                    error.unwrap_or_else(|| "helper rejected cloud".into()),
+                    output
+                ));
+            }
+            Err(e) => {
+                summary.ok = false;
+                summary.notes.push(format!("cloud: helper unreachable: {e}"));
+            }
+        }
+    }
+
     let status = if summary.ok { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR };
     (status, Json(summary)).into_response()
 }
@@ -339,11 +388,32 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
         Err(e) => return Err(format!("helper unreachable: {e}")),
     };
 
+    // Cloud config — same source-of-truth as /api/cloud/*. Read via
+    // the helper so the file's perms are respected (root-owned, the
+    // server is unprivileged). Errors here are non-fatal because cloud
+    // is optional and the absence of the file is a valid state.
+    let cloud = match bananas_helper::call(
+        &state.helper_socket,
+        &Command::ReadServiceConfig { name: "cloud".into() },
+    )
+    .await
+    {
+        Ok(HelperResponse { ok: true, output, .. }) => {
+            if output.trim().is_empty() {
+                crate::cloud::CloudConfig::default()
+            } else {
+                toml::from_str(&output).unwrap_or_default()
+            }
+        }
+        _ => crate::cloud::CloudConfig::default(),
+    };
+
     Ok(ConfigBundle {
         version: 1,
         exports: exports_rows,
         fstab: fstab_rows,
         users,
+        cloud,
     })
 }
 

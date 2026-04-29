@@ -276,6 +276,10 @@ pub struct ImportSummary {
     pub users_created: usize,
     pub users_skipped: usize,
     #[serde(default)]
+    pub cloud_accounts: usize,
+    #[serde(default)]
+    pub cloud_syncs: usize,
+    #[serde(default)]
     pub notes: Vec<String>,
 }
 
@@ -881,6 +885,124 @@ pub async fn browse(path: &str) -> Result<Listing, ApiError> {
     resp.json::<Listing>()
         .await
         .map_err(|e| ApiError::Other(e.to_string()))
+}
+
+// --- Cloud ----------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct CloudProvider {
+    pub key: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProvidersResp { providers: Vec<CloudProvider> }
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct CloudAccount {
+    pub name: String,
+    pub provider: String,
+    /// True when /etc/bananas/cloud.toml has a non-empty token field.
+    /// Used by the UI to render "✓ token set" vs "no token (re-auth)".
+    pub token_present: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AccountsResp { accounts: Vec<CloudAccount> }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AddCloudAccount {
+    pub name: String,
+    pub provider: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct CloudSync {
+    pub idx: usize,
+    pub account: String,
+    pub local_path: String,
+    pub remote_path: String,
+    pub direction: String,
+    pub schedule: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SyncsResp { syncs: Vec<CloudSync> }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AddCloudSync {
+    pub account: String,
+    pub local_path: String,
+    pub remote_path: String,
+    pub direction: String,
+    pub schedule: String,
+}
+
+pub async fn list_cloud_providers() -> Result<Vec<CloudProvider>, ApiError> {
+    let resp = Request::get("/api/cloud/providers")
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 { return Err(ApiError::Unauthorized); }
+    if !resp.ok() { return Err(ApiError::Other(format!("HTTP {}", resp.status()))); }
+    let body: ProvidersResp = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    Ok(body.providers)
+}
+
+pub async fn list_cloud_accounts() -> Result<Vec<CloudAccount>, ApiError> {
+    let resp = Request::get("/api/cloud/accounts")
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 { return Err(ApiError::Unauthorized); }
+    if !resp.ok() { return Err(ApiError::Other(format!("HTTP {}", resp.status()))); }
+    let body: AccountsResp = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    Ok(body.accounts)
+}
+
+pub async fn add_cloud_account(req: &AddCloudAccount) -> Result<(), ApiError> {
+    let resp = Request::post("/api/cloud/accounts")
+        .json(req).map_err(|e| ApiError::Other(e.to_string()))?
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    helper_status(resp).await
+}
+
+pub async fn delete_cloud_account(name: &str) -> Result<(), ApiError> {
+    let resp = Request::delete(&format!("/api/cloud/accounts/{}", urlencode(name)))
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    helper_status(resp).await
+}
+
+pub async fn list_cloud_syncs() -> Result<Vec<CloudSync>, ApiError> {
+    let resp = Request::get("/api/cloud/syncs")
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 { return Err(ApiError::Unauthorized); }
+    if !resp.ok() { return Err(ApiError::Other(format!("HTTP {}", resp.status()))); }
+    let body: SyncsResp = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    Ok(body.syncs)
+}
+
+pub async fn add_cloud_sync(req: &AddCloudSync) -> Result<(), ApiError> {
+    let resp = Request::post("/api/cloud/syncs")
+        .json(req).map_err(|e| ApiError::Other(e.to_string()))?
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    helper_status(resp).await
+}
+
+pub async fn update_cloud_sync(idx: usize, req: &AddCloudSync) -> Result<(), ApiError> {
+    let resp = Request::put(&format!("/api/cloud/syncs/{idx}"))
+        .json(req).map_err(|e| ApiError::Other(e.to_string()))?
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    helper_status(resp).await
+}
+
+pub async fn delete_cloud_sync(idx: usize) -> Result<(), ApiError> {
+    let resp = Request::delete(&format!("/api/cloud/syncs/{idx}"))
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    helper_status(resp).await
+}
+
+pub async fn run_cloud_sync(idx: usize) -> Result<(), ApiError> {
+    let resp = Request::post(&format!("/api/cloud/syncs/{idx}/run"))
+        .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    helper_status(resp).await
 }
 
 fn urlencode(s: &str) -> String {

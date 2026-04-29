@@ -9,6 +9,7 @@ use dioxus::prelude::*;
 
 mod api;
 mod browse;
+mod cloud;
 mod components;
 mod exports;
 mod icons;
@@ -68,7 +69,7 @@ impl AuthCtx {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Page { Stats, Exports, Storage, Users }
+enum Page { Stats, Exports, Storage, Users, Cloud }
 
 impl Page {
     /// URL-hash slug used to make the current page survive a full-page
@@ -80,6 +81,7 @@ impl Page {
             Page::Exports => "exports",
             Page::Storage => "storage",
             Page::Users => "users",
+            Page::Cloud => "cloud",
         }
     }
 
@@ -89,6 +91,7 @@ impl Page {
             "exports" => Some(Page::Exports),
             "storage" => Some(Page::Storage),
             "users" => Some(Page::Users),
+            "cloud" => Some(Page::Cloud),
             _ => None,
         }
     }
@@ -237,6 +240,8 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     on_click: move |_| page.set(Page::Storage) }
                 NavTab { label: "Users", icon: "users", active: page() == Page::Users,
                     on_click: move |_| page.set(Page::Users) }
+                NavTab { label: "Cloud", icon: "cloud", active: page() == Page::Cloud,
+                    on_click: move |_| page.set(Page::Cloud) }
                 span { class: "spacer" }
                 div { class: "nav-actions",
                     button {
@@ -282,6 +287,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Exports => rsx! { exports::ExportsPage {} },
                 Page::Storage => rsx! { storage::StoragePage {} },
                 Page::Users => rsx! { users::UsersPage {} },
+                Page::Cloud => rsx! { cloud::CloudPage {} },
             }
         }
     }
