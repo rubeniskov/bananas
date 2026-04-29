@@ -2,6 +2,8 @@
 
 Thanks for picking this up. The repo is a Yocto image plus a Cargo workspace plus a wasm SPA — three different toolchains, all driven by `pixi run`. This guide covers the bare minimum to get a productive feedback loop and ship a change.
 
+For the full **dev environment setup, host packages, the iterate-loop ordering, and the build-from-source walkthrough**, see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). The README's Quick Start is now operator-focused (flash the prebuilt SD image from a release tag); this file picks up where DEVELOPMENT.md leaves off — code style, commit messages, PR rules.
+
 ---
 
 ## TL;DR
@@ -18,6 +20,8 @@ If a `pixi run` invocation says "command not found", you don't have `pixi` insta
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
 ```
+
+The detailed setup (host apt packages, Docker context, U-Boot env for netboot, SSH key drop) is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ---
 

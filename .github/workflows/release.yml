@@ -146,15 +146,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-yocto-
 
-      # NFS_EXPORT_NETWORK is required at build time (bbfatal in
-      # `install_nfs_exports` if empty); ROOT_PASSWORD_HASH is now
-      # optional — the image recipe defaults to the "bananas" placeholder
-      # hash with lastchg=0 so first sign-in forces rotation. We default
-      # NFS_EXPORT_NETWORK to a broad home-LAN range; tighten it via the
-      # Exports tab post-boot.
+      # All build-time env vars (ROOT_PASSWORD_HASH, NFS_EXPORT_NETWORK)
+      # are optional now: the recipe ships an empty /etc/exports + an
+      # empty /etc/fstab and uses a "bananas" placeholder root hash that
+      # lastchg=0 marks expired. Operators configure exports + mounts via
+      # the web UI on first boot.
       - name: Bake Yocto image
-        env:
-          NFS_EXPORT_NETWORK: '192.168.0.0/16'
         run: pixi run build
 
       # ─── Stage tarballs for semantic-release to upload ────────────

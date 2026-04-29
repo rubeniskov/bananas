@@ -122,81 +122,46 @@ Slint app rendered on the 5″ RGB panel — CPU + memory bars in the header, ne
 
 ## 🚀 Quick start
 
-> **Hardware:** Banana Pro (BPI-M1+) with a microSD card, optional 5″ RGB888 LCD, optional SATA disk(s).
+> **Hardware:** Banana Pro (BPI-M1+), a microSD card (≥ 4 GB), optional 5″ RGB888 LCD, optional SATA disk(s).
 
-### 0. Host requirements
+### 1. Grab the SD image
 
-`pixi` provides Python 3.11, `kas`, and the conda-side host tools. Bitbake also needs a couple of system packages:
+Head to the [latest release](https://github.com/rubeniskov/bananas/releases/latest) and download `bananas-image-armv7.tar.gz`. That tarball wraps a single `.wic` file ready to be `dd`-ed straight onto a card — U-Boot SPL, kernel, dtb, and rootfs all baked in.
 
-| OS | Command |
-|----|---------|
-| Ubuntu / Debian | `sudo apt-get install chrpath cpio diffstat hostname rpcsvc-proto` |
-| Arch | `sudo pacman -S chrpath cpio diffstat inetutils rpcsvc-proto` |
-| macOS | Yocto builds are not supported on macOS host — use a Linux VM / Docker. |
-| Windows | Use WSL2 (Ubuntu) — `sudo apt-get install chrpath cpio diffstat hostname rpcsvc-proto`. |
+### 2. Flash it
 
-You also need a Docker context pointed at the host's native daemon (Docker Desktop's VM context can't bind LAN UDP for TFTP / NFS). Once per machine:
+Find your SD device (replace `/dev/sdX` below — `lsblk` will show it under the right size):
 
 ```bash
-docker context use default
+tar -xzf bananas-image-armv7.tar.gz
+sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
+sync
 ```
 
-### 1. Clone + drop your SSH key
+> ⚠️ Double-check the device — `dd` will gladly overwrite your laptop's NVMe if you point it at the wrong path.
 
-```bash
-git clone https://github.com/rubeniskov/bananas.git && cd bananas
-cp ~/.ssh/id_ed25519.pub layers/meta-bananas/recipes-core/images/files/authorized_keys
-```
+### 3. Boot the BPI
 
-The image bakes `authorized_keys` into `${ROOT_HOME}/.ssh/` so `pixi run reboot` works over SSH key auth right after first boot.
+Insert the card, plug in Ethernet, power on. The first boot:
 
-### 2. First build
+- U-Boot shows the BanaNAS splash on the LCD if one is attached.
+- A psplash progress bar covers the kernel → userspace handoff.
+- The rootfs auto-grows to fill the rest of the SD card (one-time, NFS netboots are skipped automatically).
+- mDNS publishes the box as `bananapro.local` via avahi.
 
-```bash
-pixi run info       # sanity check (pixi + kas versions, etc.)
-pixi run build      # full Yocto bake (≈30 min cold cache)
-```
+Find the LAN IP via `ping bananapro.local` or your router's DHCP table.
 
-Output lands at `build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz`.
+### 4. Sign in to the web admin
 
-### 3. Network-boot setup (one-time)
+Browse to **`http://bananapro.local:8080/`** (or the IP). First sign-in is **`root` / `bananas`**, the placeholder credential the image ships with. The login form immediately bounces you into a "Set a new password to continue" screen — the placeholder stops working the moment you rotate it. After rotation:
 
-The TFTP + NFS containers run via `compose.yml` (host's native daemon). On a new machine, disable any system NFS server first since the kernel `nfsd` module is shared:
+1. **Mount points** tab → add fstab entries for any SATA / USB disk you have plugged in. The image ships with no defaults; the UI handles `mkdir`, fstab edit, and `systemctl daemon-reload`.
+2. **Exports** tab → declare which paths to share over NFS and to what client / CIDR. Same deal — the image ships an empty `/etc/exports`, the UI rewrites it via the privileged helper.
+3. **Users** tab → add normal admin users (member of `bananas-admin`); demote root to emergency-use.
+4. **Cloud** tab (optional) → connect Google Drive / Dropbox / S3 / etc. for backup syncs.
+5. **Save config** → drops a TOML bundle of the entire setup (exports + fstab + users + cloud) onto your laptop. Use **Load config** on a re-flashed card to restore in one click.
 
-```bash
-sudo systemctl disable --now nfs-server
-lsmod | grep -q '^nfsd' || sudo modprobe nfsd
-```
-
-Then the BPI's U-Boot env (one-time, paste over the serial console then `saveenv`):
-
-```
-setenv serverip <host-ip>
-setenv ipaddr <bpi-static-ip>
-setenv netargs 'setenv bootargs console=ttyS0,115200 root=/dev/nfs nfsroot=<host-ip>:/nfsshare,vers=3 ip=dhcp panic=10'
-setenv bootcmd_net 'run netargs; tftpboot 0x42000000 uImage; tftpboot 0x43000000 sun7i-a20-bananapro.dtb; bootm 0x42000000 - 0x43000000'
-setenv bootcmd 'run bootcmd_net'
-saveenv
-```
-
-### 4. Iterate
-
-```bash
-BPI_HOST=<bpi-host-or-ip> pixi run iterate
-```
-
-This rebuilds everything, soft-reboots the BPI, and streams the new rootfs back over NFS. Subsequent iterations on a UI-only change typically take under a minute.
-
-### 5. Web admin
-
-Browse to `http://<bpi-host>:8080/` — first sign-in is **root / bananas**, the placeholder password the image ships with. The login form will immediately bounce you into a "Set a new password to continue" screen (PAM does the same on the serial console); that's the rotation mechanism, and the placeholder credential stops working the moment you set a new one. After rotation, add normal admin users from the Users tab and demote root to emergency-use.
-
-If you'd rather have your own hash baked into the image (skipping the placeholder), set `ROOT_PASSWORD_HASH` in `.env`:
-
-```bash
-# Generate a hash for ROOT_PASSWORD_HASH (optional)
-openssl passwd -6 -salt $(openssl rand -hex 8)
-```
+That's it for a normal install. Building from source / iterating without re-flashing is covered in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ---
 

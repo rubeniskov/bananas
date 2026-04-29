@@ -9,14 +9,13 @@ target:
 # Build-time env vars. kas takes each value from the calling environment and
 # exposes it to bitbake via BB_ENV_PASSTHROUGH_ADDITIONS. Set via .env (local)
 # or CI/CD secrets:
-#   NFS_EXPORT_NETWORK   CIDR or hostname allowed in /etc/exports on the BPI.
-#                        e.g. 192.168.1.0/24
-#   ROOT_PASSWORD_HASH   SHA-512 hash for root login (serial / LCD console).
+#   ROOT_PASSWORD_HASH   SHA-512 hash for root login. OPTIONAL — defaults
+#                        to a "bananas" placeholder hash whose lastchg is 0
+#                        (forces rotation on first sign-in via the web UI
+#                        or the serial console). Override only when you
+#                        want a specific operator-known hash baked in.
 #                        Generate via: openssl passwd -6 -salt $(openssl rand -hex 8)
-# Both are required (no default here) — install_nfs_exports / set_root_password
-# in bananas-image.bb fail with bbfatal if they're empty at build time.
 env:
-  NFS_EXPORT_NETWORK:
   ROOT_PASSWORD_HASH:
 
 repos:

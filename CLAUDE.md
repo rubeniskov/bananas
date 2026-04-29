@@ -115,16 +115,11 @@ When a Yocto build fails inside a *-native* recipe with a `-Werror` or const-qua
 - Panel timings live in `docs/LCD_5INCH_CONFIGURATION.md` (30 MHz pclk, 800x480, 88/40 hbp/hfp + 48 hsync, 32/13 vbp/vfp + 3 vsync); the LCD is now baked directly into `sun7i-a20-bananapro.dtb` rather than loaded as a runtime overlay (U-Boot 2024.01 in this image lacks `CONFIG_CMD_NFS`/`CONFIG_CMD_WGET` so the overlay-loading path isn't worth setting up).
 - The doc also references `scripts/fex_to_uboot.py` and `overlays/bpi-m1p-lcd.dtbo` — treat those as planned/expected artifacts rather than guaranteed to exist; the inlined-DTS approach makes them unnecessary.
 
-### SATA storage (`/srv/media`, `/srv/services`)
+### SATA storage
 
-`bananas-image.bb` runs `install_storage_fstab` in `ROOTFS_POSTPROCESS_COMMAND`, appending two `LABEL=`-based fstab entries:
+The image now ships an **empty `/etc/fstab`** and an **empty `/etc/exports`** — operators add disk mounts and NFS shares through the web admin's *Mount points* and *Exports* tabs, which route the edit through `bananas-helper`. No more hardcoded `LABEL=media` / `LABEL=services` defaults; nothing in `bananas-image.bb` post-processes those files at bake time. `nfs-server.service` is still pre-enabled with the `NFSD_COUNT=8` drop-in so adding the first export from the UI just works without a manual `systemctl enable`.
 
-```
-LABEL=media     /srv/media     ext4 defaults,noatime,nofail,x-systemd.device-timeout=10 0 2
-LABEL=services  /srv/services  ext4 defaults,noatime,nofail,x-systemd.device-timeout=10 0 2
-```
-
-Both mountpoints are pre-created (mode 0755) so systemd-fstab-generator just mounts. `nofail` avoids dropping to rescue mode if the SATA disk is missing; `device-timeout=10` lets a slow drive enumerate without hanging boot indefinitely. `media` holds movies + downloads, `services` holds Gitea / Docker registry / projects.
+Recommended mount options to use when adding entries via the UI: `defaults,noatime,nofail,x-systemd.device-timeout=10`. `nofail` avoids dropping to rescue mode if the disk is missing; `device-timeout=10` lets a slow drive enumerate without hanging boot indefinitely.
 
 **32-bit ARM ext4 wall — DO NOT FORGET.** sun7i-a20 is 32-bit, so `pgoff_t = unsigned long = 32 bits = 16 TiB at 4 KiB pages`. Consequences:
 

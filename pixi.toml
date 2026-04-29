@@ -8,9 +8,10 @@ version = "0.1.0"
 [tasks]
 info = "python --version && kas --version"
 
-# `build`: kas → bitbake. Sources .env first so NFS_EXPORT_NETWORK and
-# ROOT_PASSWORD_HASH (declared in kas.yml's `env:` block) reach the recipe.
-# Without them install_nfs_exports / set_root_password call bbfatal.
+# `build`: kas → bitbake. Sources .env first so ROOT_PASSWORD_HASH
+# (declared in kas.yml's `env:` block) reaches the recipe when set —
+# it's optional now. The recipe ships a "bananas" placeholder hash
+# flagged expired on first sign-in if no override is provided.
 #
 # We force `-c rootfs` so the rootfs is regenerated each run. Forcing only
 # `image_complete` is not enough — its sstate restoration can hit, mark

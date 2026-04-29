@@ -29,7 +29,7 @@ ROOT_PASSWORD_HASH ??= "$6$bananas$wLIzzjPHUgftWxH6Mos.t/90VkyZZoZvOr/hKobl0Mx1p
 # kas-imported env vars (via kas.yml's `env:` block) don't always make it
 # into bitbake's task-signature hash, and a stale cached rootfs gets
 # reused when only .env changed.
-do_rootfs[vardeps] += "ROOT_PASSWORD_HASH NFS_EXPORT_NETWORK"
+do_rootfs[vardeps] += "ROOT_PASSWORD_HASH"
 
 ROOTFS_POSTPROCESS_COMMAND += "set_root_password;"
 
@@ -85,62 +85,25 @@ install_firstboot_resize() {
         ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/bananas-firstboot-resize.service
 }
 
-# Bake fstab entries for the SATA storage volumes. nofail = don't drop to
-# rescue mode if the drive is missing; x-systemd.device-timeout=10 = give
-# the SATA controller 10 s to enumerate then fail-soft.
-ROOTFS_POSTPROCESS_COMMAND += "install_storage_fstab;"
+# Wire up nfs-server.service so the daemon is ready the moment the
+# operator adds an export through the web UI — but ship /etc/exports
+# empty. Same story for /etc/fstab: no default mount entries are
+# baked in; the operator configures storage through the Mount points
+# tab post-boot. /srv is left as a conventional landing spot for new
+# mounts (created by base-files), but no children are pre-populated.
+ROOTFS_POSTPROCESS_COMMAND += "install_nfs_server;"
 
-install_storage_fstab() {
-    install -d -m 0755 ${IMAGE_ROOTFS}/srv/media
-    install -d -m 0755 ${IMAGE_ROOTFS}/srv/services
-    cat >> ${IMAGE_ROOTFS}/etc/fstab <<EOF
-LABEL=media     /srv/media     ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2
-LABEL=services  /srv/services  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2
-EOF
-}
-
-# NFS export the SATA storage to ${NFS_EXPORT_NETWORK} (a CIDR or hostname).
-# Both volumes are exported with the same options. no_root_squash lets clients
-# keep root identity (handy for rsync of mode/owner-sensitive trees); insecure
-# allows source ports above 1024 which some clients use by default.
-#
-# NFS_EXPORT_NETWORK is required at build time (no default — passed through
-# kas.yml's BB_ENV_PASSTHROUGH_ADDITIONS). Set it to your LAN CIDR, e.g.
-# `NFS_EXPORT_NETWORK=192.168.1.0/24 pixi run build`.
-NFS_EXPORT_NETWORK ?= ""
-
-ROOTFS_POSTPROCESS_COMMAND += "install_nfs_exports;"
-
-install_nfs_exports() {
-    if [ -z "${NFS_EXPORT_NETWORK}" ]; then
-        bbfatal "NFS_EXPORT_NETWORK is required (set it in kas.yml local_conf or export it before pixi run build)"
-    fi
-    # all_squash + anonuid=1000/anongid=1000: every client (root or not, any
-    # UID) is remapped to UID 1000 / GID 1000 on the server. This matches the
-    # ownership of pre-existing /srv/media files (UID 1000) and gives all
-    # clients consistent write access to /srv/services without needing a
-    # shared UID across machines. Tradeoff: file-level user attribution is
-    # gone — everything is "the NAS user". For a single-user personal NAS
-    # this is the simplest correct model.
-    cat > ${IMAGE_ROOTFS}/etc/exports <<EOF
-/srv/media     ${NFS_EXPORT_NETWORK}(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000,insecure)
-/srv/services  ${NFS_EXPORT_NETWORK}(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000,insecure)
-EOF
+install_nfs_server() {
     install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants
     ln -sf /lib/systemd/system/nfs-server.service \
         ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/nfs-server.service
 
-    # Drop-in: nfs-server.service's ExecStart is "rpc.nfsd $NFSD_OPTS $NFSD_COUNT",
-    # both sourced from /etc/nfs-utils.conf which OE doesn't ship. Without
-    # NFSD_COUNT, rpc.nfsd exits 1 and the unit fails. Also pin RequiresMountsFor
-    # so the SATA volumes are mounted before exportfs runs (otherwise the export
-    # paths are still part of the NFS rootfs, exportfs sees NFS-on-NFS and
-    # demands fsid=).
+    # nfs-server.service's ExecStart is "rpc.nfsd $NFSD_OPTS $NFSD_COUNT",
+    # sourced from /etc/nfs-utils.conf which OE doesn't ship. Without
+    # NFSD_COUNT rpc.nfsd exits 1 and the unit fails — so we keep this
+    # drop-in even with an empty /etc/exports.
     install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/nfs-server.service.d
     cat > ${IMAGE_ROOTFS}/etc/systemd/system/nfs-server.service.d/override.conf <<EOF
-[Unit]
-RequiresMountsFor=/srv/media /srv/services
-
 [Service]
 Environment=NFSD_COUNT=8
 EOF
