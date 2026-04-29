@@ -13,5 +13,6 @@
 //! `/api/stats/*`.
 
 pub mod config;
+pub mod live_socket;
 pub mod metrics;
 pub mod storage;

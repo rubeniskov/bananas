@@ -70,9 +70,13 @@ async fn main() -> Result<()> {
 
     let stats_state = stats::StatsState::open(&stats_db_path);
     let live_bus = stats_ws::LiveBus::new();
-    // Single 1 Hz polling task feeds all websocket subscribers — N
-    // clients = 1 DB read/sec, regardless of N.
-    live_bus.start(stats_state.db.clone(), std::time::Duration::from_secs(1));
+    // Subscribe to bananas-stats's live Unix socket and re-broadcast
+    // to web WS clients. SQLite is no longer touched for live data —
+    // bananas-stats is the in-memory source of truth.
+    let live_socket_path: PathBuf = std::env::var_os("BANANAS_STATS_LIVE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas-stats/live.sock".into());
+    live_bus.start_socket(live_socket_path);
 
     let state = AppState {
         exports_path: Arc::new(

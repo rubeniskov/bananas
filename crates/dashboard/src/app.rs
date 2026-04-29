@@ -13,7 +13,6 @@ use tokio::sync::watch;
 
 use bananas_stats::config::Ui as UiCfg;
 use bananas_stats::metrics::Snapshot;
-use bananas_stats::storage::Database;
 
 slint::include_modules!();
 
@@ -53,7 +52,6 @@ impl History {
 pub fn launch(
     cfg: UiCfg,
     mut rx: watch::Receiver<Snapshot>,
-    _db: Database,
     local_offset: time::UtcOffset,
 ) -> Result<()> {
     let main = MainWindow::new()?;

@@ -3,7 +3,7 @@
 //! dashboard) consume via the on-disk WAL store.
 
 use anyhow::Result;
-use bananas_stats::{config, metrics, storage};
+use bananas_stats::{config, live_socket, metrics, storage};
 use std::path::PathBuf;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
@@ -36,6 +36,20 @@ async fn main() -> Result<()> {
         snapshot_tx,
     );
     let writer = storage::Writer::new(db.clone(), cfg.storage.clone(), snapshot_rx.clone());
+
+    // Live socket pub/sub. Subscribers (bananas-server's WS bus,
+    // bananas-dashboard's render loop) connect here and receive one
+    // newline-delimited JSON snapshot per sampler tick. The watch
+    // channel guarantees slow consumers only see the *latest* — never
+    // a backlog — so memory stays bounded regardless of how many
+    // subscribers misbehave.
+    let socket_path = cfg.live_socket.path.clone();
+    let socket_rx = snapshot_rx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = live_socket::serve(socket_path, socket_rx).await {
+            tracing::error!(error = ?e, "live socket server died");
+        }
+    });
 
     tokio::spawn(sampler.run());
     tokio::spawn(writer.run());

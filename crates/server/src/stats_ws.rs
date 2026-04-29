@@ -1,16 +1,19 @@
 //! Live-snapshot push over WebSocket (`/api/stats/live`).
 //!
-//! Architecture: ONE background tokio task polls the stats DB once per
-//! second and broadcasts the resulting `Snapshot` to a
-//! `tokio::sync::broadcast` channel. Every connected websocket gets its
-//! own `Receiver` clone, so 0..N clients = exactly one DB read per
-//! second regardless. Clients never poll.
+//! Architecture: ONE background tokio task subscribes to bananas-stats's
+//! Unix-socket pub/sub at `/run/bananas-stats/live.sock`, parses each
+//! incoming line as a `Snapshot`, and re-broadcasts to a
+//! `tokio::sync::broadcast` channel. Every connected websocket gets
+//! its own broadcast receiver, so 0..N web clients = one socket
+//! subscription regardless of N. SQLite is no longer touched for live
+//! data — bananas-stats is the sole owner of in-memory state, and the
+//! DB is only read by `/api/stats/range` for historical queries.
 //!
 //! The auth middleware applies to this route the same way it does to
 //! `/api/stats/snapshot` — the WS upgrade is just a regular GET HTTP
 //! request that needs the `bananas_session` cookie.
 
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use axum::{
     extract::{
@@ -19,7 +22,9 @@ use axum::{
     },
     response::Response,
 };
-use bananas_stats::{metrics::Snapshot, storage::queries};
+use bananas_stats::metrics::Snapshot;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 
 use crate::AppState;
@@ -42,31 +47,63 @@ impl LiveBus {
         Self { tx }
     }
 
-    /// Spawn the polling task. Reads `latest_snapshot()` once per
-    /// `interval` and broadcasts. If the stats DB isn't open yet, we
-    /// skip the tick — readers see no events but the WS stays alive.
-    pub fn start(&self, db: Option<Arc<bananas_stats::storage::Database>>, interval: Duration) {
+    /// Connect to bananas-stats's live Unix socket and re-broadcast
+    /// every snapshot it sends to all WS subscribers. Reconnects on
+    /// failure with exponential backoff (200 ms → 5 s) so the bus
+    /// recovers from a stats-service restart without operator
+    /// intervention.
+    pub fn start_socket(&self, socket_path: PathBuf) {
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(interval);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut backoff_ms: u64 = 200;
             loop {
-                tick.tick().await;
-                let Some(db) = db.as_ref().cloned() else { continue };
-                match tokio::task::spawn_blocking(move || queries::latest_snapshot(&db)).await {
-                    Ok(Ok(snap)) => {
-                        // No subscribers → ignore (broadcast::send Errs).
-                        let _ = tx.send(snap);
+                match try_subscribe(&socket_path, &tx).await {
+                    Ok(()) => {
+                        tracing::debug!("live socket EOF — reconnecting");
+                        backoff_ms = 200; // healthy session before EOF, reset
                     }
-                    Ok(Err(e)) => tracing::warn!(error=?e, "latest_snapshot for ws bus failed"),
-                    Err(e) => tracing::warn!(error=?e, "ws bus join failed"),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e, path = %socket_path.display(),
+                            "live socket subscribe failed; backing off"
+                        );
+                    }
                 }
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms * 2).min(5_000);
             }
         });
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Snapshot> {
         self.tx.subscribe()
+    }
+}
+
+async fn try_subscribe(
+    path: &std::path::Path,
+    tx: &broadcast::Sender<Snapshot>,
+) -> std::io::Result<()> {
+    let stream = UnixStream::connect(path).await?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            return Ok(()); // EOF — peer closed
+        }
+        match serde_json::from_str::<Snapshot>(line.trim()) {
+            Ok(snap) => {
+                // broadcast::send returns Err only when there are no
+                // subscribers; ignore that — clients reconnecting later
+                // still get fresh data.
+                let _ = tx.send(snap);
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "bad snapshot line on live socket");
+            }
+        }
     }
 }
 

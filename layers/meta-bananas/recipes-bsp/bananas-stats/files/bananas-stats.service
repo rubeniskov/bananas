@@ -12,6 +12,13 @@ ExecStart=/usr/bin/bananas-stats
 # (mode 0700) and chowns to bananas:bananas on first start.
 StateDirectory=bananas
 StateDirectoryMode=0700
+# RuntimeDirectory holds the live pub/sub Unix socket
+# (`/run/bananas-stats/live.sock`) that bananas-server's WS bus and
+# bananas-dashboard subscribe to. systemd recreates the dir on every
+# start and removes it on stop — the socket lifecycle therefore tracks
+# the daemon's lifetime exactly.
+RuntimeDirectory=bananas-stats
+RuntimeDirectoryMode=0750
 Environment=RUST_LOG=info
 Restart=on-failure
 RestartSec=2

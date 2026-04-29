@@ -40,6 +40,21 @@ struct Cfg {
     devices: Devices,
     network: Network,
     ui: Ui,
+    live_socket: LiveSocket,
+}
+
+/// Path of the Unix socket bananas-stats binds for live pub/sub. Not
+/// surfaced in the form (operators rarely change it) but round-tripped
+/// in the TOML so saving from the modal doesn't drop the section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct LiveSocket {
+    path: String,
+}
+impl Default for LiveSocket {
+    fn default() -> Self {
+        Self { path: "/run/bananas-stats/live.sock".into() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +148,8 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
     let auth_ctx = use_context::<AuthCtx>();
 
     // Form state — initialized to defaults; replaced on hydrate.
+    // We keep the loaded Cfg around so non-form fields (e.g. live_socket.path)
+    // round-trip on save without ever being shown in the UI.
     let mut cfg = use_signal(Cfg::default);
     // Mirror fields the user types into, kept as strings so partial
     // input (e.g. typing "5" before "500") doesn't get clobbered.
@@ -225,6 +242,9 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
         new.ui.title = ui_title();
         new.ui.theme = ui_theme();
         new.ui.spark_window = spark_window().parse().unwrap_or(60);
+        // Preserve advanced sections we don't surface in the form
+        // (live_socket path) by carrying them across from the loaded Cfg.
+        new.live_socket = cfg().live_socket.clone();
         toml::to_string_pretty(&new).unwrap_or_default()
     };
 

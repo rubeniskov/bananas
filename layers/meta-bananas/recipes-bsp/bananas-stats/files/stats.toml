@@ -48,3 +48,12 @@ title = "bananas-dashboard"
 theme = "auto"
 # Number of historical points kept on the live sparklines.
 spark_window = 60
+
+[live_socket]
+# Unix socket bananas-stats binds for the live pub/sub feed.
+# bananas-server (web admin /api/stats/live WS) and bananas-dashboard
+# (LCD app) both subscribe here for real-time data, eliminating the
+# read-amplification of polling SQLite from each consumer. Path is
+# below /run/bananas-stats/ (created by the systemd unit's
+# RuntimeDirectory= directive).
+path = "/run/bananas-stats/live.sock"

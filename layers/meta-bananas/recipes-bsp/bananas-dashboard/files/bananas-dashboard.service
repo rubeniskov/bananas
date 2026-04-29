@@ -2,6 +2,8 @@
 Description=BanaNAS LCD dashboard — live system tiles on the 5" RGB panel
 # Conflicts with psplash on the same framebuffer; psplash quits when
 # default.target is reached, so wait for that before claiming /dev/fb0.
+# bananas-stats must be up before we connect to its live pub/sub
+# socket — `Wants=` so we don't fail-on-missing, just retry-on-EOF.
 After=multi-user.target bananas-stats.service psplash-start.service
 Wants=bananas-stats.service
 ConditionPathExists=/dev/fb0

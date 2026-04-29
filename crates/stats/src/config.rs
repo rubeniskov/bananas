@@ -12,6 +12,7 @@ pub struct Config {
     pub devices: Devices,
     pub network: Network,
     pub ui: Ui,
+    pub live_socket: LiveSocket,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +117,23 @@ impl Default for Ui {
             theme: "auto".into(),
             spark_window: 60,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LiveSocket {
+    /// Path of the Unix socket bananas-stats binds for live snapshots.
+    /// Subscribers (bananas-server, bananas-dashboard) connect here and
+    /// receive newline-delimited JSON. Default lives under
+    /// `/run/bananas-stats/` (created by systemd's RuntimeDirectory=);
+    /// dev hosts that don't have that dir fall back to /tmp.
+    pub path: PathBuf,
+}
+
+impl Default for LiveSocket {
+    fn default() -> Self {
+        Self { path: crate::live_socket::default_socket_path() }
     }
 }
 
