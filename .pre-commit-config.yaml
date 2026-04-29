@@ -1,0 +1,69 @@
+# Hooks driven by `prek` (https://github.com/j178/prek), a Rust drop-in
+# for `pre-commit` that uses this exact config format. Install it with
+# `cargo install --locked prek` (or `pixi run setup-prek` once the task
+# lands), then `prek install` to wire the hooks into .git/hooks/.
+#
+# Goal of the local hooks: stop a commit when `cargo fmt`, `cargo
+# clippy`, or the unit tests would have failed in CI. CI re-runs the
+# same checks, but catching them at commit time is cheaper than a
+# round-trip through GitHub Actions.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+fail_fast: true
+
+repos:
+  # ── Generic hygiene (file-level) ────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Skip patches & generated files: bitbake patches keep their
+        # exact upstream framing and pixi.lock is binary-merged.
+        exclude: \.patch$|^pixi\.lock$|\.bmap$
+      - id: end-of-file-fixer
+        exclude: \.patch$|^pixi\.lock$|\.bmap$
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+
+  # ── Rust workspace ──────────────────────────────────────────────
+  # `cargo fmt --check` is the cheapest gate; runs on every commit.
+  # Clippy + tests are heavier so we hold them for the pre-push hook
+  # (typed via stages: [pre-push]) — local dev keeps fast iteration.
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        language: system
+        entry: cargo fmt --all -- --check
+        pass_filenames: false
+        types_or: [rust]
+
+      - id: cargo-clippy
+        name: cargo clippy (host crates)
+        language: system
+        # Match the CI invocation in .github/workflows/ci.yml so pre-push
+        # and CI agree on what a clean build looks like.
+        entry: bash -c 'cargo clippy --workspace --exclude bananas-ui --exclude bananas-dashboard'
+        pass_filenames: false
+        stages: [pre-push]
+        types_or: [rust]
+
+      - id: cargo-test
+        name: cargo test (host crates, no-fail-fast)
+        language: system
+        entry: bash -c 'cargo test --workspace --exclude bananas-ui --exclude bananas-dashboard --no-fail-fast'
+        pass_filenames: false
+        stages: [pre-push]
+        types_or: [rust]
+
+      - id: cargo-check-wasm
+        name: cargo check (wasm SPA)
+        language: system
+        entry: bash -c 'cargo check -p bananas-ui --target wasm32-unknown-unknown'
+        pass_filenames: false
+        stages: [pre-push]
+        types_or: [rust]

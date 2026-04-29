@@ -29,23 +29,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-checks:
-    name: Rust — fmt + clippy + test
+  # ─── Pre-commit hooks (prek) ────────────────────────────────────
+  # Mirrors what `prek install` runs locally on pre-commit + pre-push,
+  # so a PR can't slip through with a hook that wasn't installed on
+  # the contributor's machine. `prek run --all-files --hook-stage pre-push`
+  # picks up the heavy stages too (cargo clippy / test / wasm check).
+  prek:
+    name: prek (fmt + lint + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install pixi
-        uses: prefix-dev/setup-pixi@v0.8.1
-        with:
-          pixi-version: v0.66.0
-          cache: true
 
       - name: Install rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown,armv7-unknown-linux-gnueabihf
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry + target
         uses: actions/cache@v4
@@ -58,32 +57,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # crates/ui is wasm-only and excluded from host workspace builds
-      # via the `-p` flags below. We still run formatting + clippy on
-      # it under the wasm target.
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
+      - name: Install prek
+        uses: j178/prek-action@v1
+        # Fall back to cargo-install if the marketplace action ever
+        # disappears — prek's own README documents `cargo install
+        # --locked prek` as the supported install.
+        continue-on-error: true
+        id: install_prek
 
-      # Clippy runs without `-D warnings` for now — the existing codebase
-      # has lints we haven't gone through, and turning them all into hard
-      # errors at CI flip would either spam #[allow]s or block real PRs.
-      # New warnings still get surfaced in the runner output; tighten to
-      # `-D warnings` after a dedicated clippy-cleanup pass.
-      - name: cargo clippy (host crates)
-        run: |
-          cargo clippy --workspace \
-            --exclude bananas-ui \
-            --exclude bananas-dashboard
+      - name: Install prek (fallback)
+        if: steps.install_prek.outcome != 'success'
+        run: cargo install --locked prek
 
-      - name: cargo test (host crates)
-        run: |
-          cargo test --workspace \
-            --exclude bananas-ui \
-            --exclude bananas-dashboard \
-            --no-fail-fast
-
-      - name: cargo check — wasm UI
-        run: cargo check -p bananas-ui --target wasm32-unknown-unknown
+      # `--all-files` runs every hook against every tracked file (CI
+      # doesn't have a "changed since last commit" signal that maps to
+      # prek's git-aware default). The `pre-push` stage adds clippy +
+      # tests + wasm check on top of the always-on pre-commit gates.
+      - name: prek run --all-files --hook-stage pre-push
+        run: prek run --all-files --hook-stage pre-push --show-diff-on-failure
 
   cross-armv7:
     name: Cross-compile armv7 (server + helper + stats)

@@ -76,6 +76,15 @@ cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v dx >/dev/null || carg
 [tasks.setup-cross]
 cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v cross >/dev/null || cargo install cross --locked'"
 
+# `setup-prek`: install prek (https://github.com/j178/prek), a Rust
+# drop-in for pre-commit, into ~/.cargo/bin AND wire its hooks into
+# this repo's .git/hooks via `prek install`. Idempotent — re-running
+# is cheap. Pair this with the `.pre-commit-config.yaml` at the repo
+# root: cargo fmt runs on every commit, clippy + tests + wasm check
+# run on pre-push.
+[tasks.setup-prek]
+cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\"; command -v prek >/dev/null || cargo install --locked prek; prek install --hook-type pre-commit --hook-type pre-push'"
+
 # `setup-rclone-arm`: one-shot download of the upstream rclone armv7
 # binary into serve/bin/rclone. rclone is a Go binary published as a
 # static cross-compiled release at downloads.rclone.org — no Yocto

@@ -11,6 +11,7 @@ For the full **dev environment setup, host packages, the iterate-loop ordering, 
 ```bash
 git clone https://github.com/rubeniskov/bananas.git && cd bananas
 pixi run info                 # confirm pixi env + kas resolve
+pixi run setup-prek           # install prek + wire pre-commit / pre-push hooks
 pixi run build                # full Yocto bake (≈30 min cold cache)
 pixi run iterate              # build → bake → reboot the BPI → re-export rootfs
 ```
@@ -22,6 +23,15 @@ curl -fsSL https://pixi.sh/install.sh | sh
 ```
 
 The detailed setup (host apt packages, Docker context, U-Boot env for netboot, SSH key drop) is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+### Pre-commit hooks (`prek`)
+
+The repo ships a [`.pre-commit-config.yaml`](.pre-commit-config.yaml) consumed by [prek](https://github.com/j178/prek), a Rust drop-in for `pre-commit`. After running `pixi run setup-prek` once:
+
+- **pre-commit** stage runs `cargo fmt --all -- --check` + the standard hygiene hooks (trailing whitespace, EOF newline, YAML / TOML lint, large-file guard). Cheap; runs on every `git commit`.
+- **pre-push** stage adds `cargo clippy --workspace`, `cargo test --workspace`, and `cargo check -p bananas-ui --target wasm32-unknown-unknown`. Slower; runs on `git push`.
+
+CI re-runs the same hooks via `prek run --all-files --hook-stage pre-push`, so anything that's clean locally is clean on the runner. To skip a hook on a one-off basis use `git commit --no-verify` (or `SKIP=cargo-clippy git push` for a single hook), but PRs that fail the CI prek job get rejected before they reach merge.
 
 ---
 
