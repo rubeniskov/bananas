@@ -127,12 +127,29 @@ async fn load(state: &AppState) -> Result<CloudConfig, String> {
             if output.trim().is_empty() {
                 return Ok(CloudConfig::default());
             }
-            toml::from_str(&output).map_err(|e| format!("parsing cloud.toml: {e}"))
+            let mut cfg: CloudConfig =
+                toml::from_str(&output).map_err(|e| format!("parsing cloud.toml: {e}"))?;
+            migrate_provider_keys(&mut cfg);
+            Ok(cfg)
         }
         Ok(HelperResponse { error, .. }) => {
             Err(error.unwrap_or_else(|| "helper rejected ReadServiceConfig".into()))
         }
         Err(e) => Err(format!("helper unreachable: {e}")),
+    }
+}
+
+/// Backward-compat shim for cloud.toml files that predate the
+/// `google_drive` → `drive` provider-key rename. Bundles saved with
+/// the old key still need to load + run after a config restore — and
+/// the helper's rclone allowlist only accepts current names. Rewriting
+/// here means the next save() flushes a normalized cloud.toml without
+/// any extra migration step on the operator's side.
+fn migrate_provider_keys(cfg: &mut CloudConfig) {
+    for account in &mut cfg.accounts {
+        if account.provider == "google_drive" {
+            account.provider = "drive".into();
+        }
     }
 }
 
