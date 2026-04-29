@@ -21,6 +21,7 @@ mod settings;
 mod stats;
 mod stats_config;
 mod storage;
+mod theme;
 mod tooltip;
 mod users;
 
@@ -30,6 +31,10 @@ fn main() {
     console_error_panic_hook::set_once();
     tracing_wasm::set_as_global_default();
     tooltip::init();
+    // Apply persisted theme to <html> before Dioxus mounts so the
+    // first paint already reflects the operator's choice — avoids a
+    // brief light-flash when reloading on a dark-themed setup.
+    theme::apply(theme::load());
     dioxus::launch(App);
 }
 
@@ -179,6 +184,9 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     // behind one menu trigger at the top-right. Closes on backdrop click
     // or after any of the actions fires.
     let mut menu_open = use_signal(|| false);
+    // Active theme — persisted in localStorage. Read once at mount; the
+    // setter below keeps DOM + storage in sync.
+    let mut current_theme = use_signal(theme::load);
 
     let logout = move |_| {
         spawn(async move {
@@ -347,6 +355,37 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                                                     menu_open.set(false);
                                                     load_change(evt);
                                                 },
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: "user-menu-sep" }
+                            div { class: "theme-picker", role: "group", "aria-label": "Theme",
+                                span { class: "theme-picker-label", "Theme" }
+                                {
+                                    let active = current_theme();
+                                    let opts = [theme::Theme::Auto, theme::Theme::Light, theme::Theme::Dark];
+                                    rsx! {
+                                        for t in opts {
+                                            {
+                                                let cls = if active == t {
+                                                    "theme-picker-btn active"
+                                                } else {
+                                                    "theme-picker-btn"
+                                                };
+                                                rsx! {
+                                                    button {
+                                                        class: "{cls}",
+                                                        r#type: "button",
+                                                        "data-tip": "{t.label()}",
+                                                        onclick: move |_| {
+                                                            theme::apply(t);
+                                                            current_theme.set(t);
+                                                        },
+                                                        icons::Icon { name: t.icon() }
+                                                    }
+                                                }
                                             }
                                         }
                                     }

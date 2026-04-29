@@ -1,4 +1,12 @@
-:root {
+/* Theme tokens. Three states tracked by `data-theme` on <html>:
+ *   - absent OR "auto" → follow prefers-color-scheme
+ *   - "light"          → force light, ignore OS
+ *   - "dark"           → force dark, ignore OS
+ * The tokens themselves are color values; component CSS reads them
+ * via var(--*). Adding a token here is a one-line change.
+ */
+:root,
+:root[data-theme="light"] {
   --line: #e0e0e0;
   --bg: #ffffff;
   --bg-soft: #fafafa;
@@ -10,6 +18,36 @@
   --ok: #1a7f37;
   --text: #222;
   --text-soft: #666;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --line: #30363d;
+    --bg: #0d1117;
+    --bg-soft: #161b22;
+    --bg-overlay: rgba(0, 0, 0, 0.65);
+    --accent: #58a6ff;
+    --accent-soft: rgba(56, 139, 253, 0.15);
+    --danger: #f85149;
+    --warn: #d29922;
+    --ok: #3fb950;
+    --text: #e6edf3;
+    --text-soft: #8b949e;
+  }
+}
+
+:root[data-theme="dark"] {
+  --line: #30363d;
+  --bg: #0d1117;
+  --bg-soft: #161b22;
+  --bg-overlay: rgba(0, 0, 0, 0.65);
+  --accent: #58a6ff;
+  --accent-soft: rgba(56, 139, 253, 0.15);
+  --danger: #f85149;
+  --warn: #d29922;
+  --ok: #3fb950;
+  --text: #e6edf3;
+  --text-soft: #8b949e;
 }
 
 * { box-sizing: border-box; }
@@ -39,7 +77,7 @@ nav.app-nav {
 nav.app-nav a { color: var(--accent); text-decoration: none; }
 nav.app-nav a.active { color: var(--text); font-weight: 600; }
 nav.app-nav .app-title { font-size: 18px; margin: 0 1em 0 0; }
-nav.app-nav .nav-soon { color: #aaa; }
+nav.app-nav .nav-soon { color: var(--text-soft); }
 nav.app-nav .spacer { flex: 1; }
 nav.app-nav .nav-user {
   font-family: ui-monospace, monospace;
@@ -139,6 +177,41 @@ nav.app-nav .user-menu-trigger[aria-expanded="true"] .user-menu-chevron {
   background: var(--line);
   margin: 4px 0;
 }
+/* Three-icon theme switcher inline in the user menu (Auto / Light /
+ * Dark). The active state is filled with --accent-soft so it's
+ * obvious which one's currently in effect — including "Auto" when
+ * the operator hasn't picked an explicit override. */
+.theme-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+}
+.theme-picker-label {
+  font-size: 12px;
+  color: var(--text-soft);
+  flex: 1;
+}
+.theme-picker-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+.theme-picker-btn:hover { color: var(--text); border-color: var(--line); }
+.theme-picker-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.theme-picker-btn .lucide { width: 14px; height: 14px; }
 nav.app-nav button.ghost {
   font-size: 13px;
   padding: 4px 10px;
@@ -149,8 +222,8 @@ nav.app-nav button.ghost {
 nav.app-nav label.button-like {
   font: 13px system-ui, sans-serif;
   padding: 4px 10px;
-  border: 1px solid #ccc;
-  background: white;
+  border: 1px solid var(--line);
+  background: var(--bg);
   border-radius: 4px;
   cursor: pointer;
   color: var(--accent);
@@ -210,7 +283,7 @@ nav.app-nav label.button-like:hover {
 }
 .login-form label {
   font-size: 12px;
-  color: #555;
+  color: var(--text-soft);
   text-transform: uppercase;
   letter-spacing: .04em;
   margin-top: .8em;
@@ -219,7 +292,7 @@ nav.app-nav label.button-like:hover {
 .login-form input[type=password] {
   font: 14px ui-monospace, monospace;
   padding: 8px 10px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 .login-form input[type=text]:focus,
@@ -337,7 +410,7 @@ nav.app-nav label.button-like:hover {
 }
 .disk-card table.rows { margin: 0; }
 .disk-card table.rows th { background: var(--bg-soft); }
-.disk-card .muted { color: #aaa; font-style: italic; }
+.disk-card .muted { color: var(--text-soft); font-style: italic; }
 
 .usage {
   display: flex;
@@ -347,7 +420,7 @@ nav.app-nav label.button-like:hover {
 }
 .usage-bar {
   height: 8px;
-  background: #eee;
+  background: var(--bg-soft);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -404,7 +477,7 @@ nav.app-nav label.button-like:hover {
 .tile-temp.danger { color: var(--danger); }
 .gauge-bar {
   height: 8px;
-  background: #eee;
+  background: var(--bg-soft);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -536,7 +609,7 @@ nav.app-nav label.button-like:hover {
 }
 .spark-empty {
   font: 12px system-ui, sans-serif;
-  color: #aaa;
+  color: var(--text-soft);
   font-style: italic;
   text-align: center;
   padding: 1em 0;
@@ -592,7 +665,9 @@ td.row-actions button.ghost {
 .modal-body.form-modal-body input[type=number] {
   font: 14px ui-monospace, monospace;
   padding: 6px 8px;
-  border: 1px solid #ccc;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 .modal-body.form-modal-body input.path-display {
@@ -676,7 +751,7 @@ nav.app-nav a .lucide { margin-right: 6px; vertical-align: -3px; }
 }
 .user-modal .user-form label {
   font-size: 12px;
-  color: #555;
+  color: var(--text-soft);
   text-transform: uppercase;
   letter-spacing: .04em;
   margin-top: .8em;
@@ -684,7 +759,7 @@ nav.app-nav a .lucide { margin-right: 6px; vertical-align: -3px; }
 .user-modal .user-form input {
   font: 14px ui-monospace, monospace;
   padding: 8px 10px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 .user-modal .user-form input:focus {
@@ -695,7 +770,7 @@ nav.app-nav a .lucide { margin-right: 6px; vertical-align: -3px; }
 .user-modal .preview-label {
   margin: 0;
   font-size: 11px;
-  color: #999;
+  color: var(--text-soft);
 }
 
 table {
@@ -711,7 +786,7 @@ th, td {
 }
 th {
   font-weight: 600;
-  color: #555;
+  color: var(--text-soft);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: .04em;
@@ -720,13 +795,13 @@ table.rows tr:hover { background: var(--bg-soft); }
 
 code {
   font: 13px/1 ui-monospace, "SF Mono", Menlo, monospace;
-  background: #f4f4f4;
+  background: var(--bg-soft);
   padding: 1px 5px;
   border-radius: 3px;
 }
 
 .empty {
-  color: #888;
+  color: var(--text-soft);
   padding: 1em;
   text-align: center;
   border: 1px dashed var(--line);
@@ -746,7 +821,7 @@ code {
 .badge.warn { background: #ffe; color: var(--warn); }
 .badge.sys {
   background: #f0f0f4;
-  color: #555;
+  color: var(--text-soft);
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -760,20 +835,20 @@ td.source-cell {
   justify-content: space-between;
   gap: 8px;
 }
-tr.row-protected td { color: #666; background: #fafafc; }
+tr.row-protected td { color: var(--text-soft); background: var(--bg-soft); }
 tr.row-protected td code { color: #444; }
 .protected-hint {
   display: inline-flex;
   align-items: center;
-  color: #999;
+  color: var(--text-soft);
   padding: 7px 8px;
 }
 
 button {
   font: 14px system-ui, sans-serif;
   padding: 7px 14px;
-  border: 1px solid #ccc;
-  background: white;
+  border: 1px solid var(--line);
+  background: var(--bg);
   border-radius: 4px;
   cursor: pointer;
 }
@@ -813,7 +888,9 @@ form.add input[type=text],
 form.add input[type=number] {
   font: 14px ui-monospace, monospace;
   padding: 6px 8px;
-  border: 1px solid #ccc;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 form.add input[type=number] { width: 100px; }
@@ -826,7 +903,7 @@ form.add input.path-display {
 }
 form.add input.path-display:hover { border-color: var(--accent); }
 form.add input.path-display:placeholder-shown {
-  color: #aaa;
+  color: var(--text-soft);
   font-style: italic;
 }
 /* Live pattern-failure hint for the client field. Restrict to touched
@@ -842,7 +919,7 @@ fieldset {
   padding: .8em 1em;
   margin: 0;
 }
-legend { font-size: 12px; color: #555; padding: 0 .4em; }
+legend { font-size: 12px; color: var(--text-soft); padding: 0 .4em; }
 fieldset .opts {
   display: flex;
   flex-wrap: wrap;
@@ -931,9 +1008,9 @@ fieldset label {
 select {
   font: 14px ui-monospace, monospace;
   padding: 6px 28px 6px 8px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background-color: white;
+  background-color: var(--bg);
   color: var(--text);
   appearance: none;
   -webkit-appearance: none;
@@ -945,7 +1022,7 @@ select {
   min-height: 30px;
 }
 select:hover {
-  border-color: #999;
+  border-color: var(--text-soft);
 }
 select:focus {
   outline: none;
@@ -963,8 +1040,8 @@ textarea {
   min-height: 120px;
   font: 13px/1.4 ui-monospace, monospace;
   padding: 8px;
-  background: #f9f9f9;
-  color: #444;
+  background: var(--bg-soft);
+  color: var(--text);
   border: 1px solid var(--line);
   border-radius: 4px;
   /* Block horizontal resize — the previews are width-tied to the page
@@ -1179,7 +1256,7 @@ button.mp-chip:hover { filter: brightness(1.05); }
   border-radius: 3px;
 }
 .breadcrumb a:hover { background: var(--accent-soft); }
-.breadcrumb .sep { color: #aaa; padding: 0 2px; }
+.breadcrumb .sep { color: var(--text-soft); padding: 0 2px; }
 
 .entries { list-style: none; margin: 0; padding: 0; }
 .entries li {
