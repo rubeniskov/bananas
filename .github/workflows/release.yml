@@ -153,12 +153,17 @@ jobs:
           tar -C serve/bin -czf dist/bananas-dashboard-armv7.tar.gz bananas-dashboard
           cp serve/bin/bananas-ui.tar.gz dist/bananas-ui.tar.gz
           # Wrap the .wic in tar.gz so every release asset uses the same
-          # compression format. dd workflow on the receiving side:
+          # compression format. Yocto's stable symlink is *.rootfs.wic;
+          # `-h` dereferences it so the tarball gets the actual data, and
+          # `--transform` strips the `.rootfs` infix so the extracted file
+          # has a clean dd-friendly name. Operator workflow on the
+          # receiving side:
           #   tar -xzf bananas-image-armv7.tar.gz
           #   sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
-          tar -C build/tmp/deploy/images/bananapro \
-              -czf dist/bananas-image-armv7.tar.gz \
-              bananas-image-bananapro.wic
+          tar -czhf dist/bananas-image-armv7.tar.gz \
+              --transform 's,^bananas-image-bananapro.rootfs.wic$,bananas-image-bananapro.wic,' \
+              -C build/tmp/deploy/images/bananapro \
+              bananas-image-bananapro.rootfs.wic
           ls -la dist/
 
       # ─── Run semantic-release ─────────────────────────────────────
