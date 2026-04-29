@@ -46,7 +46,7 @@ RDEPENDS:${PN} += " \
     libudev \
     libxkbcommon \
     libinput \
-    libdrm2 \
+    libdrm \
     libgbm \
     mesa-megadriver \
     kernel-module-lima \
