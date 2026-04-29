@@ -14,10 +14,11 @@
 #   - bananas-ui-vX.Y.Z.tar.gz                 (wasm SPA)
 #   - bananas-dashboard-vX.Y.Z-armv7.tar.gz    (Slint LCD app)
 #
-# Yocto rootfs tarballs are NOT shipped from CI — they're large
-# (~150 MB) and the bake takes too long for a hosted runner. Operators
-# rebuild locally with `pixi run build` after pulling the released
-# binaries (or pin the Cargo.lock + recipe versions and bake once).
+# The Yocto bake also runs here so every release ships an SD-card image
+# the operator can `dd` onto a card without touching pixi/kas. Hosted
+# ubuntu-latest only gives ~14 GB free out of the box, so we reclaim
+# ~25 GB via easimon/maximize-build-space and cache build/sstate-cache
+# + build/downloads between runs to bring a warm bake in around 10 min.
 
 name: Release
 
@@ -45,6 +46,23 @@ jobs:
     # bumping by semantic-release itself (the bot trailer marks them).
     if: "!contains(github.event.head_commit.message, 'chore(release):')"
     steps:
+      # Yocto needs ≈20 GB working space for build/{tmp,sstate-cache,downloads}.
+      # Default ubuntu-latest has ~14 GB free; this action reclaims ~25 GB by
+      # purging the unused .NET / Android / Haskell SDKs, GHC, and large host
+      # caches BEFORE checkout. Must run before any other step that writes to
+      # the workspace.
+      - name: Free disk space for the Yocto bake
+        uses: easimon/maximize-build-space@v10
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          root-reserve-mb: 4096
+          temp-reserve-mb: 1024
+          build-mount-path: ${{ github.workspace }}
+
       - uses: actions/checkout@v4
         with:
           # semantic-release walks tags + history to compute the next
@@ -53,6 +71,12 @@ jobs:
           # Use a separate token if you want signed tags / PR comments —
           # the default GITHUB_TOKEN works for normal releases.
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install host packages required by bitbake
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            chrpath cpio diffstat file rpcsvc-proto zstd
 
       - name: Install pixi
         uses: prefix-dev/setup-pixi@v0.8.1
@@ -90,6 +114,35 @@ jobs:
       - name: build-dashboard-arm
         run: pixi run build-dashboard-arm
 
+      # ─── Yocto bake → SD card image ───────────────────────────────
+      # Cache the two big Yocto caches between runs. Cold bake takes ~30 min;
+      # a warm cache (sstate hits) typically drops it to ~10 min. The cache
+      # key is keyed on the layer + recipe + machine config so any patch /
+      # version bump invalidates it cleanly.
+      - name: Cache Yocto sstate + downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/sstate-cache
+            build/downloads
+          key: ${{ runner.os }}-yocto-${{ hashFiles('kas.yml', 'layers/**/*.bb', 'layers/**/*.bbappend', 'layers/**/*.conf', 'layers/**/*.inc', 'layers/**/files/**') }}
+          restore-keys: |
+            ${{ runner.os }}-yocto-
+
+      # bbfatal in `bananas-image.bb` requires both env vars at build
+      # time. They're embedded in /etc/exports + /etc/shadow respectively.
+      # ROOT_PASSWORD_HASH is a fixed placeholder hash; the image's
+      # `expire_root_password` postprocess sets shadow's lastchg=0 so the
+      # operator is forced to rotate it on first sign-in (PAM enforces it
+      # on console + the web UI's "set new password" form catches it
+      # before granting a session). NFS_EXPORT_NETWORK defaults to a
+      # broad home-LAN range; tighten via the Exports tab post-boot.
+      - name: Bake Yocto image
+        env:
+          ROOT_PASSWORD_HASH: '$6$bananas$bananas'
+          NFS_EXPORT_NETWORK: '192.168.0.0/16'
+        run: pixi run build
+
       # ─── Stage tarballs for semantic-release to upload ────────────
       - name: Pack artifacts
         run: |
@@ -99,6 +152,13 @@ jobs:
           tar -C serve/bin -czf dist/bananas-stats-armv7.tar.gz bananas-stats
           tar -C serve/bin -czf dist/bananas-dashboard-armv7.tar.gz bananas-dashboard
           cp serve/bin/bananas-ui.tar.gz dist/bananas-ui.tar.gz
+          # Wrap the .wic in tar.gz so every release asset uses the same
+          # compression format. dd workflow on the receiving side:
+          #   tar -xzf bananas-image-armv7.tar.gz
+          #   sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
+          tar -C build/tmp/deploy/images/bananapro \
+              -czf dist/bananas-image-armv7.tar.gz \
+              bananas-image-bananapro.wic
           ls -la dist/
 
       # ─── Run semantic-release ─────────────────────────────────────

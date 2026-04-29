@@ -92,9 +92,12 @@ ARCHIVE=rclone-${RCLONE_VERSION}-linux-arm.zip
 URL=https://downloads.rclone.org/${RCLONE_VERSION}/${ARCHIVE}
 DEST=serve/bin
 if [ -x "$DEST/rclone" ]; then
-  # Re-check version so a pinned-version bump triggers a re-download.
-  CURRENT=$("$DEST/rclone" version 2>/dev/null | head -1 | awk "{print \\$2}")
-  if [ "$CURRENT" = "$RCLONE_VERSION" ]; then exit 0; fi
+  # Marker file pinned by the last successful install. We can not run
+  # `rclone version` here because the binary is armv7 and we are an
+  # x86_64 host; without qemu it just exec-faults silently.
+  if [ -f "$DEST/.rclone-version" ] && [ "$(cat "$DEST/.rclone-version")" = "$RCLONE_VERSION" ]; then
+    exit 0
+  fi
 fi
 mkdir -p "$DEST"
 TMP=$(mktemp -d)
@@ -108,8 +111,12 @@ if [ "$GOT_SHA" != "$EXPECTED_SHA" ]; then
   echo "  got:      $GOT_SHA" >&2
   exit 1
 fi
-unzip -j "$TMP/$ARCHIVE" "*/rclone" -d "$DEST"
+# -o overwrites any pre-existing rclone in serve/bin/ without prompting;
+# the iterate loop runs in non-interactive mode where the unzip prompt
+# just hangs / EOFs and aborts the task.
+unzip -o -j "$TMP/$ARCHIVE" "*/rclone" -d "$DEST"
 chmod +x "$DEST/rclone"
+printf "%s" "$RCLONE_VERSION" > "$DEST/.rclone-version"
 echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
 '"""
 

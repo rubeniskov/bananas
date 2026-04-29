@@ -77,6 +77,13 @@ local_conf_header:
     DL_DIR ?= "${TOPDIR}/downloads"
     SSTATE_DIR ?= "${TOPDIR}/sstate-cache"
 
+    # Output an SD-card-flashable wic image alongside the rootfs tarball.
+    # The release pipeline tars the .wic into bananas-image-armv7.tar.gz
+    # so operators get one consistent .tar.gz format across every release
+    # asset; the rootfs tar.gz itself stays around for the iterate loop's
+    # NFS netboot path.
+    IMAGE_FSTYPES = "wic tar.gz"
+
     # Serial console (common on sunxi boards)
     SERIAL_CONSOLES = "115200;ttyS0"
 
