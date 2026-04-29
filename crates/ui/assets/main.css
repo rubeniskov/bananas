@@ -374,11 +374,27 @@ nav.app-nav label.button-like:hover {
 .spark-head-right {
   flex-shrink: 0;
 }
+/* Left band of a sparkline card head: device name on top, optional
+ * model under it. Matches the .disk-card head's stacked layout. */
+.spark-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 .spark-name {
   font: 13px ui-monospace, monospace;
   background: var(--bg-soft);
   padding: 2px 6px;
   border-radius: 3px;
+  align-self: flex-start;
+}
+.spark-model {
+  font: 11px system-ui, sans-serif;
+  color: var(--text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .spark-smart,
 .spark-temp {

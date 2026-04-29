@@ -140,7 +140,11 @@ pub fn StatsPage() -> Element {
             }
             LiveTiles { snap: s.clone() }
             NetworkSparklines { ifaces: series.read().interfaces.clone(), snap: s.clone() }
-            DiskSparklines { disks: series.read().disks.clone(), snap: s }
+            DiskSparklines {
+                disks: series.read().disks.clone(),
+                snap: s,
+                storage: storage(),
+            }
         } else {
             p { class: "preview-label", "Loading live stats…" }
         }
@@ -376,6 +380,7 @@ fn NetSparkSvg(props: NetSparkSvgProps) -> Element {
 struct DiskSparklinesProps {
     disks: Vec<String>,
     snap: api::StatsSnapshot,
+    storage: Option<api::StorageReport>,
 }
 
 #[component]
@@ -391,6 +396,10 @@ fn DiskSparklines(props: DiskSparklinesProps) -> Element {
                     key: "{dev}",
                     device: dev.clone(),
                     current: props.snap.disks.iter().find(|d| &d.device == dev).cloned(),
+                    model: props.storage.as_ref()
+                        .and_then(|r| r.disks.iter()
+                            .find(|d| &d.kname == dev || &d.name == dev)
+                            .and_then(|d| d.model.clone())),
                 }
             }
         }
@@ -401,6 +410,11 @@ fn DiskSparklines(props: DiskSparklinesProps) -> Element {
 struct DiskSparkCardProps {
     device: String,
     current: Option<api::DiskIo>,
+    /// Plucked from /api/storage on the Stats page so the sparkline
+    /// header gets the human-readable model under the kernel name —
+    /// matches the "Disks" card layout (`/dev/sda` on top, model
+    /// stacked below).
+    model: Option<String>,
 }
 
 #[component]
@@ -422,7 +436,12 @@ fn DiskSparkCard(props: DiskSparkCardProps) -> Element {
     rsx! {
         div { class: "spark-card",
             div { class: "spark-head",
-                code { class: "spark-name", "/dev/{props.device}" }
+                div { class: "spark-id",
+                    code { class: "spark-name", "/dev/{props.device}" }
+                    if let Some(m) = props.model.as_ref() {
+                        span { class: "spark-model", "{m}" }
+                    }
+                }
                 div { class: "spark-now",
                     span { class: "spark-rx", "R {format_rate(r)}" }
                     span { class: "spark-tx", "W {format_rate(w)}" }
