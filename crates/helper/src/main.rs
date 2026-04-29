@@ -350,6 +350,13 @@ async fn ensure_nfs_server_running() -> String {
     if already_active {
         return "nfs-server.service: active".to_string();
     }
+    // Clear any stuck `failed` state (StartLimitBurst etc.) before we
+    // try to start. Best-effort — if the unit is already inactive
+    // rather than failed, this is a harmless no-op.
+    let _ = TokioCommand::new("systemctl")
+        .args(["reset-failed", "nfs-server.service"])
+        .output()
+        .await;
     let out = TokioCommand::new("systemctl")
         .args(["start", "nfs-server.service"])
         .stdout(Stdio::piped())
@@ -1134,6 +1141,13 @@ fn is_valid_block_device(device: &str) -> bool {
 
 async fn write_fstab(content: &str) -> Result<String> {
     validate_fstab(content)?;
+    // Each user-managed fstab row needs its mountpoint to exist on disk,
+    // otherwise systemd-fstab-generator's auto-mount unit fails on the
+    // next boot. Same family of issue the export path had — mkdir the
+    // user-managed mountpoints up front so a saved row "just works"
+    // after a reboot or `mount -a`.
+    let mkdir_log = ensure_fstab_mountpoints(content).await;
+
     let path = Path::new("/etc/fstab");
     let dir = path.parent().unwrap_or_else(|| Path::new("/"));
     let tmp = dir.join(".fstab.tmp");
@@ -1150,11 +1164,71 @@ async fn write_fstab(content: &str) -> Result<String> {
     let reload = systemd_daemon_reload()
         .await
         .unwrap_or_else(|e| format!("(daemon-reload failed: {e})"));
+
+    // `mount -a` brings up any newly-added entry without needing a
+    // reboot. -O no_netdev skips entries flagged as needing the network
+    // (we don't ship any by default but operators might add NFS rows).
+    let mount_log = match TokioCommand::new("mount")
+        .args(["-a", "-O", "no_netdev"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => "mount -a: ok".to_string(),
+        Ok(o) => format!(
+            "mount -a: rc={} {}{}",
+            o.status,
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        ),
+        Err(e) => format!("mount -a: spawn error: {e}"),
+    };
+
     Ok(format!(
-        "wrote /etc/fstab ({} bytes)\n{}",
+        "wrote /etc/fstab ({} bytes)\n{}{}\n{}",
         content.len(),
-        reload
+        mkdir_log,
+        reload,
+        mount_log,
     ))
+}
+
+/// Walk the fstab content's mountpoint column (field #2) and create
+/// any directory that doesn't exist yet. Skip the OE stock mountpoints
+/// (`/`, `/proc`, `/dev/pts`, `/run`, `/var/volatile`) — they're created
+/// by base-files and trying to mkdir on them is a no-op anyway.
+async fn ensure_fstab_mountpoints(content: &str) -> String {
+    let mut created: Vec<String> = Vec::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        let mountpoint = fields[1];
+        if !mountpoint.starts_with('/') {
+            continue;
+        }
+        let p = Path::new(mountpoint);
+        if p.is_dir() {
+            continue;
+        }
+        match fs::create_dir_all(p).await {
+            Ok(()) => created.push(mountpoint.to_string()),
+            Err(e) => {
+                return format!("mkdir -p {mountpoint} failed: {e}\n");
+            }
+        }
+    }
+    if created.is_empty() {
+        String::new()
+    } else {
+        format!("created mountpoints: {}\n", created.join(" "))
+    }
 }
 
 /// Reject obviously malformed fstab content. Each non-blank, non-comment
