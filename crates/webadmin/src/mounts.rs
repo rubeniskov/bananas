@@ -388,6 +388,35 @@ fn format_source(kind: SourceKind, value: &str) -> String {
     }
 }
 
+/// Look up the filesystem type the kernel detected on the selected
+/// source. Lets the form auto-fill the Type field when the operator
+/// picks a known label/uuid/path. None when no partition matches —
+/// e.g. SourceKind::Other with arbitrary text — so the caller can
+/// preserve whatever the user already had.
+fn lookup_fstype_for_source(
+    report: &api::StorageReport,
+    kind: SourceKind,
+    value: &str,
+) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+    for disk in &report.disks {
+        for part in &disk.partitions {
+            let matches = match kind {
+                SourceKind::Label => part.label.as_deref() == Some(value),
+                SourceKind::Uuid => part.uuid.as_deref() == Some(value),
+                SourceKind::Path => format!("/dev/{}", part.kname) == value,
+                SourceKind::Other => false,
+            };
+            if matches {
+                return part.fstype.clone().filter(|s| !s.is_empty());
+            }
+        }
+    }
+    None
+}
+
 /// Flat option list derived from /api/storage for the active source kind.
 /// Each entry is (value-to-emit, label-to-display).
 fn source_options(report: &api::StorageReport, kind: SourceKind) -> Vec<(String, String)> {
@@ -674,7 +703,22 @@ fn FstabFormModal(props: FstabFormModalProps) -> Element {
                                                 select {
                                                     value: "{source_choice()}",
                                                     required: true,
-                                                    onchange: move |e| source_choice.set(e.value()),
+                                                    onchange: move |e| {
+                                                        let val = e.value();
+                                                        source_choice.set(val.clone());
+                                                        // Auto-fill the Type field with whatever
+                                                        // kernel-detected fstype the picked source
+                                                        // actually has. The operator can still
+                                                        // override before saving.
+                                                        if let Some(Ok(rep)) = storage
+                                                            .read_unchecked()
+                                                            .as_ref()
+                                                        {
+                                                            if let Some(detected) = lookup_fstype_for_source(rep, kind, &val) {
+                                                                fstype.set(detected);
+                                                            }
+                                                        }
+                                                    },
                                                     option { value: "", disabled: true, selected: source_choice().is_empty(),
                                                         "{kind.placeholder()}" }
                                                     for (val, lbl) in opts.iter() {
