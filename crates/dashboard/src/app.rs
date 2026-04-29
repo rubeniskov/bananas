@@ -236,6 +236,31 @@ fn apply_snapshot(
         .collect();
     w.set_partitions(ModelRc::new(VecModel::from(parts)));
 
+    let temps: Vec<TempUi> = snap
+        .temps
+        .iter()
+        .map(|t| {
+            let kind: &'static str = if t.celsius >= 75.0 { "danger" }
+                else if t.celsius >= 60.0 { "warn" }
+                else { "ok" };
+            // Friendly label: collapse `cpu_thermal` / `cpu0-thermal`
+            // / similar to "CPU"; everything else (block devices) keeps
+            // its raw sensor name.
+            let label = if t.sensor.contains("cpu") || t.sensor.contains("thermal") {
+                "CPU".to_string()
+            } else {
+                t.sensor.to_uppercase()
+            };
+            TempUi {
+                label: SharedString::from(label),
+                sensor: SharedString::from(t.sensor.clone()),
+                value: SharedString::from(format!("{:.1}", t.celsius)),
+                kind: SharedString::from(kind),
+            }
+        })
+        .collect();
+    w.set_temps(ModelRc::new(VecModel::from(temps)));
+
     w.set_net_rx_spark(spark_model(net_rx_norm));
     w.set_net_tx_spark(spark_model(net_tx_norm));
     w.set_disk_read_spark(spark_model(disk_r_norm));

@@ -21,6 +21,12 @@ pub struct DiskSeriesPoint {
     pub util_pct: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TempSeriesPoint {
+    pub ts: i64,
+    pub celsius: f32,
+}
+
 /// Return all rows in [from, to) for the given iface. Caller chooses table
 /// (raw vs _1m) to control resolution.
 pub fn net_range(
@@ -74,13 +80,40 @@ pub fn disk_range(
     })
 }
 
-/// Return the distinct iface names + disk device names that have ever
-/// been recorded. Used by the web admin's /api/stats/series so the UI
-/// knows what charts to render without hard-coding device names.
+pub fn temp_range(
+    db: &Database,
+    sensor: &str,
+    from: i64,
+    to: i64,
+    table: &str,
+) -> Result<Vec<TempSeriesPoint>> {
+    let sql = format!(
+        "SELECT ts, celsius FROM {table} WHERE sensor = ?1 AND ts >= ?2 AND ts < ?3 ORDER BY ts"
+    );
+    db.with(|c| {
+        let mut stmt = c.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params![sensor, from, to], |r| {
+                Ok(TempSeriesPoint {
+                    ts: r.get(0)?,
+                    celsius: r.get::<_, f64>(1)? as f32,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })
+}
+
+/// Return the distinct iface names + disk device names + temperature
+/// sensors that have ever been recorded. Used by the web admin's
+/// /api/stats/series so the UI knows what charts to render without
+/// hard-coding device names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeriesKeys {
     pub interfaces: Vec<String>,
     pub disks: Vec<String>,
+    #[serde(default)]
+    pub temps: Vec<String>,
 }
 
 pub fn series_keys(db: &Database) -> Result<SeriesKeys> {
@@ -97,7 +130,13 @@ pub fn series_keys(db: &Database) -> Result<SeriesKeys> {
             stmt.query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        Ok(SeriesKeys { interfaces, disks })
+        let temps = {
+            let mut stmt =
+                c.prepare("SELECT DISTINCT sensor FROM temp_samples ORDER BY sensor")?;
+            stmt.query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Ok(SeriesKeys { interfaces, disks, temps })
     })
 }
 
@@ -191,6 +230,20 @@ pub fn latest_snapshot(db: &Database) -> Result<Snapshot> {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
         };
+        let temps: Vec<crate::metrics::temp::TempReading> = {
+            let mut stmt = c.prepare(
+                "SELECT sensor, celsius FROM temp_samples \
+                 WHERE ts = (SELECT MAX(ts) FROM temp_samples WHERE sensor = temp_samples.sensor) \
+                 GROUP BY sensor ORDER BY sensor",
+            )?;
+            stmt.query_map([], |r| {
+                Ok(crate::metrics::temp::TempReading {
+                    sensor: r.get(0)?,
+                    celsius: r.get::<_, f64>(1)? as f32,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
         // Use the freshest ts across all tables.
         let ts_unix: i64 = c
@@ -200,7 +253,8 @@ pub fn latest_snapshot(db: &Database) -> Result<Snapshot> {
                     SELECT MAX(ts) FROM mem_samples UNION ALL
                     SELECT MAX(ts) FROM net_samples UNION ALL
                     SELECT MAX(ts) FROM disk_samples UNION ALL
-                    SELECT MAX(ts) FROM part_samples
+                    SELECT MAX(ts) FROM part_samples UNION ALL
+                    SELECT MAX(ts) FROM temp_samples
                 )",
                 [],
                 |r| r.get::<_, Option<i64>>(0),
@@ -209,7 +263,7 @@ pub fn latest_snapshot(db: &Database) -> Result<Snapshot> {
             .flatten()
             .unwrap_or(0);
 
-        Ok(Snapshot { ts_unix, cpu, mem, network, disks, parts })
+        Ok(Snapshot { ts_unix, cpu, mem, network, disks, parts, temps })
     })
 }
 

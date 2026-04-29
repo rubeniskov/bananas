@@ -10,6 +10,7 @@ pub mod disk;
 pub mod mem;
 pub mod net;
 pub mod partitions;
+pub mod temp;
 
 use crate::config::{Devices, Network, Sampling};
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,12 @@ pub struct Snapshot {
     pub network: Vec<net::NetIface>,
     pub disks: Vec<disk::DiskIo>,
     pub parts: Vec<partitions::Partition>,
+    /// CPU thermal-zone + drivetemp readings. Empty if neither
+    /// `/sys/class/thermal` nor `/sys/block/*/device/hwmon` produces
+    /// useful readings. Always serialized — clients can detect
+    /// "no temps available" by an empty array.
+    #[serde(default)]
+    pub temps: Vec<temp::TempReading>,
 }
 
 pub struct Sampler {
@@ -120,7 +127,17 @@ impl Sampler {
                 mem::MemStats::default()
             });
 
-            let snap = Snapshot { ts_unix, cpu: cpu_stats, mem: mem_stats, network, disks, parts };
+            let temps = temp::sample();
+
+            let snap = Snapshot {
+                ts_unix,
+                cpu: cpu_stats,
+                mem: mem_stats,
+                network,
+                disks,
+                parts,
+                temps,
+            };
             let _ = self.tx.send(snap);
         }
     }

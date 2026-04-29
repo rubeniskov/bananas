@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS mem_samples (
     free        INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+-- Temperature readings, one row per (ts, sensor). Sensor names are the
+-- thermal_zone "type" string for CPU readings ("cpu_thermal", etc.) or
+-- the block-device name for drivetemp readings ("sda", "nvme0n1", …).
+CREATE TABLE IF NOT EXISTS temp_samples (
+    ts        INTEGER NOT NULL,
+    sensor    TEXT    NOT NULL,
+    celsius   REAL    NOT NULL,
+    PRIMARY KEY (ts, sensor)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_temp_ts ON temp_samples(ts);
+
 -- 1-minute aggregates (default 30 d retention). Same shape; the writer
 -- downsamples on the retention pass.
 
@@ -83,4 +94,11 @@ CREATE TABLE IF NOT EXISTS part_samples_1m (
     used      INTEGER NOT NULL,
     total     INTEGER NOT NULL,
     PRIMARY KEY (ts, mount)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS temp_samples_1m (
+    ts        INTEGER NOT NULL,
+    sensor    TEXT    NOT NULL,
+    celsius   REAL    NOT NULL,
+    PRIMARY KEY (ts, sensor)
 ) WITHOUT ROWID;

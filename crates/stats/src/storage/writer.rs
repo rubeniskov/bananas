@@ -100,6 +100,9 @@ fn insert_batch(conn: &mut rusqlite::Connection, snaps: &[Snapshot]) -> Result<(
         let mut mem_stmt = tx.prepare_cached(
             "INSERT OR REPLACE INTO mem_samples (ts, total, used, available, free) VALUES (?,?,?,?,?)",
         )?;
+        let mut temp_stmt = tx.prepare_cached(
+            "INSERT OR REPLACE INTO temp_samples (ts, sensor, celsius) VALUES (?,?,?)",
+        )?;
         for s in snaps {
             for n in &s.network {
                 net_stmt.execute(params![s.ts_unix, n.name, n.rx_bps as i64, n.tx_bps as i64])?;
@@ -132,6 +135,9 @@ fn insert_batch(conn: &mut rusqlite::Connection, snaps: &[Snapshot]) -> Result<(
                 s.mem.available as i64,
                 s.mem.free as i64,
             ])?;
+            for t in &s.temps {
+                temp_stmt.execute(params![s.ts_unix, t.sensor, t.celsius as f64])?;
+            }
         }
     }
     tx.commit()?;
@@ -172,14 +178,20 @@ fn run_retention(conn: &mut rusqlite::Connection, cfg: &StorageCfg) -> Result<()
         SELECT (ts/60)*60, mount, device,
                CAST(AVG(used) AS INTEGER), CAST(AVG(total) AS INTEGER)
         FROM part_samples GROUP BY (ts/60)*60, mount, device;
+
+        INSERT OR REPLACE INTO temp_samples_1m (ts, sensor, celsius)
+        SELECT (ts/60)*60, sensor, AVG(celsius)
+        FROM temp_samples GROUP BY (ts/60)*60, sensor;
         ",
     )?;
     tx.execute("DELETE FROM net_samples  WHERE ts < ?1", params![raw_cutoff])?;
     tx.execute("DELETE FROM disk_samples WHERE ts < ?1", params![raw_cutoff])?;
     tx.execute("DELETE FROM part_samples WHERE ts < ?1", params![raw_cutoff])?;
+    tx.execute("DELETE FROM temp_samples WHERE ts < ?1", params![raw_cutoff])?;
     tx.execute("DELETE FROM net_samples_1m  WHERE ts < ?1", params![agg_cutoff])?;
     tx.execute("DELETE FROM disk_samples_1m WHERE ts < ?1", params![agg_cutoff])?;
     tx.execute("DELETE FROM part_samples_1m WHERE ts < ?1", params![agg_cutoff])?;
+    tx.execute("DELETE FROM temp_samples_1m WHERE ts < ?1", params![agg_cutoff])?;
     tx.commit()?;
 
     conn.execute("PRAGMA incremental_vacuum", [])?;
@@ -260,6 +272,7 @@ mod tests {
                 mount: "/mnt/data".into(), fs: "ext4".into(),
                 total: 1_000_000, used: 250_000, free: 750_000,
             }],
+            temps: vec![],
         }
     }
 

@@ -60,8 +60,8 @@ pub async fn snapshot(State(state): State<AppState>) -> Response {
 
 #[derive(Debug, Deserialize)]
 pub struct RangeParams {
-    pub metric: String,        // "net" | "disk"
-    pub key: String,           // iface name or device name
+    pub metric: String,        // "net" | "disk" | "temp"
+    pub key: String,           // iface name, device name, or sensor name
     #[serde(default = "default_window")]
     pub window: String,        // "5m" | "1h" | "24h" — parsed in seconds
     #[serde(default = "default_resolution")]
@@ -84,6 +84,8 @@ pub async fn range(
         ("net", "1m") => "net_samples_1m",
         ("disk", "raw") => "disk_samples",
         ("disk", "1m") => "disk_samples_1m",
+        ("temp", "raw") => "temp_samples",
+        ("temp", "1m") => "temp_samples_1m",
         _ => return err_400(format!(
             "unknown metric/resolution combination: metric={:?} resolution={:?}",
             p.metric, p.resolution
@@ -105,6 +107,10 @@ pub async fn range(
                 let rows = queries::disk_range(&db, &key, from, now, &table_owned)?;
                 Ok(json!({ "points": rows }))
             }
+            "temp" => {
+                let rows = queries::temp_range(&db, &key, from, now, &table_owned)?;
+                Ok(json!({ "points": rows }))
+            }
             _ => unreachable!(),
         }
     })
@@ -118,7 +124,7 @@ pub async fn range(
 
 pub async fn series(State(state): State<AppState>) -> Response {
     let Some(db) = state.stats.db.as_ref() else {
-        return Json(json!({ "interfaces": [], "disks": [] })).into_response();
+        return Json(json!({ "interfaces": [], "disks": [], "temps": [] })).into_response();
     };
     let db = db.clone();
     match tokio::task::spawn_blocking(move || queries::series_keys(&db)).await {
@@ -136,6 +142,7 @@ fn empty_snapshot() -> Response {
         "network": [],
         "disks": [],
         "parts": [],
+        "temps": [],
         "stats_db_present": false,
     }))
     .into_response()

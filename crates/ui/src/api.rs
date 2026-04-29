@@ -451,7 +451,16 @@ pub struct StatsSnapshot {
     #[serde(default)]
     pub parts: Vec<PartitionStat>,
     #[serde(default)]
+    pub temps: Vec<TempReading>,
+    #[serde(default)]
     pub stats_db_present: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TempReading {
+    /// Sensor name — `cpu_thermal`, `sda`, `nvme0n1`, …
+    pub sensor: String,
+    pub celsius: f32,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
@@ -510,6 +519,8 @@ pub struct SeriesKeys {
     pub interfaces: Vec<String>,
     #[serde(default)]
     pub disks: Vec<String>,
+    #[serde(default)]
+    pub temps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -526,6 +537,12 @@ pub struct DiskSeriesPoint {
     pub write_bps: u64,
     #[serde(default)]
     pub util_pct: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TempSeriesPoint {
+    pub ts: i64,
+    pub celsius: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -646,6 +663,23 @@ pub async fn fetch_disk_range(device: &str, window: &str) -> Result<Vec<DiskSeri
         return Err(ApiError::Other(format!("HTTP {}", resp.status())));
     }
     let env: PointsEnvelope<DiskSeriesPoint> = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    Ok(env.points)
+}
+
+pub async fn fetch_temp_range(sensor: &str, window: &str) -> Result<Vec<TempSeriesPoint>, ApiError> {
+    let url = format!(
+        "/api/stats/range?metric=temp&key={}&window={}",
+        urlencode(sensor),
+        urlencode(window)
+    );
+    let resp = Request::get(&url).send().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    let env: PointsEnvelope<TempSeriesPoint> = resp.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
     Ok(env.points)
 }
 

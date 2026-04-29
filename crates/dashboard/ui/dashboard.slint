@@ -49,6 +49,19 @@ export struct PartitionUi {
     pct-text: string,
 }
 
+export struct TempUi {
+    /// Pretty short label rendered next to the value (e.g. "CPU", "sda").
+    label: string,
+    /// Original sensor name from /sys (e.g. "cpu_thermal", "sda") — shown
+    /// dimmer beneath the big number for unambiguous attribution.
+    sensor: string,
+    /// Pre-formatted value, e.g. "45.2".
+    value: string,
+    /// Threshold band: "ok" / "warn" / "danger". Drives color in the
+    /// dashboard's chip style.
+    kind: string,
+}
+
 // ---------------------------------------------------------------------------
 // Theme
 
@@ -739,6 +752,7 @@ export component MainWindow inherits Window {
     in property <[NetIfaceUi]> network;
     in property <[DiskIoUi]> disks;
     in property <[PartitionUi]> partitions;
+    in property <[TempUi]> temps;
     in property <[[float]]> net-rx-spark;
     in property <[[float]]> net-tx-spark;
     in property <[[float]]> disk-read-spark;
@@ -849,6 +863,50 @@ export component MainWindow inherits Window {
                     width: 80px;
                     horizontal-alignment: right;
                     vertical-alignment: center;
+                }
+            }
+        }
+
+        // Compact temperature strip — one chip per sensor. CPU + each
+        // /dev/sd* drivetemp reading. Hidden when the kernel exposes
+        // none (e.g. dev hosts where the .cfg fragment isn't applied).
+        if root.temps.length > 0: Rectangle {
+            background: Theme.panel-bg;
+            border-color: Theme.panel-border;
+            border-width: 1px;
+            border-radius: 5px;
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 14px;
+                alignment: start;
+                Text {
+                    text: "TEMP";
+                    color: Theme.accent;
+                    font-size: 10px;
+                    font-weight: 700;
+                    letter-spacing: 1.0px;
+                    vertical-alignment: center;
+                }
+                for t in root.temps: HorizontalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: t.label;
+                        color: Theme.text;
+                        font-size: 11px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: t.value + "°C";
+                        color: t.kind == "danger" ? #ff5050
+                            : t.kind == "warn" ? #ffb84a
+                            : Theme.text;
+                        font-size: 11px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }

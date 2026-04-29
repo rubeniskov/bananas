@@ -138,7 +138,8 @@ pub fn StatsPage() -> Element {
             }
             LiveTiles { snap: s.clone() }
             NetworkSparklines { ifaces: series.read().interfaces.clone(), snap: s.clone() }
-            DiskSparklines { disks: series.read().disks.clone(), snap: s }
+            DiskSparklines { disks: series.read().disks.clone(), snap: s.clone() }
+            TempTiles { snap: s }
         } else {
             p { class: "preview-label", "Loading live stats…" }
         }
@@ -225,6 +226,67 @@ fn Gauge(props: GaugeProps) -> Element {
             div { class: "tile-detail",
                 span { class: "tile-pct {kind}", "{pct_clamped:.0}%" }
                 span { class: "tile-sub", "{props.detail}" }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct TempTilesProps { snap: api::StatsSnapshot }
+
+/// Per-sensor temperature card grid. Shows live °C for every sensor
+/// the kernel exposed (CPU thermal zone + drivetemp readings for each
+/// SATA/NVMe disk). The "tile-pct" color flips through ok/warn/danger
+/// at 60 °C and 75 °C — those thresholds match Mali-400's documented
+/// throttle point and a typical HDD warning band, respectively.
+#[component]
+fn TempTiles(props: TempTilesProps) -> Element {
+    if props.snap.temps.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        h3 { class: "stats-subhead", "Temperatures" }
+        div { class: "live-tiles",
+            for t in props.snap.temps.iter() {
+                TempTile {
+                    key: "{t.sensor}",
+                    sensor: t.sensor.clone(),
+                    celsius: t.celsius,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct TempTileProps {
+    sensor: String,
+    celsius: f32,
+}
+
+#[component]
+fn TempTile(props: TempTileProps) -> Element {
+    let kind = if props.celsius >= 75.0 { "danger" }
+        else if props.celsius >= 60.0 { "warn" }
+        else { "ok" };
+    // Map 30 °C -> 0% / 90 °C -> 100% so the bar reads at a glance.
+    let pct = (((props.celsius - 30.0) / 60.0) * 100.0).clamp(0.0, 100.0);
+    let pretty_label = if props.sensor.starts_with("cpu")
+        || props.sensor.contains("thermal")
+    {
+        "CPU".to_string()
+    } else {
+        format!("/dev/{}", props.sensor)
+    };
+    rsx! {
+        div { class: "tile gauge-tile",
+            div { class: "tile-label", "{pretty_label}" }
+            div { class: "gauge-bar",
+                div { class: "gauge-fill {kind}", style: "width: {pct}%" }
+            }
+            div { class: "tile-detail",
+                span { class: "tile-pct {kind}", "{props.celsius:.1}°C" }
+                span { class: "tile-sub", "{props.sensor}" }
             }
         }
     }
