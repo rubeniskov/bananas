@@ -212,6 +212,10 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::Lsblk => match run_lsblk().await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -1073,6 +1077,30 @@ fn is_safe_perms_path(path: &str) -> bool {
         // exact-match (e.g. "/srv") OR starts-with-with-slash ("/srv/x")
         path == *p || path.starts_with(&format!("{}/", p.trim_end_matches('/')))
     })
+}
+
+async fn run_lsblk() -> Result<String> {
+    // -J = JSON, -b = bytes (not human-readable), -o pins the column
+    // set the server expects to parse. Running here as root lets
+    // blkid read /dev/sd* superblocks for FSTYPE/LABEL/UUID.
+    let out = TokioCommand::new("lsblk")
+        .args([
+            "-J",
+            "-b",
+            "-o",
+            "NAME,KNAME,SIZE,MODEL,TYPE,MOUNTPOINT,FSTYPE,LABEL,UUID,RO",
+        ])
+        .output()
+        .await
+        .context("spawning lsblk")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "lsblk failed (status {}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 async fn make_directory(path: &str) -> Result<String> {

@@ -106,7 +106,7 @@ pub async fn get_storage(state: &AppState) -> Result<StorageReport, String> {
         return Ok(cached);
     }
 
-    let lsblk = run_lsblk().await.map_err(|e| e.to_string())?;
+    let lsblk = run_lsblk(state).await.map_err(|e| e.to_string())?;
     let mut report = StorageReport::default();
 
     let blockdevices = lsblk
@@ -216,25 +216,23 @@ fn parse_partition(entry: &Value) -> Partition {
     }
 }
 
-async fn run_lsblk() -> anyhow::Result<Value> {
+/// Run lsblk via the root helper. The unprivileged bananas-server
+/// user can call lsblk directly, but it'd return null for FSTYPE /
+/// LABEL / UUID because blkid (used internally by lsblk) needs raw
+/// read on /dev/sd*. The helper runs as root and pipes the JSON
+/// back through the existing IPC channel — same shape as Smart.
+async fn run_lsblk(state: &AppState) -> anyhow::Result<Value> {
     use anyhow::Context;
-    let out = tokio::process::Command::new("lsblk")
-        .args([
-            "-J",
-            "-b",
-            "-o",
-            "NAME,KNAME,SIZE,MODEL,TYPE,MOUNTPOINT,FSTYPE,LABEL,UUID,RO",
-        ])
-        .output()
+    let resp = bananas_helper::call(&state.helper_socket, &Command::Lsblk)
         .await
-        .context("running lsblk")?;
-    if !out.status.success() {
+        .context("calling helper Lsblk")?;
+    if !resp.ok {
         anyhow::bail!(
-            "lsblk failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            "helper Lsblk failed: {}",
+            resp.error.unwrap_or_else(|| "unknown".into())
         );
     }
-    serde_json::from_slice(&out.stdout).context("parsing lsblk JSON")
+    serde_json::from_str(&resp.output).context("parsing lsblk JSON")
 }
 
 async fn fetch_smart(state: &AppState, device: &str) -> Result<Value, String> {

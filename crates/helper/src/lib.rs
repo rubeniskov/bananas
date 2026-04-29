@@ -141,6 +141,15 @@ pub enum Command {
     /// fstab entry that mounts onto it. Idempotent: no-op when the
     /// path already exists.
     MakeDirectory { path: String },
+    /// `lsblk -J -b -o NAME,KNAME,SIZE,MODEL,TYPE,MOUNTPOINT,FSTYPE,LABEL,UUID,RO`
+    /// returned verbatim in `output`. The unprivileged bananas-server
+    /// user can run lsblk too, but blkid (which lsblk calls
+    /// internally for FSTYPE/LABEL/UUID) needs raw-read on /dev/sd*
+    /// — and /dev/sd* are mode 0660 root:disk. Routing the call
+    /// through the root helper keeps bananas-server out of the disk
+    /// group while still surfacing complete partition metadata to
+    /// the storage tab.
+    Lsblk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
