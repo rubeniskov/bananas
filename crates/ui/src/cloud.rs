@@ -495,25 +495,26 @@ fn RunRow(props: RunRowProps) -> Element {
             td { code { "#{j.id}" } }
             td { span { class: "{status_class}", "{j.status.label()}" } }
             td { code { "{started}" } }
-            td { code { "{finished}" } }
+            // Finished cell doubles as the live-progress slot while the
+            // job is still running — no finish time yet, so the circular
+            // bar + cancel button live there. After the run resolves,
+            // the cell flips back to the actual finish timestamp.
             td {
-                // Label sits left, progress + cancel hug the right edge
-                // via the .label-cell flex layout in main.css.
-                div { class: "label-cell",
-                    span { class: "muted label-text", "{label}" }
-                    if is_running {
-                        div { class: "run-controls",
-                            CircularProgress { percent: progress }
-                            button {
-                                class: "btn-icon delete",
-                                "data-tip": "Cancel this in-flight sync (SIGTERM to rclone).",
-                                onclick: move |_| props.on_cancel.call(sync_idx),
-                                Icon { name: "x" }
-                            }
+                if is_running {
+                    div { class: "run-controls",
+                        CircularProgress { percent: progress }
+                        button {
+                            class: "btn-icon delete",
+                            "data-tip": "Cancel this in-flight sync (SIGTERM to rclone).",
+                            onclick: move |_| props.on_cancel.call(sync_idx),
+                            Icon { name: "x" }
                         }
                     }
+                } else {
+                    code { "{finished}" }
                 }
             }
+            td { span { class: "muted", "{label}" } }
         }
     }
 }
