@@ -203,12 +203,25 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
             // exist on the system to an attacker probing the API.
+            //
+            // The `password_expired` sentinel is the deliberate exception:
+            // it can only fire when the username + password are BOTH
+            // correct (the lastchg check happens after the hash compare),
+            // so it leaks no more than a successful login already would.
+            // Passing it through is what lets the UI swap into the "set
+            // new password" form on first sign-in.
             const GENERIC_FAIL: &str = "invalid credentials";
             match authenticate(&username, &password).await {
                 Ok(()) => Response::ok(format!("authenticated {username}")),
                 Err(e) => {
-                    tracing::warn!(user=%username, error=%e, "auth failed");
-                    Response::err(GENERIC_FAIL, String::new())
+                    let msg = e.to_string();
+                    tracing::warn!(user=%username, error=%msg, "auth failed");
+                    let surface = if msg.contains("password_expired") {
+                        "password_expired"
+                    } else {
+                        GENERIC_FAIL
+                    };
+                    Response::err(surface, String::new())
                 }
             }
         }
