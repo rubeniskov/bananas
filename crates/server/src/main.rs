@@ -25,7 +25,7 @@ use axum::{
 use bananas_helper::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
 mod auth;
 mod cloud;
@@ -178,13 +178,32 @@ async fn main() -> Result<()> {
         .route_layer(from_fn_with_state(state.clone(), auth::require_session))
         .with_state(state);
 
-    // Mount /assets/* as a ServeDir; everything else (including /) hits the
-    // SPA fallback below so deep routes survive a full-page reload.
-    let assets = ServeDir::new(ui_dir.join("assets"));
+    // Mount /assets/* as a ServeDir. Two perf knobs:
+    //   1. .precompressed_br() / .precompressed_gzip() — when a `.br`
+    //      or `.gz` companion file sits next to a regular asset and
+    //      the client advertises Accept-Encoding, the precompressed
+    //      blob is sent as-is. The build-webadmin pixi task creates
+    //      these companions; the wasm shrinks ~3×.
+    //   2. Cache-Control: immutable + 1y max-age. Safe because dx-cli
+    //      hash-suffixes every asset filename (e.g.
+    //      `bananas-webadmin_bg-dxh6a6811895f9a3f7.wasm`), so any
+    //      content change ships under a new URL. Repeat page loads
+    //      drop to a single round-trip for index.html.
+    let assets = ServeDir::new(ui_dir.join("assets"))
+        .precompressed_br()
+        .precompressed_gzip();
 
     let app = Router::new()
         .nest("/api", api)
-        .nest_service("/assets", assets)
+        .nest_service(
+            "/assets",
+            tower::ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ))
+                .service(assets),
+        )
         .fallback(get(move || {
             let html = index_html.clone();
             async move {

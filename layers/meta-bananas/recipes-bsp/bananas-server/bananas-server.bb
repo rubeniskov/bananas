@@ -77,6 +77,10 @@ do_install() {
         bbfatal "web-admin bundle missing — index.html not found in WORKDIR. Run 'pixi run build-webadmin' first."
     fi
     install -d ${D}${datadir}/bananas/webadmin
+    # cp -r preserves the .br / .gz companions the build-webadmin task
+    # emits next to each asset; bananas-server's ServeDir is configured
+    # with .precompressed_br().precompressed_gzip() and serves them
+    # transparently when the browser sends Accept-Encoding.
     cp -r ${WORKDIR}/index.html ${WORKDIR}/assets ${D}${datadir}/bananas/webadmin/
     chmod -R u=rwX,go=rX ${D}${datadir}/bananas/webadmin
 

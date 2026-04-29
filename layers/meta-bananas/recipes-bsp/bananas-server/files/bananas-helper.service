@@ -1,7 +1,9 @@
 [Unit]
 Description=BanaNAS root helper (NFS exports + group ops for bananas-server)
-After=network-online.target
-Wants=network-online.target
+# Helper is a Unix-socket daemon — talks only to the local server crate
+# over /run/bananas/helper.sock. No network, no DNS. Don't wait for
+# network-online.target; that adds 5–10 s of boot for nothing.
+After=local-fs.target
 
 [Service]
 Type=simple

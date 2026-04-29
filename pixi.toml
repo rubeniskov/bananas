@@ -144,7 +144,27 @@ echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
 # The pixi conda rust does not ship a wasm std and would error with
 # "Missing rust target wasm32-unknown-unknown".
 [tasks.build-webadmin]
-cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; rm -rf target/dx/bananas-webadmin/release/web/public && dx build --release --package bananas-webadmin --platform web && rm -rf serve/webadmin && mkdir -p serve/webadmin serve/bin && cp -r target/dx/bananas-webadmin/release/web/public/. serve/webadmin/ && tar -C serve/webadmin -czf serve/bin/bananas-webadmin.tar.gz .'"
+cmd = """bash -c '
+unset CARGO RUSTC
+export RUSTUP_TOOLCHAIN=stable
+export PATH="$HOME/.cargo/bin:$PATH"
+rm -rf target/dx/bananas-webadmin/release/web/public
+dx build --release --package bananas-webadmin --platform web
+rm -rf serve/webadmin
+mkdir -p serve/webadmin serve/bin
+cp -r target/dx/bananas-webadmin/release/web/public/. serve/webadmin/
+# Pre-compress the static assets — brotli at quality 11 (max), gzip
+# at level 9. ServeDir on the server side reads the .br / .gz
+# companions when the browser advertises Accept-Encoding, so the
+# 1.5 MB wasm goes out as ~350 KB. Keep the originals for clients
+# that do not advertise either encoding.
+find serve/webadmin/assets -type f \\( -name "*.wasm" -o -name "*.js" -o -name "*.css" -o -name "*.svg" -o -name "*.html" \\) -print0 \\
+  | while IFS= read -r -d "" f; do
+      brotli -Z -k -f "$f"
+      gzip -9 -k -f "$f"
+    done
+tar -C serve/webadmin -czf serve/bin/bananas-webadmin.tar.gz .
+'"""
 depends-on = ["setup-dx"]
 
 # `build-server-arm`: cross-compile bananas-server + bananas-helper for the
@@ -263,6 +283,7 @@ cpio = "*"
 patch = "*"
 bzip2 = "*"
 gzip = "*"
+brotli = "*"
 tar = "*"
 make = "*"
 gcc_linux-64 = "*"

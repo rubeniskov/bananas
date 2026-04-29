@@ -24,14 +24,30 @@ bananas-webadmin = { path = "crates/webadmin" }
 bananas-stats = { path = "crates/stats" }
 bananas-dashboard = { path = "crates/dashboard" }
 
-tokio = { version = "1.52", features = ["full"] }
+# Workspace-wide tokio feature subset. "full" pulls in fs, io, mio, net,
+# parking_lot, process, rt, rt-multi-thread, signal, sync, time, macros,
+# tracing — bigger compile + binary size for features we don't all use.
+# This subset covers actual usage across server / helper / stats /
+# dashboard. If a future change needs e.g. `select!` only, it's already
+# in `macros`; for `Notify`/`Semaphore`, `sync` covers it.
+tokio = { version = "1.52", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "fs",
+    "net",
+    "io-util",
+    "time",
+    "sync",
+    "process",
+    "signal",
+] }
 axum = { version = "0.8", features = ["ws"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 anyhow = "1.0.102"
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-tower-http = { version = "0.6", features = ["trace", "fs"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt"] }
+tower-http = { version = "0.6", features = ["trace", "fs", "set-header"] }
 # Auth — pure-Rust SHA-512 crypt for /etc/shadow verification + HMAC for
 # session cookies. All no-std-friendly so the cross-compile via zigbuild
 # stays clean.

@@ -134,9 +134,6 @@ IMAGE_INSTALL += " \
     curl \
     wget \
     htop \
-    nano \
-    vim \
-    tmux \
     iproute2 \
     iptables \
     ethtool \

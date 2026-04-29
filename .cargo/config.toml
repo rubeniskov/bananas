@@ -1,0 +1,12 @@
+# Per-target build flags. Picked up automatically by every cargo
+# invocation in this workspace (cargo-zigbuild and cross both read
+# it from the workspace root).
+
+[target.armv7-unknown-linux-gnueabihf]
+# Banana Pro ships an Allwinner A20 (Cortex-A7 dual-core, 32-bit ARMv7
+# with NEON + VFPv4 + Thumb-2). Generic armv7 fallback compiles to
+# lowest-common-denominator codegen. Telling rustc the actual CPU +
+# float unit unlocks better instruction selection (5–15 % runtime
+# speedup on hot Rust paths — sampler arithmetic, SQLite writer,
+# femtovg path tessellation).
+rustflags = ["-C", "target-cpu=cortex-a7", "-C", "target-feature=+vfp4,+thumb2"]

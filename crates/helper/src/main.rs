@@ -19,11 +19,12 @@ use tokio::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Static INFO level — the helper logs only on errors and admin
+    // RPCs. Skip env-filter (and its `regex` dep) to keep the binary
+    // small. RUST_LOG=… is intentionally ignored here; if you ever
+    // need to debug the helper, add the filter back.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "bananas_helper=info".into()),
-        )
+        .with_max_level(tracing::Level::INFO)
         .init();
 
     let socket_path: PathBuf = std::env::var_os("BANANAS_HELPER_SOCKET")

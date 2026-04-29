@@ -23,11 +23,14 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::watch;
-use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Static INFO level — matches the helper. Skip env-filter (and its
+    // regex dep) to keep the binary small. journalctl already lets you
+    // jump levels via --priority; we don't need RUST_LOG semantics.
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
 
     // Local offset must be read before tokio spawns worker threads —
     // `time::UtcOffset::current_local_offset()` is only sound while the

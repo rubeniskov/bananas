@@ -16,7 +16,7 @@
 # host-cross-compiled bananas-server/helper binaries staged for the recipe
 /serve/bin/
 # host-built Dioxus Web wasm bundle staged for the recipe
-/serve/ui/
+/serve/webadmin/
 # local secrets / per-deployment config — see .env.example
 .env
 # rust workspace build output
