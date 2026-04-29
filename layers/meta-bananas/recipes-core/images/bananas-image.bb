@@ -173,11 +173,9 @@ IMAGE_INSTALL += " \
 "
 
 # LCD dashboard (Slint app on /dev/fb0 via DRM/KMS). Pulls bananas-stats
-# in as RDEPENDS via the recipe; bananas-server is already in the image.
-# Mali-400 lima driver + the runtime libs the cross-rs build linked
-# against (fontconfig + drm + gbm + udev + xkbcommon + libinput) come
-# in as RDEPENDS of bananas-dashboard.
+# + the runtime libs (fontconfig + udev + xkbcommon + libinput) in as
+# RDEPENDS via the recipe. Software renderer only — no Mali GPU path,
+# no x11/wayland, so no libgbm/libdrm in the runtime graph.
 IMAGE_INSTALL += " \
     bananas-dashboard \
-    kernel-module-lima \
 "

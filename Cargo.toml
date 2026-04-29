@@ -47,7 +47,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 time = { version = "0.3", features = ["serde", "macros", "formatting", "local-offset"] }
 nix = { version = "0.31", features = ["fs"] }
 thiserror = "2"
-slint = { version = "1.16", default-features = false, features = ["compat-1-2", "renderer-femtovg", "renderer-software", "backend-linuxkms-noseat", "std"] }
+slint = { version = "1.16", default-features = false, features = ["compat-1-2", "renderer-software", "backend-linuxkms-noseat", "std"] }
 slint-build = "1.16"
 
 # UI (wasm) deps — pinned at the workspace level so the bananas-ui crate

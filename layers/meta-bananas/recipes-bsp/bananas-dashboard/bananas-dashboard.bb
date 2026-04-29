@@ -24,15 +24,14 @@ INSANE_SKIP:${PN} += "arch already-stripped"
 SYSTEMD_SERVICE:${PN} = "bananas-dashboard.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
-# Runtime libraries the cross-rs build linked against. The cross
-# container apt-installed dev packages (libfontconfig1-dev:armhf etc.)
-# but on-device we need the corresponding Yocto runtime packages so
-# the binary's NEEDED entries resolve at startup.
+# Runtime libraries the cross-rs build linked against. Software
+# renderer + linuxkms-noseat backend, no OpenGL: only fontconfig (for
+# fontique font discovery), libudev + libinput (input device
+# enumeration), libxkbcommon (keymap). libdrm/libgbm only enter the
+# graph if we re-enable Slint's femtovg renderer for GPU acceleration.
 RDEPENDS:${PN} += " \
     bananas-stats \
     fontconfig \
-    libdrm \
-    libgbm \
     libudev \
     libxkbcommon \
     libinput \
