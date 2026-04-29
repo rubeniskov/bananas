@@ -13,7 +13,8 @@ inherit systemd
 # Pull the cross-rs-built binary from serve/bin/ alongside the unit file.
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
 SRC_URI = "file://bananas-dashboard \
-           file://bananas-dashboard.service"
+           file://bananas-dashboard.service \
+           file://dashboard.toml"
 
 S = "${WORKDIR}"
 
@@ -63,7 +64,12 @@ do_install() {
     install -m 0755 ${WORKDIR}/bananas-dashboard ${D}${bindir}/bananas-dashboard
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/bananas-dashboard.service ${D}${systemd_system_unitdir}/
+    install -d ${D}${sysconfdir}/bananas
+    install -m 0644 ${WORKDIR}/dashboard.toml ${D}${sysconfdir}/bananas/dashboard.toml
 }
 
 FILES:${PN} += "${bindir}/bananas-dashboard \
-                ${systemd_system_unitdir}/bananas-dashboard.service"
+                ${systemd_system_unitdir}/bananas-dashboard.service \
+                ${sysconfdir}/bananas/dashboard.toml"
+
+CONFFILES:${PN} += "${sysconfdir}/bananas/dashboard.toml"

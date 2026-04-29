@@ -223,7 +223,7 @@ pub async fn put_config(State(state): State<AppState>, Json(req): Json<PutConfig
     }
 }
 
-fn err_500(msg: String) -> Response {
+pub fn err_500(msg: String) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": msg })),
@@ -231,7 +231,7 @@ fn err_500(msg: String) -> Response {
         .into_response()
 }
 
-fn err_400(msg: String) -> Response {
+pub fn err_400(msg: String) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
 }
 

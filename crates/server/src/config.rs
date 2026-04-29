@@ -39,6 +39,14 @@ pub struct ConfigBundle {
     /// account on the configured provider.
     #[serde(default)]
     pub cloud: crate::cloud::CloudConfig,
+    /// Raw TOML of /etc/bananas/dashboard.toml (LCD UI appearance +
+    /// refresh cadence). Stored verbatim instead of parsed so the
+    /// schema can grow without a bundle-version bump every time.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dashboard_toml: String,
+    /// Raw TOML of /etc/bananas/system.toml (timezone today, more later).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub system_toml: String,
 }
 
 fn default_version() -> u32 {
@@ -361,12 +369,56 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
         }
     }
 
+    // ---- dashboard / system raw configs ---------------------------------
+    // Stored verbatim in the bundle; restored verbatim. No parsing on
+    // either end so the schema can evolve without breaking older
+    // bundles. Empty strings = "this section wasn't in the backup",
+    // skip rather than nuking the on-disk file.
+    if !bundle.dashboard_toml.trim().is_empty() {
+        if let Err(note) =
+            write_service_toml(&state, "dashboard", bundle.dashboard_toml.clone()).await
+        {
+            summary.ok = false;
+            summary.notes.push(note);
+        } else {
+            summary.notes.push("dashboard.toml restored".into());
+        }
+    }
+    if !bundle.system_toml.trim().is_empty() {
+        if let Err(note) = write_service_toml(&state, "system", bundle.system_toml.clone()).await {
+            summary.ok = false;
+            summary.notes.push(note);
+        } else {
+            summary.notes.push("system.toml restored".into());
+        }
+    }
+
     let status = if summary.ok {
         StatusCode::OK
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     };
     (status, Json(summary)).into_response()
+}
+
+async fn write_service_toml(state: &AppState, name: &str, content: String) -> Result<(), String> {
+    match bananas_helper::call(
+        &state.helper_socket,
+        &Command::WriteServiceConfig {
+            name: name.into(),
+            content,
+        },
+    )
+    .await
+    {
+        Ok(HelperResponse { ok: true, .. }) => Ok(()),
+        Ok(HelperResponse { error, output, .. }) => Err(format!(
+            "{name}: {}\n{}",
+            error.unwrap_or_else(|| format!("helper rejected {name}")),
+            output
+        )),
+        Err(e) => Err(format!("{name}: helper unreachable: {e}")),
+    }
 }
 
 async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
@@ -435,13 +487,34 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
         _ => crate::cloud::CloudConfig::default(),
     };
 
+    let dashboard_toml = read_service_toml(state, "dashboard").await;
+    let system_toml = read_service_toml(state, "system").await;
+
     Ok(ConfigBundle {
         version: 1,
         exports: exports_rows,
         fstab: fstab_rows,
         users,
         cloud,
+        dashboard_toml,
+        system_toml,
     })
+}
+
+async fn read_service_toml(state: &AppState, name: &str) -> String {
+    match bananas_helper::call(
+        &state.helper_socket,
+        &Command::ReadServiceConfig {
+            name: name.to_string(),
+        },
+    )
+    .await
+    {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => output,
+        _ => String::new(),
+    }
 }
 
 /// Parse the helper's ListUsers JSON, filter to "human" accounts (UID

@@ -216,6 +216,10 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::SetTimezone { tz } => match set_timezone(&tz).await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -1079,6 +1083,38 @@ fn is_safe_perms_path(path: &str) -> bool {
     })
 }
 
+async fn set_timezone(tz: &str) -> Result<String> {
+    // Validate against the on-disk zoneinfo db. A bogus tz here would
+    // get rejected by timedatectl too, but checking up front gives us
+    // a cleaner error message and keeps audit logs readable.
+    if tz.is_empty()
+        || tz.contains("..")
+        || tz.starts_with('/')
+        || !tz
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '/' | '+'))
+    {
+        anyhow::bail!("invalid timezone string: {tz:?}");
+    }
+    let zone_path = format!("/usr/share/zoneinfo/{tz}");
+    if !std::path::Path::new(&zone_path).exists() {
+        anyhow::bail!("unknown timezone {tz:?} (no zoneinfo entry at {zone_path})");
+    }
+    let out = TokioCommand::new("timedatectl")
+        .args(["set-timezone", tz])
+        .output()
+        .await
+        .context("spawning timedatectl")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "timedatectl set-timezone failed (status {}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(format!("timezone set to {tz}"))
+}
+
 async fn run_lsblk() -> Result<String> {
     // -J = JSON, -b = bytes (not human-readable), -o pins the column
     // set the server expects to parse. Running here as root lets
@@ -1853,7 +1889,15 @@ async fn exportfs_reload() -> Result<String> {
 fn service_config_target(name: &str) -> Option<(&'static str, &'static [&'static str])> {
     match name {
         "stats" => Some(("/etc/bananas/stats.toml", &["bananas-stats.service"])),
+        // Dashboard polls its config's mtime every 2 s and reapplies
+        // theme / refresh-rate changes in place — no service restart
+        // needed. Empty units slice keeps the LCD from blinking off
+        // when the operator flips a setting through the web UI.
+        "dashboard" => Some(("/etc/bananas/dashboard.toml", &[])),
         "cloud" => Some(("/etc/bananas/cloud.toml", &[])),
+        // Read by bananas-server on every request that needs it; no
+        // daemon to restart. Used for the General tab (timezone, etc).
+        "system" => Some(("/etc/bananas/system.toml", &[])),
         _ => None,
     }
 }

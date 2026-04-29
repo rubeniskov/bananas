@@ -947,6 +947,77 @@ textarea {
   border-top: 1px solid var(--line);
 }
 
+/* Settings page tabs + cards. Three-tab strip at the top of /#settings;
+ * each tab swaps the editor body. Plain-and-canonical raw TOML editor
+ * for the rare cases an operator needs to hand-edit a config file. */
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1em;
+}
+button.settings-tab {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-soft);
+  font-weight: 500;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+button.settings-tab:hover { color: var(--accent); }
+button.settings-tab.active {
+  color: var(--accent);
+  border-color: var(--line);
+  background: var(--bg);
+  margin-bottom: -1px;
+  border-bottom: 1px solid var(--bg);
+}
+.settings-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-soft);
+  padding: 1em;
+}
+textarea.settings-toml {
+  width: 100%;
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+}
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.settings-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1em 1.2em;
+  margin-bottom: 1.2em;
+  background: var(--bg-soft);
+}
+.settings-card h3 { margin: 0 0 .4em 0; font-size: 14px; }
+.settings-tz-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+input.settings-tz-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+}
+
 /* Mountpoint suggest row — sits under the Mountpoint input in the
  * fstab form, offers /srv/, /mnt/, /media/ as quick-fill chips. */
 .mp-suggest .mp-suggest-label { color: var(--text-soft); }

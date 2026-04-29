@@ -1,7 +1,12 @@
 # BanaNAS stats sampler config. Mirrors the compiled-in defaults of
 # `bananas-stats::config::Config::default()` — edit values here, then
 # `systemctl restart bananas-stats.service` (or use the web admin's
-# "Stats config" gear to do both atomically).
+# Settings → Stats form to do both atomically).
+#
+# This file owns ONLY sampler-side fields. Dashboard appearance lives
+# in /etc/bananas/dashboard.toml (separate file, separate write path,
+# separate service restart). The Unix socket path stays here too —
+# bananas-stats *binds* it; bananas-dashboard subscribes.
 
 [sampling]
 # How often to sample /proc + /sys + statvfs, in milliseconds.
@@ -38,16 +43,6 @@ exclude_names = []
 # absent so the dashboard isn't drowned in 0-Bps idle interfaces.
 include_patterns = ["eth*", "en*"]
 exclude_names = []
-
-[ui]
-# bananas-dashboard's render target — the BPI's 5" panel is 800x480.
-width = 800
-height = 480
-title = "bananas-dashboard"
-# "auto" picks dark in PM hours / light in AM. "dark" or "light" pin it.
-theme = "auto"
-# Number of historical points kept on the live sparklines.
-spark_window = 60
 
 [live_socket]
 # Unix socket bananas-stats binds for the live pub/sub feed.

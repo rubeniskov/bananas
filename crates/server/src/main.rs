@@ -35,10 +35,12 @@ mod dirs;
 mod exports;
 mod fstab;
 mod permissions;
+mod service_config;
 mod session;
 mod stats;
 mod stats_ws;
 mod storage;
+mod system;
 mod users;
 use exports::{Opts, Row, Squash};
 use session::SessionKey;
@@ -103,6 +105,10 @@ async fn main() -> Result<()> {
         storage_cache: storage::StorageCache::new(),
     };
 
+    // First-boot geoip → timezone (best-effort, non-blocking, non-fatal).
+    // Skips silently if /etc/bananas/system.toml already has a tz set.
+    system::spawn_first_boot_geoip(state.clone());
+
     let ui_dir: PathBuf = std::env::var_os("BANANAS_WEBADMIN_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/usr/share/bananas/webadmin".into());
@@ -147,6 +153,15 @@ async fn main() -> Result<()> {
             "/stats/config",
             get(stats::get_config).put(stats::put_config),
         )
+        .route(
+            "/dashboard/config",
+            get(service_config::get_dashboard).put(service_config::put_dashboard),
+        )
+        .route(
+            "/system/config",
+            get(service_config::get_system).put(service_config::put_system),
+        )
+        .route("/system/timezone", post(system::post_timezone))
         .route("/fstab", get(get_fstab).post(post_fstab))
         .route("/fstab/{idx}", delete(delete_fstab).put(put_fstab))
         .route("/users", get(users::list).post(users::create))

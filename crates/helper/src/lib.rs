@@ -150,6 +150,12 @@ pub enum Command {
     /// group while still surfacing complete partition metadata to
     /// the storage tab.
     Lsblk,
+    /// `timedatectl set-timezone <tz>`. Validates `tz` against the
+    /// IANA tzdata zoneinfo database (must be a real file under
+    /// /usr/share/zoneinfo/) before invoking timedatectl, so a bogus
+    /// string can't be passed through. Used by the Settings → General
+    /// tab and the first-boot geoip auto-detection path.
+    SetTimezone { tz: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -72,7 +72,8 @@ fn main() -> Result<()> {
     // Hand off to Slint. `app::launch` blocks until the user closes the
     // window or the process is signalled. Pass the resolved config path
     // so the live-reload watcher inside `launch` knows which file to
-    // poll for theme changes (`/etc/bananas/stats.toml` on the BPI).
+    // poll for theme / refresh-rate changes
+    // (`/etc/bananas/dashboard.toml` on the BPI).
     app::launch(cfg.ui, cfg_path, snapshot_rx, local_offset)?;
     Ok(())
 }

@@ -17,6 +17,7 @@ mod login;
 mod mounts;
 mod nfs_help;
 mod permissions;
+mod settings;
 mod stats;
 mod stats_config;
 mod storage;
@@ -81,6 +82,7 @@ enum Page {
     Storage,
     Users,
     Cloud,
+    Settings,
 }
 
 impl Page {
@@ -94,6 +96,7 @@ impl Page {
             Page::Storage => "storage",
             Page::Users => "users",
             Page::Cloud => "cloud",
+            Page::Settings => "settings",
         }
     }
 
@@ -104,6 +107,7 @@ impl Page {
             "storage" => Some(Page::Storage),
             "users" => Some(Page::Users),
             "cloud" => Some(Page::Cloud),
+            "settings" => Some(Page::Settings),
             _ => None,
         }
     }
@@ -279,6 +283,8 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     on_click: move |_| page.set(Page::Users) }
                 NavTab { label: "Cloud", icon: "cloud", active: page() == Page::Cloud,
                     on_click: move |_| page.set(Page::Cloud) }
+                NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
+                    on_click: move |_| page.set(Page::Settings) }
                 span { class: "spacer" }
                 div { class: "nav-actions",
                     button {
@@ -371,6 +377,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Storage => rsx! { storage::StoragePage {} },
                 Page::Users => rsx! { users::UsersPage {} },
                 Page::Cloud => rsx! { cloud::CloudPage {} },
+                Page::Settings => rsx! { settings::SettingsPage {} },
             }
 
             if reboot_confirm() {
