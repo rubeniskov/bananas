@@ -1755,20 +1755,28 @@ async fn exportfs_reload() -> Result<String> {
 /// UI's edit-config modal — the path/unit are NEVER taken from the
 /// request, so a malicious server can't ask the helper to write
 /// /etc/passwd or restart sshd.
-fn service_config_target(name: &str) -> Option<(&'static str, Option<&'static str>)> {
+/// Map a logical config name to its on-disk path + the systemd units
+/// that need to be bounced when the file changes. The list shape lets
+/// us hit BOTH bananas-stats AND bananas-dashboard for the stats
+/// config — the dashboard reads the same `/etc/bananas/stats.toml`
+/// for its UI section (theme, panel size, spark window) so the
+/// operator changing the theme via the web UI used to update the
+/// file but leave bananas-dashboard running with the old theme. An
+/// empty slice skips the restart entirely (cloud.toml is read live
+/// by bananas-server on each request).
+fn service_config_target(name: &str) -> Option<(&'static str, &'static [&'static str])> {
     match name {
-        "stats" => Some(("/etc/bananas/stats.toml", Some("bananas-stats.service"))),
-        // The cloud config is read by bananas-server itself on every
-        // /api/cloud/* call — no daemon to restart. `None` skips the
-        // post-write systemctl invocation; this also avoids the
-        // recursive "server tells helper to restart server" trap.
-        "cloud" => Some(("/etc/bananas/cloud.toml", None)),
+        "stats" => Some((
+            "/etc/bananas/stats.toml",
+            &["bananas-stats.service", "bananas-dashboard.service"],
+        )),
+        "cloud" => Some(("/etc/bananas/cloud.toml", &[])),
         _ => None,
     }
 }
 
 async fn read_service_config(name: &str) -> Result<String> {
-    let (path, _unit) = service_config_target(name)
+    let (path, _units) = service_config_target(name)
         .ok_or_else(|| anyhow::anyhow!("unknown service config {name:?}"))?;
     match tokio::fs::read_to_string(path).await {
         Ok(s) => Ok(s),
@@ -1780,7 +1788,7 @@ async fn read_service_config(name: &str) -> Result<String> {
 }
 
 async fn write_service_config(name: &str, content: &str) -> Result<String> {
-    let (path, unit) = service_config_target(name)
+    let (path, units) = service_config_target(name)
         .ok_or_else(|| anyhow::anyhow!("unknown service config {name:?}"))?;
     // Validate as TOML before touching the disk — invalid syntax would
     // crash the service on next start.
@@ -1799,29 +1807,36 @@ async fn write_service_config(name: &str, content: &str) -> Result<String> {
     tokio::fs::rename(&tmp, path)
         .await
         .with_context(|| format!("renaming {tmp} -> {path}"))?;
-    let Some(unit) = unit else {
+    if units.is_empty() {
         // No daemon to restart — bananas-server reads this config on
         // each request. Caller (UI) sees an immediate config change.
         return Ok(format!("Saved {path} (live config — no restart).\n"));
-    };
-    let out = TokioCommand::new("systemctl")
-        .arg("restart")
-        .arg(unit)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .context("spawning systemctl restart")?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    if !out.status.success() {
-        anyhow::bail!(
-            "systemctl restart {unit} failed (status {}): {combined}",
-            out.status
-        );
     }
-    Ok(format!("Saved {path}; restarted {unit}.\n{combined}"))
+    // Restart each unit sequentially. Bail on the first failure so
+    // the operator-facing banner reports the actual cause rather than
+    // a cascade of "Restart=always retry" noise from later units.
+    let mut log = String::new();
+    for unit in units {
+        let out = TokioCommand::new("systemctl")
+            .arg("restart")
+            .arg(unit)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .context("spawning systemctl restart")?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if !out.status.success() {
+            anyhow::bail!(
+                "systemctl restart {unit} failed (status {}): {combined}",
+                out.status
+            );
+        }
+        log.push_str(&format!("restarted {unit}\n{combined}"));
+    }
+    Ok(format!("Saved {path}; {log}"))
 }
