@@ -6,19 +6,63 @@
 //!     user — it reads /sys/class/block.
 //!  2. For every leaf with a mountpoint, call `statvfs(2)` to get accurate
 //!     used/available bytes (lsblk's FSUSE% column is rounded).
-//!  3. For every "disk" type entry, ask the helper for SMART JSON. The
-//!     server passes the helper's response straight through; the UI
-//!     extracts whichever fields it wants.
+//!  3. For every "disk" type entry, ask the helper for SMART JSON in
+//!     parallel via `JoinSet`. The server passes the helper's response
+//!     straight through; the UI extracts whichever fields it wants.
+//!  4. Cache the full report for `CACHE_TTL` so a Refresh-spamming
+//!     operator doesn't wake spun-down disks every click. The TTL is
+//!     short enough (30 s) that it feels live but long enough that
+//!     repeat hits skip the smartctl spawn entirely.
 
 use std::ffi::CString;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use bananas_helper::{Command, Response as HelperResponse};
 use serde::Serialize;
 use serde_json::Value;
+use tokio::task::JoinSet;
 
 use crate::AppState;
 
-#[derive(Debug, Serialize, Default)]
+/// How long a cached StorageReport stays fresh. SMART self-checks run at
+/// kernel/drive cadence (typically minutes-to-hours apart), and lsblk
+/// output rarely changes between operator clicks. 30 s strikes a balance
+/// between "feels live" and "doesn't churn the disk on every refresh".
+const CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// Process-wide cache of the most recent StorageReport. Wrapped in an
+/// `Arc<Mutex<…>>` so it's cheap to clone into the AppState. The Mutex
+/// is `std::sync::Mutex` (not tokio's) because every critical section
+/// is a non-async clone-and-drop; we never hold it across `.await`.
+#[derive(Clone, Default)]
+pub struct StorageCache {
+    inner: Arc<Mutex<Option<(Instant, StorageReport)>>>,
+}
+
+impl StorageCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn get_fresh(&self) -> Option<StorageReport> {
+        let guard = self.inner.lock().ok()?;
+        let (stored_at, report) = guard.as_ref()?;
+        if stored_at.elapsed() < CACHE_TTL {
+            Some(report.clone())
+        } else {
+            None
+        }
+    }
+
+    fn store(&self, report: StorageReport) {
+        if let Ok(mut guard) = self.inner.lock() {
+            *guard = Some((Instant::now(), report));
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct StorageReport {
     pub disks: Vec<Disk>,
     /// Anything that lsblk reported but couldn't classify (e.g. loop
@@ -26,7 +70,7 @@ pub struct StorageReport {
     pub other: Vec<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Disk {
     pub name: String,
     pub kname: String,
@@ -40,7 +84,7 @@ pub struct Disk {
     pub smart_error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Partition {
     pub name: String,
     pub kname: String,
@@ -55,6 +99,13 @@ pub struct Partition {
 }
 
 pub async fn get_storage(state: &AppState) -> Result<StorageReport, String> {
+    // Cache hit short-circuits both the lsblk shellout and the per-disk
+    // smartctl fan-out — important because smartctl wakes spun-down
+    // drives on every poll. The TTL is short enough to feel live.
+    if let Some(cached) = state.storage_cache.get_fresh() {
+        return Ok(cached);
+    }
+
     let lsblk = run_lsblk().await.map_err(|e| e.to_string())?;
     let mut report = StorageReport::default();
 
@@ -64,20 +115,42 @@ pub async fn get_storage(state: &AppState) -> Result<StorageReport, String> {
         .cloned()
         .unwrap_or_default();
 
+    // Pass 1: parse the lsblk tree and stage every disk into the report.
+    // Record each disk's index + device path so pass 2 can write the
+    // SMART result back to the right slot.
+    let mut disk_targets: Vec<(usize, String)> = Vec::new();
     for entry in blockdevices {
         match classify(&entry) {
             EntryKind::Disk => {
-                let mut disk = parse_disk(&entry);
+                let disk = parse_disk(&entry);
                 let device_path = format!("/dev/{}", disk.kname);
-                match fetch_smart(state, &device_path).await {
-                    Ok(json) => disk.smart = Some(json),
-                    Err(e) => disk.smart_error = Some(e),
-                }
+                disk_targets.push((report.disks.len(), device_path));
                 report.disks.push(disk);
             }
             EntryKind::Other => report.other.push(entry),
         }
     }
+
+    // Pass 2: fan smartctl calls out in parallel. The helper RPC is the
+    // serial bottleneck — each call spawns smartctl on the BPI, which
+    // takes a beat to wake the drive. Running them concurrently means
+    // total latency = max(per-disk) instead of sum(per-disk).
+    let mut tasks = JoinSet::new();
+    for (idx, device_path) in disk_targets {
+        let state = state.clone();
+        tasks.spawn(async move {
+            let res = fetch_smart(&state, &device_path).await;
+            (idx, res)
+        });
+    }
+    while let Some(Ok((idx, res))) = tasks.join_next().await {
+        match res {
+            Ok(json) => report.disks[idx].smart = Some(json),
+            Err(e) => report.disks[idx].smart_error = Some(e),
+        }
+    }
+
+    state.storage_cache.store(report.clone());
     Ok(report)
 }
 

@@ -51,6 +51,7 @@ pub struct AppState {
     pub stats: stats::StatsState,
     pub live_bus: stats_ws::LiveBus,
     pub jobs: cloud_jobs::JobManager,
+    pub storage_cache: storage::StorageCache,
 }
 
 #[tokio::main]
@@ -99,6 +100,7 @@ async fn main() -> Result<()> {
         stats: stats_state,
         live_bus,
         jobs,
+        storage_cache: storage::StorageCache::new(),
     };
 
     let ui_dir: PathBuf = std::env::var_os("BANANAS_WEBADMIN_DIR")
