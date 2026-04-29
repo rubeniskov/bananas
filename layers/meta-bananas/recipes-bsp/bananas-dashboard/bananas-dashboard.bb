@@ -39,7 +39,7 @@ RDEPENDS:${PN} += " \
     libudev \
     libxkbcommon \
     libinput \
-    dejavu-fonts-ttf-sans \
+    ttf-dejavu-sans \
 "
 
 do_compile[noexec] = "1"
