@@ -15,7 +15,12 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 # `psplash-poky-img.h` regardless of this suffix — do_compile copies
 # our generated header into that filename. So we don't need to keep
 # the suffix as `poky` to satisfy the include.
-SPLASH_IMAGES = "file://psplash-bananas-img.png;outsuffix=default"
+#
+# The white-background `psplash-bananas-img.png` stays in files/ as a
+# reference; the black-background variant is what we actually ship
+# because the panel's pre-power off-state is also black, so the
+# splash's edges blend instead of cutting off against a bright halo.
+SPLASH_IMAGES = "file://psplash-bananas-img-black.png;outsuffix=default"
 
 # Custom progress-bar + background colors. Yocto-default is a cream
 # background with grey bar; the bananas image has a tropical

@@ -22,9 +22,16 @@
 
 FILESEXTRAPATHS:prepend:bananapro := "${THISDIR}/files:"
 
+# Both splash bitmaps live in files/ — splash.bmp is the white-bg
+# original, splash-black.bmp is the black-bg variant generated from
+# assets/splashscreen.png. We ship the black variant by default
+# because it looks cleaner against the LCD's natural off-state and
+# avoids a bright flash when the panel comes on. To switch back to
+# the white version, swap which file the do_deploy hook installs.
 SRC_URI:append:bananapro = " \
     file://bananapro-splash.cfg \
     file://splash.bmp \
+    file://splash-black.bmp \
 "
 
 # The kconfig fragment is automatically merged by meta-sunxi's
@@ -32,8 +39,9 @@ SRC_URI:append:bananapro = " \
 # SRC_URI are picked up by the kernel-style merge_config flow. No
 # explicit do_configure hook needed for our case.
 
-# Ship splash.bmp into DEPLOYDIR so the bananapro IMAGE_BOOT_FILES
-# entry can include it on the FAT boot partition.
+# Ship splash-black.bmp as the on-card splash. The deployed filename
+# stays `splash.bmp` so the U-Boot env (`splashfile=splash.bmp`)
+# doesn't have to be re-set on the running board.
 do_deploy:append:bananapro() {
-    install -m 0644 ${WORKDIR}/splash.bmp ${DEPLOYDIR}/splash.bmp
+    install -m 0644 ${WORKDIR}/splash-black.bmp ${DEPLOYDIR}/splash.bmp
 }

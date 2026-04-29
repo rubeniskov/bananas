@@ -2,9 +2,10 @@ From: BanaNAS <noreply@anthropic.com>
 Date: Wed, 29 Apr 2026 00:00:00 +0000
 Subject: [PATCH] colors: BanaNAS palette
 
-Match the splash image's tropical/teal/yellow palette: warm cream
-background bleeds into the logo's edges, banana-yellow progress fill
-on a darker trough so the bar reads at a glance against the splash.
+Match the black-bg splash image: pure black background bleeds into
+the panel's natural off-state, banana-yellow progress fill on a
+slightly lighter trough so the bar still reads at a glance, and
+white text for the boot-stage messages.
 
 Upstream-Status: Inappropriate [BanaNAS-specific branding override]
 
@@ -22,13 +23,13 @@ index 1111111..2222222 100644
 
 -/* This is the overall background color */
 -#define PSPLASH_BACKGROUND_COLOR 0xec,0xec,0xe1
-+/* BanaNAS: matches the cream-yellow halo behind the logo */
-+#define PSPLASH_BACKGROUND_COLOR 0xff,0xf6,0xd6
++/* BanaNAS: pure black to match the splash image and panel off-state */
++#define PSPLASH_BACKGROUND_COLOR 0x00,0x00,0x00
 
 -/* This is the color of any text output */
 -#define PSPLASH_TEXT_COLOR 0x6d,0x6d,0x70
-+/* Dark teal — readable on the cream bg, matches the logo's leaves */
-+#define PSPLASH_TEXT_COLOR 0x12,0x4a,0x52
++/* White — readable on the black bg */
++#define PSPLASH_TEXT_COLOR 0xff,0xff,0xff
 
 -/* This is the color of the progress bar indicator */
 -#define PSPLASH_BAR_COLOR 0x6d,0x6d,0x70
@@ -37,7 +38,7 @@ index 1111111..2222222 100644
 
 -/* This is the color of the progress bar background */
 -#define PSPLASH_BAR_BACKGROUND_COLOR 0xec,0xec,0xe1
-+/* Bar trough — slightly deeper than the bg for contrast */
-+#define PSPLASH_BAR_BACKGROUND_COLOR 0xc8,0xb8,0x7f
++/* Bar trough — dark grey, just enough contrast against the bg */
++#define PSPLASH_BAR_BACKGROUND_COLOR 0x1a,0x1a,0x1a
 
  #endif

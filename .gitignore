@@ -22,3 +22,5 @@
 # rust workspace build output
 /target
 
+/dist/
+/.claude/
