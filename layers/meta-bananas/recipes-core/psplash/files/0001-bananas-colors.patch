@@ -6,6 +6,8 @@ Match the splash image's tropical/teal/yellow palette: warm cream
 background bleeds into the logo's edges, banana-yellow progress fill
 on a darker trough so the bar reads at a glance against the splash.
 
+Upstream-Status: Inappropriate [BanaNAS-specific branding override]
+
 ---
  psplash-colors.h | 8 ++++----
  1 file changed, 4 insertions(+), 4 deletions(-)
