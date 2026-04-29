@@ -1,9 +1,9 @@
 SUMMARY = "BanaNAS LCD dashboard"
-DESCRIPTION = "Slint app rendering live CPU / mem / network / disk \
-panels on the BPI-M1+ 5\" RGB888 LCD. Reads /var/lib/bananas/stats.db \
-(WAL) read-only — the same SQLite the web admin /api/stats/* consumes. \
-Drives the panel directly via Slint's renderer-software + \
-backend-linuxkms-noseat (no X server, no Wayland)."
+DESCRIPTION = "Slint app rendering live CPU / memory / network / disk \
+panels on the BanaNAS RGB888 LCD. Reads /var/lib/bananas/stats.db \
+(SQLite WAL) read-only, the same store the web admin consumes. Drives \
+the panel directly via the Slint software renderer plus the \
+linuxkms-noseat backend, with no X server and no Wayland."
 
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
