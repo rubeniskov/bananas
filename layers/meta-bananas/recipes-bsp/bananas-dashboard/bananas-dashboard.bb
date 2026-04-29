@@ -46,9 +46,9 @@ RDEPENDS:${PN} += " \
     libudev \
     libxkbcommon \
     libinput \
-    libdrm \
+    libdrm2 \
     libgbm \
-    mesa-driver-lima \
+    mesa-megadriver \
     kernel-module-lima \
     ttf-dejavu-sans \
 "
