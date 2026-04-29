@@ -51,6 +51,12 @@ pub struct AuthCtx {
     /// Used by the "Load config" flow so freshly imported exports/fstab/
     /// users show up without a manual refresh.
     pub refresh: Signal<u32>,
+    /// True while a long-running mutating operation (config restore,
+    /// password rotation, etc.) is in flight. Pages observing this
+    /// disable their "save", "delete", "run-now" controls and a
+    /// modal-style overlay covers the whole admin to prevent racing
+    /// API calls against an in-flight import.
+    pub busy: Signal<bool>,
 }
 
 impl AuthCtx {
@@ -214,6 +220,11 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
         let future = wasm_bindgen_futures::JsFuture::from(promise);
         // Reset the input so the same file can be picked again next time.
         input.set_value("");
+        // Flip the global busy flag so every page-level control disables
+        // and the BusyOverlay fades in. The flag clears in every match
+        // arm below — including errors — so a failed import doesn't
+        // strand the UI in a frozen state.
+        auth_ctx.busy.set(true);
         spawn(async move {
             match future.await {
                 Ok(val) => {
@@ -249,6 +260,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 }
                 Err(_) => config_banner.set(Some((BannerKind::Err, "Could not read file".into()))),
             }
+            auth_ctx.busy.set(false);
         });
     };
 
@@ -271,24 +283,47 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     button {
                         class: "ghost",
                         "data-tip": "Download the current exports + fstab + users as a TOML backup.",
+                        disabled: auth_ctx.busy.read().clone(),
                         onclick: move |_| save_config(()),
                         icons::Icon { name: "download" }
                         "Save config"
                     }
-                    label {
-                        class: "ghost button-like",
-                        "data-tip": "Pick a TOML file to apply. Restores exports + fstab + users.",
-                        icons::Icon { name: "upload" }
-                        "Load config"
-                        input {
-                            id: "load-config-input",
-                            r#type: "file",
-                            accept: ".toml,application/toml,text/plain",
-                            style: "display: none",
-                            onchange: load_change,
+                    {
+                        // While a load is in flight, swap the upload <label> for a
+                        // disabled button so re-clicking can't fire a second
+                        // import. The pointer-events: none on .busy-overlay is the
+                        // primary guard but disabling the trigger keeps the UI
+                        // honest about state.
+                        let busy = auth_ctx.busy.read().clone();
+                        if busy {
+                            rsx! {
+                                button { class: "ghost", disabled: true,
+                                    icons::Icon { name: "upload" }
+                                    "Load config"
+                                }
+                            }
+                        } else {
+                            rsx! {
+                                label {
+                                    class: "ghost button-like",
+                                    "data-tip": "Pick a TOML file to apply. Restores exports + fstab + users.",
+                                    icons::Icon { name: "upload" }
+                                    "Load config"
+                                    input {
+                                        id: "load-config-input",
+                                        r#type: "file",
+                                        accept: ".toml,application/toml,text/plain",
+                                        style: "display: none",
+                                        onchange: load_change,
+                                    }
+                                }
+                            }
                         }
                     }
-                    button { class: "ghost", onclick: logout,
+                    button {
+                        class: "ghost",
+                        disabled: auth_ctx.busy.read().clone(),
+                        onclick: logout,
                         icons::Icon { name: "log-out" }
                         "Sign out"
                     }
@@ -302,6 +337,21 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     button { class: "ghost",
                         onclick: move |_| config_banner.set(None),
                         "✕"
+                    }
+                }
+            }
+
+            // Whole-shell loading overlay. Rendered inside <main> so it
+            // covers nav + banner + page content. .busy-overlay's
+            // pointer-events: all blocks every click underneath, so even
+            // a row-action button left :enabled cannot fire while the
+            // import is in flight. Reuses CircularProgress in its
+            // indeterminate (None) form for the spinner.
+            if auth_ctx.busy.read().clone() {
+                div { class: "busy-overlay",
+                    div { class: "busy-card",
+                        components::Spinner { size: 32 }
+                        span { class: "busy-text", "Applying configuration…" }
                     }
                 }
             }
@@ -406,10 +456,12 @@ fn App() -> Element {
     let mut auth: Signal<AuthState> = use_signal(|| AuthState::Loading);
     let mut me: Signal<Option<api::Me>> = use_signal(|| None);
     let refresh: Signal<u32> = use_signal(|| 0);
+    let busy: Signal<bool> = use_signal(|| false);
     use_context_provider(|| AuthCtx {
         state: auth,
         me,
         refresh,
+        busy,
     });
 
     use_effect(move || {

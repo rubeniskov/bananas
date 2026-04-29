@@ -84,3 +84,36 @@ async fn write_clipboard(text: &str) -> Result<(), String> {
         .map(|_| ())
         .map_err(|e| format!("{e:?}"))
 }
+
+/// Shared indeterminate spinner — same SVG construction as the
+/// determinate `CircularProgress` in cloud.rs but always renders the
+/// rotating quarter-arc form. Intended for whole-page busy overlays
+/// (e.g. config restore) where we don't have a percent and just want
+/// "something is happening, do not click anything".
+#[component]
+pub fn Spinner(#[props(default = 24)] size: u32) -> Element {
+    const RADIUS: f32 = 8.0;
+    let circumference: f32 = 2.0 * std::f32::consts::PI * RADIUS;
+    let dash = format!("{} {}", circumference / 4.0, circumference);
+    rsx! {
+        svg {
+            class: "circ-progress spinning",
+            width: "{size}",
+            height: "{size}",
+            view_box: "0 0 20 20",
+            role: "img",
+            "aria-label": "loading",
+            circle {
+                class: "track",
+                cx: "10", cy: "10", r: "{RADIUS}",
+                fill: "none",
+            }
+            circle {
+                class: "fill",
+                cx: "10", cy: "10", r: "{RADIUS}",
+                fill: "none",
+                stroke_dasharray: "{dash}",
+            }
+        }
+    }
+}

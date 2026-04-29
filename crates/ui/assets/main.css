@@ -1010,3 +1010,35 @@ textarea {
 .provider-label {
   color: var(--text);
 }
+
+/* ───────── Whole-shell busy overlay ───────── */
+/* Covers <main> while a config restore (or any global mutation) is in
+ * flight. pointer-events: all blocks every click on the page underneath
+ * — disabled buttons in the nav are belt-and-suspenders. backdrop-filter
+ * dims the page slightly so the spinner card pops. */
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  pointer-events: all;
+}
+.busy-card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.busy-text {
+  font: 500 13px/1 system-ui, sans-serif;
+  color: var(--text);
+}
