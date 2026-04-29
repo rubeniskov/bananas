@@ -5,10 +5,13 @@
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
-use web_sys::window;
 
 use crate::{
-    AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon,
+    AuthCtx, api,
+    api::ApiError,
+    browse::Browser,
+    components::{ConfirmModal, TextareaWithCopy},
+    icons::Icon,
     permissions::PermissionsModal,
 };
 
@@ -31,6 +34,8 @@ pub fn MountsSection() -> Element {
     // Hide system mounts (/, /proc, /sys, …) from the table by default —
     // they're never editable through the UI and just clutter the view.
     let mut show_protected = use_signal(|| false);
+    // Index of the fstab row pending a delete-confirm. None = closed.
+    let mut pending_delete: Signal<Option<usize>> = use_signal(|| None);
 
     use_effect(move || {
         let _ = tick();
@@ -122,19 +127,7 @@ pub fn MountsSection() -> Element {
                                         let mp = r.mountpoint.clone();
                                         move |_| perms_for.set(Some(mp.clone()))
                                     },
-                                    on_delete: move |idx| {
-                                        if !confirm("Remove this fstab entry? Existing mount will stay until reboot.") { return; }
-                                        spawn(async move {
-                                            match api::delete_fstab(idx).await {
-                                                Ok(()) => {
-                                                    banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
-                                                    tick.set(tick() + 1);
-                                                }
-                                                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                                Err(e) => banner.set(Some((BannerKind::Err, format!("Delete failed: {e}")))),
-                                            }
-                                        });
-                                    }
+                                    on_delete: move |idx: usize| pending_delete.set(Some(idx))
                                 }
                             }
                         }
@@ -171,13 +164,31 @@ pub fn MountsSection() -> Element {
                 }
             }
         }
-    }
-}
 
-fn confirm(msg: &str) -> bool {
-    window()
-        .and_then(|w| w.confirm_with_message(msg).ok())
-        .unwrap_or(false)
+        if let Some(idx) = pending_delete() {
+            ConfirmModal {
+                title: "Remove fstab entry?".to_string(),
+                message: format!("Delete /etc/fstab row #{idx}."),
+                details: "Any currently active mount stays mounted until you unmount it manually or reboot.".to_string(),
+                confirm_label: "Remove entry".to_string(),
+                danger: true,
+                on_cancel: move |_| pending_delete.set(None),
+                on_confirm: move |_| {
+                    pending_delete.set(None);
+                    spawn(async move {
+                        match api::delete_fstab(idx).await {
+                            Ok(()) => {
+                                banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
+                                tick.set(tick() + 1);
+                            }
+                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                            Err(e) => banner.set(Some((BannerKind::Err, format!("Delete failed: {e}")))),
+                        }
+                    });
+                },
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]

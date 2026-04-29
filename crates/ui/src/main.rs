@@ -170,6 +170,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
         cb.forget();
     });
     let mut config_banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
+    let mut reboot_confirm = use_signal(|| false);
 
     let logout = move |_| {
         spawn(async move {
@@ -324,23 +325,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                         class: "ghost",
                         "data-tip": "Soft-reboot the BPI via systemctl. The web UI drops for ~30 s while the system comes back.",
                         disabled: auth_ctx.busy.read().clone(),
-                        onclick: move |_| {
-                            // web_sys confirm prompt — same UX as the
-                            // delete-row buttons, gives the operator
-                            // a "wait, don't" moment before pulling
-                            // the trigger.
-                            let confirm = web_sys::window()
-                                .and_then(|w| w.confirm_with_message("Reboot the BPI now? The web UI will drop for ~30 s.").ok())
-                                .unwrap_or(false);
-                            if !confirm { return; }
-                            spawn(async move {
-                                let _ = api::reboot_system().await;
-                                // Don't bother surfacing a success
-                                // banner — the server is going down
-                                // and the browser will throw a
-                                // connection error any moment.
-                            });
-                        },
+                        onclick: move |_| reboot_confirm.set(true),
                         icons::Icon { name: "power" }
                         "Reboot"
                     }
@@ -386,6 +371,26 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Storage => rsx! { storage::StoragePage {} },
                 Page::Users => rsx! { users::UsersPage {} },
                 Page::Cloud => rsx! { cloud::CloudPage {} },
+            }
+
+            if reboot_confirm() {
+                components::ConfirmModal {
+                    title: "Reboot BanaNAS?".to_string(),
+                    message: "The web UI will drop for ~30 s while systemd reboots the system.".to_string(),
+                    details: "Any in-flight cloud-sync runs will be interrupted; cron will pick the schedule back up after boot.".to_string(),
+                    confirm_label: "Reboot".to_string(),
+                    danger: true,
+                    on_cancel: move |_| reboot_confirm.set(false),
+                    on_confirm: move |_| {
+                        reboot_confirm.set(false);
+                        spawn(async move {
+                            let _ = api::reboot_system().await;
+                            // Don't bother surfacing a success banner —
+                            // the server is going down and the browser
+                            // will throw a connection error any moment.
+                        });
+                    },
+                }
             }
         }
     }

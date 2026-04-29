@@ -21,7 +21,14 @@
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
 
-use crate::{AuthCtx, api, api::ApiError, browse::Browser, icons::Icon};
+use crate::{AuthCtx, api, api::ApiError, browse::Browser, components::ConfirmModal, icons::Icon};
+
+/// Confirm-modal payload for deletes that need a yes/no before firing.
+#[derive(Clone, PartialEq)]
+enum PendingDelete {
+    Account(String),
+    Sync(usize),
+}
 
 #[component]
 pub fn CloudPage() -> Element {
@@ -35,6 +42,7 @@ pub fn CloudPage() -> Element {
     let mut runs_tick = use_signal(|| 0u32);
     let mut account_form: Signal<Option<AccountFormMode>> = use_signal(|| None);
     let mut sync_form: Signal<Option<SyncFormMode>> = use_signal(|| None);
+    let mut pending_delete: Signal<Option<PendingDelete>> = use_signal(|| None);
 
     use_effect(move || {
         let _ = tick();
@@ -88,6 +96,33 @@ pub fn CloudPage() -> Element {
         });
     });
 
+    // Background auto-poll: while any recent run is in the Running state
+    // (cron-fired job, a run started in another tab, or one already
+    // mid-flight when the page mounted), keep refreshing /api/cloud/runs
+    // every 2 s so the live progress + status update without a manual
+    // Refresh click. Stops once the list contains no Running rows.
+    use_effect(move || {
+        let any_running = runs
+            .read()
+            .iter()
+            .any(|j| j.status == api::CloudJobStatus::Running);
+        if !any_running {
+            return;
+        }
+        spawn(async move {
+            TimeoutFuture::new(2000).await;
+            // Re-check inside the spawn so a finish that lands during
+            // the wait doesn't fire one extra fetch.
+            let still_running = runs
+                .read()
+                .iter()
+                .any(|j| j.status == api::CloudJobStatus::Running);
+            if still_running {
+                runs_tick.set(runs_tick() + 1);
+            }
+        });
+    });
+
     rsx! {
         div { class: "section-header",
             h2 { "Cloud accounts" }
@@ -130,19 +165,7 @@ pub fn CloudPage() -> Element {
                             },
                             on_delete: {
                                 let name = a.name.clone();
-                                move |_| {
-                                    let nm = name.clone();
-                                    spawn(async move {
-                                        match api::delete_cloud_account(&nm).await {
-                                            Ok(()) => {
-                                                banner.set(Some((BannerKind::Ok, format!("Removed account {nm}"))));
-                                                tick.set(tick() + 1);
-                                            }
-                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
-                                        }
-                                    });
-                                }
+                                move |_| pending_delete.set(Some(PendingDelete::Account(name.clone())))
                             }
                         }
                     }
@@ -239,18 +262,7 @@ pub fn CloudPage() -> Element {
                             },
                             on_delete: {
                                 let idx = s.idx;
-                                move |_| {
-                                    spawn(async move {
-                                        match api::delete_cloud_sync(idx).await {
-                                            Ok(()) => {
-                                                banner.set(Some((BannerKind::Ok, format!("Removed sync {idx}"))));
-                                                tick.set(tick() + 1);
-                                            }
-                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
-                                        }
-                                    });
-                                }
+                                move |_| pending_delete.set(Some(PendingDelete::Sync(idx)))
                             }
                         }
                     }
@@ -334,6 +346,63 @@ pub fn CloudPage() -> Element {
                 on_unauthorized: move |_| auth_ctx.signal_unauthorized()
             }
         }
+
+        if let Some(pending) = pending_delete() {
+            {
+                let (title, message, details, label) = match &pending {
+                    PendingDelete::Account(name) => (
+                        "Remove account?".to_string(),
+                        format!("Delete cloud account '{name}'."),
+                        "Any sync entries using this account will also be removed.".to_string(),
+                        "Delete account".to_string(),
+                    ),
+                    PendingDelete::Sync(idx) => (
+                        "Remove sync entry?".to_string(),
+                        format!("Delete sync row #{idx}."),
+                        "The next scheduled run is cancelled. The local directory is left untouched.".to_string(),
+                        "Delete entry".to_string(),
+                    ),
+                };
+                rsx! {
+                    ConfirmModal {
+                        title: title,
+                        message: message,
+                        details: details,
+                        confirm_label: label,
+                        danger: true,
+                        on_cancel: move |_| pending_delete.set(None),
+                        on_confirm: move |_| {
+                            let action = pending.clone();
+                            pending_delete.set(None);
+                            spawn(async move {
+                                match action {
+                                    PendingDelete::Account(name) => {
+                                        match api::delete_cloud_account(&name).await {
+                                            Ok(()) => {
+                                                banner.set(Some((BannerKind::Ok, format!("Removed account {name}"))));
+                                                tick.set(tick() + 1);
+                                            }
+                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
+                                        }
+                                    }
+                                    PendingDelete::Sync(idx) => {
+                                        match api::delete_cloud_sync(idx).await {
+                                            Ok(()) => {
+                                                banner.set(Some((BannerKind::Ok, format!("Removed sync {idx}"))));
+                                                tick.set(tick() + 1);
+                                            }
+                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
+                                        }
+                                    }
+                                }
+                            });
+                        },
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -394,22 +463,12 @@ fn AccountRow(props: AccountRowProps) -> Element {
                 button {
                     class: "btn-icon delete",
                     "data-tip": "Remove this account (and any sync entries pointing at it).",
-                    onclick: move |_| {
-                        if web_sys_confirm("Remove this account? Any sync entries using it will also be removed.") {
-                            props.on_delete.call(());
-                        }
-                    },
+                    onclick: move |_| props.on_delete.call(()),
                     Icon { name: "trash-2" }
                 }
             }
         }
     }
-}
-
-fn web_sys_confirm(msg: &str) -> bool {
-    web_sys::window()
-        .and_then(|w| w.confirm_with_message(msg).ok())
-        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------- Sync row
@@ -453,11 +512,7 @@ fn SyncRow(props: SyncRowProps) -> Element {
                 button {
                     class: "btn-icon delete",
                     "data-tip": "Remove this sync entry",
-                    onclick: move |_| {
-                        if web_sys_confirm("Remove this sync entry?") {
-                            props.on_delete.call(());
-                        }
-                    },
+                    onclick: move |_| props.on_delete.call(()),
                     Icon { name: "trash-2" }
                 }
             }

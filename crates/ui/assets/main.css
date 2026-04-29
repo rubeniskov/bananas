@@ -947,6 +947,48 @@ textarea {
   border-top: 1px solid var(--line);
 }
 
+/* Confirm modal — narrower than the directory picker, header icon
+ * inline with the title, danger CTA paints the confirm button red. */
+.modal.confirm-modal { width: min(440px, 92vw); }
+.modal.confirm-modal .modal-header h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal.confirm-modal .confirm-icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+.modal.confirm-modal .confirm-icon .lucide { width: 18px; height: 18px; }
+.modal.confirm-modal .modal-body.confirm-body {
+  padding: 1.1em 1.2em;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.modal.confirm-modal .confirm-message { margin: 0; }
+.modal.confirm-modal .confirm-details {
+  margin: .6em 0 0;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+/* Danger variant: confirm CTA inherits the .btn-icon.delete fill but
+ * stretches like a normal button (not a square icon-only). */
+.modal.confirm-modal button.confirm-cta {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+  font-weight: 600;
+  width: auto;
+  height: auto;
+  padding: 6px 14px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+.modal.confirm-modal button.confirm-cta:hover { filter: brightness(1.05); }
+/* Danger header swaps the icon tint to red so the eye lands on it. */
+.modal.confirm-modal .confirm-icon.danger { color: var(--danger); }
+
 .breadcrumb {
   display: flex;
   flex-wrap: wrap;

@@ -8,9 +8,16 @@
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
-use web_sys::window;
 
-use crate::{AuthCtx, api, api::ApiError, icons::Icon};
+use crate::{AuthCtx, api, api::ApiError, components::ConfirmModal, icons::Icon};
+
+/// Pending confirm for a user action — either deleting the account or
+/// toggling its admin flag (`bool` is the new desired admin state).
+#[derive(Clone, PartialEq)]
+enum PendingUserAction {
+    Delete(String),
+    ToggleAdmin { name: String, admin: bool },
+}
 
 #[component]
 pub fn UsersPage() -> Element {
@@ -22,6 +29,7 @@ pub fn UsersPage() -> Element {
     let mut add_open = use_signal(|| false);
     let mut pw_for: Signal<Option<String>> = use_signal(|| None);
     let mut tick = use_signal(|| 0u32);
+    let mut pending: Signal<Option<PendingUserAction>> = use_signal(|| None);
 
     use_effect(move || {
         let _ = tick();
@@ -109,44 +117,18 @@ pub fn UsersPage() -> Element {
                             on_delete: {
                                 let name = u.name.clone();
                                 move |_| {
-                                    if !confirm(&format!("Delete user {} and home directory?", name)) {
-                                        return;
-                                    }
-                                    let n = name.clone();
-                                    spawn(async move {
-                                        match api::delete_user(&n).await {
-                                            Ok(()) => {
-                                                info.set(Some(format!("Deleted user {n}")));
-                                                tick.set(tick() + 1);
-                                            }
-                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                            Err(e) => error.set(Some(e.to_string())),
-                                        }
-                                    });
+                                    clear_messages();
+                                    pending.set(Some(PendingUserAction::Delete(name.clone())));
                                 }
                             },
                             on_toggle_admin: {
                                 let name = u.name.clone();
                                 move |admin: bool| {
                                     clear_messages();
-                                    let verb = if admin { "Grant" } else { "Revoke" };
-                                    if !confirm(&format!("{verb} BanaNAS admin access for {name}?")) {
-                                        return;
-                                    }
-                                    let n = name.clone();
-                                    spawn(async move {
-                                        match api::set_user_admin(&n, admin).await {
-                                            Ok(()) => {
-                                                info.set(Some(format!(
-                                                    "{n} is {} an admin",
-                                                    if admin { "now" } else { "no longer" }
-                                                )));
-                                                tick.set(tick() + 1);
-                                            }
-                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                            Err(e) => error.set(Some(e.to_string())),
-                                        }
-                                    });
+                                    pending.set(Some(PendingUserAction::ToggleAdmin {
+                                        name: name.clone(),
+                                        admin,
+                                    }));
                                 }
                             }
                         }
@@ -180,13 +162,76 @@ pub fn UsersPage() -> Element {
                 on_unauthorized: move |_| auth_ctx.signal_unauthorized()
             }
         }
-    }
-}
 
-fn confirm(msg: &str) -> bool {
-    window()
-        .and_then(|w| w.confirm_with_message(msg).ok())
-        .unwrap_or(false)
+        if let Some(action) = pending() {
+            {
+                let (title, message, details, label, danger) = match &action {
+                    PendingUserAction::Delete(name) => (
+                        "Delete user?".to_string(),
+                        format!("Remove account '{name}' and its home directory."),
+                        "Active SSH sessions are not closed; future logins are blocked.".to_string(),
+                        "Delete user".to_string(),
+                        true,
+                    ),
+                    PendingUserAction::ToggleAdmin { name, admin } => {
+                        let (verb, label) = if *admin {
+                            ("Grant", "Grant admin")
+                        } else {
+                            ("Revoke", "Revoke admin")
+                        };
+                        (
+                            format!("{verb} admin access?"),
+                            format!("{verb} BanaNAS admin access for {name}."),
+                            "Admins can edit exports, mounts, users, and trigger reboots.".to_string(),
+                            label.to_string(),
+                            !*admin,
+                        )
+                    }
+                };
+                rsx! {
+                    ConfirmModal {
+                        title: title,
+                        message: message,
+                        details: details,
+                        confirm_label: label,
+                        danger: danger,
+                        on_cancel: move |_| pending.set(None),
+                        on_confirm: move |_| {
+                            let action = action.clone();
+                            pending.set(None);
+                            spawn(async move {
+                                match action {
+                                    PendingUserAction::Delete(name) => {
+                                        match api::delete_user(&name).await {
+                                            Ok(()) => {
+                                                info.set(Some(format!("Deleted user {name}")));
+                                                tick.set(tick() + 1);
+                                            }
+                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                            Err(e) => error.set(Some(e.to_string())),
+                                        }
+                                    }
+                                    PendingUserAction::ToggleAdmin { name, admin } => {
+                                        match api::set_user_admin(&name, admin).await {
+                                            Ok(()) => {
+                                                info.set(Some(format!(
+                                                    "{name} is {} an admin",
+                                                    if admin { "now" } else { "no longer" }
+                                                )));
+                                                tick.set(tick() + 1);
+                                            }
+                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                            Err(e) => error.set(Some(e.to_string())),
+                                        }
+                                    }
+                                }
+                            });
+                        },
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Props, Clone, PartialEq)]

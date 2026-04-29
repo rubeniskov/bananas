@@ -85,6 +85,91 @@ async fn write_clipboard(text: &str) -> Result<(), String> {
         .map_err(|e| format!("{e:?}"))
 }
 
+/// In-app confirmation modal — replaces `window.confirm()` so destructive
+/// actions get a styled dialog that matches the rest of the UI. Title,
+/// message, optional details block, customisable button labels, and a
+/// danger variant that paints the confirm button red.
+#[derive(Props, Clone, PartialEq)]
+pub struct ConfirmModalProps {
+    pub title: String,
+    pub message: String,
+    /// Optional smaller-print follow-up under the main message — useful
+    /// for "this also removes X" warnings.
+    #[props(default = String::new())]
+    pub details: String,
+    #[props(default = "Confirm".to_string())]
+    pub confirm_label: String,
+    #[props(default = "Cancel".to_string())]
+    pub cancel_label: String,
+    #[props(default = false)]
+    pub danger: bool,
+    pub on_confirm: EventHandler<()>,
+    pub on_cancel: EventHandler<()>,
+}
+
+#[component]
+pub fn ConfirmModal(props: ConfirmModalProps) -> Element {
+    let confirm_class = if props.danger {
+        "btn-icon delete confirm-cta"
+    } else {
+        "primary"
+    };
+    let icon_name = if props.danger {
+        "triangle-alert"
+    } else {
+        "circle-check"
+    };
+    let icon_class = if props.danger {
+        "confirm-icon danger"
+    } else {
+        "confirm-icon"
+    };
+    rsx! {
+        div { class: "modal-overlay", onclick: move |_| props.on_cancel.call(()),
+            div {
+                class: "modal confirm-modal",
+                onclick: move |e| e.stop_propagation(),
+                onkeydown: move |e| {
+                    let key = e.key().to_string();
+                    if key == "Escape" { props.on_cancel.call(()); }
+                    else if key == "Enter" { props.on_confirm.call(()); }
+                },
+                tabindex: "-1",
+                div { class: "modal-header",
+                    h3 {
+                        span { class: "{icon_class}", Icon { name: icon_name } }
+                        "{props.title}"
+                    }
+                    button {
+                        class: "ghost",
+                        "data-tip": "Cancel",
+                        onclick: move |_| props.on_cancel.call(()),
+                        Icon { name: "x" }
+                    }
+                }
+                div { class: "modal-body confirm-body",
+                    p { class: "confirm-message", "{props.message}" }
+                    if !props.details.is_empty() {
+                        p { class: "confirm-details", "{props.details}" }
+                    }
+                }
+                div { class: "modal-footer",
+                    button {
+                        onclick: move |_| props.on_cancel.call(()),
+                        "{props.cancel_label}"
+                    }
+                    button {
+                        class: "{confirm_class}",
+                        autofocus: true,
+                        onclick: move |_| props.on_confirm.call(()),
+                        "{props.confirm_label}"
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Shared indeterminate spinner — same SVG construction as the
 /// determinate `CircularProgress` in cloud.rs but always renders the
 /// rotating quarter-arc form. Intended for whole-page busy overlays

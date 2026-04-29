@@ -8,8 +8,13 @@
 use dioxus::prelude::*;
 
 use crate::{
-    AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon,
-    nfs_help, permissions::PermissionsModal,
+    AuthCtx, api,
+    api::ApiError,
+    browse::Browser,
+    components::{ConfirmModal, TextareaWithCopy},
+    icons::Icon,
+    nfs_help,
+    permissions::PermissionsModal,
 };
 
 /// What the form modal is currently doing — None means closed; Some
@@ -31,6 +36,8 @@ pub fn ExportsPage() -> Element {
     let mut form_mode: Signal<Option<FormMode>> = use_signal(|| None);
     // Path the per-row Permissions modal is editing. None = closed.
     let mut perms_for: Signal<Option<String>> = use_signal(|| None);
+    // Index of the export row pending a delete-confirm. None = closed.
+    let mut pending_delete: Signal<Option<usize>> = use_signal(|| None);
 
     use_effect(move || {
         let _ = reload_tick();
@@ -102,18 +109,7 @@ pub fn ExportsPage() -> Element {
                                 let path = row.path.clone();
                                 move |_| perms_for.set(Some(path.clone()))
                             },
-                            on_delete: move |idx| {
-                                spawn(async move {
-                                    match api::delete_export(idx).await {
-                                        Ok(()) => {
-                                            banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
-                                            reload_tick.set(reload_tick() + 1);
-                                        }
-                                        Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                        Err(err) => banner.set(Some((BannerKind::Err, format!("Delete failed: {err}")))),
-                                    }
-                                });
-                            }
+                            on_delete: move |idx: usize| pending_delete.set(Some(idx))
                         }
                     }
                 }
@@ -146,6 +142,30 @@ pub fn ExportsPage() -> Element {
                     perms_for.set(None);
                     banner.set(Some((BannerKind::Ok, "Permissions updated".into())));
                 }
+            }
+        }
+
+        if let Some(idx) = pending_delete() {
+            ConfirmModal {
+                title: "Delete export?".to_string(),
+                message: format!("Remove NFS export row #{idx} from /etc/exports."),
+                details: "Existing client mounts will be cut on the next exportfs sync.".to_string(),
+                confirm_label: "Delete export".to_string(),
+                danger: true,
+                on_cancel: move |_| pending_delete.set(None),
+                on_confirm: move |_| {
+                    pending_delete.set(None);
+                    spawn(async move {
+                        match api::delete_export(idx).await {
+                            Ok(()) => {
+                                banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
+                                reload_tick.set(reload_tick() + 1);
+                            }
+                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                            Err(err) => banner.set(Some((BannerKind::Err, format!("Delete failed: {err}")))),
+                        }
+                    });
+                },
             }
         }
     }
@@ -198,22 +218,12 @@ fn ExportRowView(props: ExportRowViewProps) -> Element {
                 button {
                     class: "btn-icon delete",
                     "data-tip": "Delete this export",
-                    onclick: move |_| {
-                        if web_sys_confirm("Delete this export?") {
-                            props.on_delete.call(idx);
-                        }
-                    },
+                    onclick: move |_| props.on_delete.call(idx),
                     Icon { name: "trash-2" }
                 }
             }
         }
     }
-}
-
-fn web_sys_confirm(msg: &str) -> bool {
-    web_sys::window()
-        .and_then(|w| w.confirm_with_message(msg).ok())
-        .unwrap_or(true)
 }
 
 #[derive(Props, Clone, PartialEq)]
