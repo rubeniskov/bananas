@@ -1,9 +1,12 @@
-//! Parse `/etc/exports` (NFS server export table).
+//! Parse / render `/etc/exports` (NFS server export table).
 //!
 //! Format (man 5 exports):
 //!   /path        client(opt1,opt2) client2(opt3)
 //!   "/path with spaces"  *(rw,sync)
 //! Lines starting with `#` and blank lines are ignored.
+//!
+//! For the UI we operate on flat (path, host, options) rows. One row per
+//! (path, client) pair — multi-client lines parse into multiple rows.
 
 #[derive(Debug, Clone)]
 pub struct Export {
@@ -13,6 +16,13 @@ pub struct Export {
 
 #[derive(Debug, Clone)]
 pub struct Client {
+    pub host: String,
+    pub options: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub path: String,
     pub host: String,
     pub options: String,
 }
@@ -28,6 +38,137 @@ pub fn parse(input: &str) -> Vec<Export> {
             parse_line(line)
         })
         .collect()
+}
+
+pub fn rows(input: &str) -> Vec<Row> {
+    parse(input)
+        .into_iter()
+        .flat_map(|e| {
+            e.clients.into_iter().map(move |c| Row {
+                path: e.path.clone(),
+                host: c.host,
+                options: c.options,
+            })
+        })
+        .collect()
+}
+
+pub fn serialize(rows: &[Row]) -> String {
+    rows.iter()
+        .map(|r| {
+            let path = if r.path.contains(char::is_whitespace) {
+                format!("\"{}\"", r.path)
+            } else {
+                r.path.clone()
+            };
+            if r.options.is_empty() {
+                format!("{} {}\n", path, r.host)
+            } else {
+                format!("{} {}({})\n", path, r.host, r.options)
+            }
+        })
+        .collect()
+}
+
+/// Structured view of an export's options. We keep an `extra` bucket for
+/// anything we don't have a checkbox for so round-trips don't drop unknown
+/// flags.
+#[derive(Debug, Clone, Default)]
+pub struct Opts {
+    pub rw: bool,             // rw vs ro
+    pub sync: bool,           // sync vs async
+    pub no_subtree_check: bool,
+    pub squash: Squash,
+    pub anonuid: Option<u32>,
+    pub anongid: Option<u32>,
+    pub insecure: bool,
+    /// Tokens we don't know how to render as checkboxes, preserved verbatim.
+    pub extra: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Squash {
+    NoRootSquash,
+    RootSquash,
+    #[default]
+    AllSquash,
+}
+
+impl Squash {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Squash::NoRootSquash => "no_root_squash",
+            Squash::RootSquash => "root_squash",
+            Squash::AllSquash => "all_squash",
+        }
+    }
+
+    pub fn from_form(s: &str) -> Self {
+        match s {
+            "no_root_squash" => Squash::NoRootSquash,
+            "root_squash" => Squash::RootSquash,
+            _ => Squash::AllSquash,
+        }
+    }
+}
+
+impl Opts {
+    /// Parse a comma-joined options string ("rw,sync,no_subtree_check,...").
+    pub fn parse(input: &str) -> Self {
+        let mut o = Opts::default();
+        // Default for ro vs rw is unset; track if we saw anything explicit.
+        let mut saw_access = false;
+        let mut saw_sync = false;
+        for tok in input.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match tok {
+                "rw" => { o.rw = true; saw_access = true; }
+                "ro" => { o.rw = false; saw_access = true; }
+                "sync" => { o.sync = true; saw_sync = true; }
+                "async" => { o.sync = false; saw_sync = true; }
+                "no_subtree_check" => o.no_subtree_check = true,
+                "subtree_check" => o.no_subtree_check = false,
+                "no_root_squash" => o.squash = Squash::NoRootSquash,
+                "root_squash" => o.squash = Squash::RootSquash,
+                "all_squash" => o.squash = Squash::AllSquash,
+                "insecure" => o.insecure = true,
+                "secure" => o.insecure = false,
+                t if t.starts_with("anonuid=") => {
+                    o.anonuid = t["anonuid=".len()..].parse().ok();
+                }
+                t if t.starts_with("anongid=") => {
+                    o.anongid = t["anongid=".len()..].parse().ok();
+                }
+                other => o.extra.push(other.to_string()),
+            }
+        }
+        // NFS man-page defaults: `ro` and `sync` if unset. Match those.
+        if !saw_access { o.rw = false; }
+        if !saw_sync { o.sync = true; }
+        o
+    }
+
+    pub fn to_options_string(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        parts.push(if self.rw { "rw".into() } else { "ro".into() });
+        parts.push(if self.sync { "sync".into() } else { "async".into() });
+        if self.no_subtree_check {
+            parts.push("no_subtree_check".into());
+        }
+        parts.push(self.squash.as_str().into());
+        if let Some(uid) = self.anonuid {
+            parts.push(format!("anonuid={}", uid));
+        }
+        if let Some(gid) = self.anongid {
+            parts.push(format!("anongid={}", gid));
+        }
+        if self.insecure {
+            parts.push("insecure".into());
+        }
+        for x in &self.extra {
+            parts.push(x.clone());
+        }
+        parts.join(",")
+    }
 }
 
 fn parse_line(line: &str) -> Option<Export> {
@@ -127,5 +268,56 @@ mod tests {
         assert_eq!(parsed[0].clients.len(), 2);
         assert_eq!(parsed[0].clients[0].host, "host1");
         assert!(parsed[0].clients[0].options.is_empty());
+    }
+
+    #[test]
+    fn flatten_rows() {
+        let r = rows("/a 1.1.1.1(rw) 2.2.2.2(ro)\n/b 3.3.3.3");
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].path, "/a");
+        assert_eq!(r[0].host, "1.1.1.1");
+        assert_eq!(r[1].host, "2.2.2.2");
+        assert_eq!(r[2].path, "/b");
+        assert!(r[2].options.is_empty());
+    }
+
+    #[test]
+    fn round_trip_serialize() {
+        let r = rows("/a 1.1.1.1(rw,sync)");
+        let out = serialize(&r);
+        assert_eq!(out, "/a 1.1.1.1(rw,sync)\n");
+    }
+
+    #[test]
+    fn opts_defaults() {
+        let o = Opts::parse("");
+        assert!(!o.rw);
+        assert!(o.sync);
+        assert_eq!(o.squash, Squash::AllSquash);
+    }
+
+    #[test]
+    fn opts_full_round_trip() {
+        let s = "rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000,insecure";
+        let o = Opts::parse(s);
+        assert!(o.rw);
+        assert!(o.sync);
+        assert!(o.no_subtree_check);
+        assert_eq!(o.squash, Squash::AllSquash);
+        assert_eq!(o.anonuid, Some(1000));
+        assert_eq!(o.anongid, Some(1000));
+        assert!(o.insecure);
+        assert_eq!(o.to_options_string(), s);
+    }
+
+    #[test]
+    fn opts_preserves_unknown() {
+        let o = Opts::parse("rw,fsid=0,nohide");
+        assert!(o.rw);
+        assert!(o.extra.contains(&"fsid=0".to_string()));
+        assert!(o.extra.contains(&"nohide".to_string()));
+        let back = o.to_options_string();
+        assert!(back.contains("fsid=0"));
+        assert!(back.contains("nohide"));
     }
 }
