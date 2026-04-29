@@ -75,6 +75,44 @@ cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v dx >/dev/null || carg
 [tasks.setup-cross]
 cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v cross >/dev/null || cargo install cross --locked'"
 
+# `setup-rclone-arm`: one-shot download of the upstream rclone armv7
+# binary into serve/bin/rclone. rclone is a Go binary published as a
+# static cross-compiled release at downloads.rclone.org — no Yocto
+# go-builder needed. Cached after the first run; bumping the pinned
+# version below forces a re-download.
+#
+# We pin the version to keep the bake reproducible. SHA256 verifies the
+# zip *before* we trust the binary it contains.
+[tasks.setup-rclone-arm]
+cmd = """bash -c '
+set -e
+RCLONE_VERSION=v1.68.2
+EXPECTED_SHA=a244cc4d75abf10af576c0a4161fbe454c129658358ba2e6e27c9e97639ff0fb
+ARCHIVE=rclone-${RCLONE_VERSION}-linux-arm.zip
+URL=https://downloads.rclone.org/${RCLONE_VERSION}/${ARCHIVE}
+DEST=serve/bin
+if [ -x "$DEST/rclone" ]; then
+  # Re-check version so a pinned-version bump triggers a re-download.
+  CURRENT=$("$DEST/rclone" version 2>/dev/null | head -1 | awk "{print \\$2}")
+  if [ "$CURRENT" = "$RCLONE_VERSION" ]; then exit 0; fi
+fi
+mkdir -p "$DEST"
+TMP=$(mktemp -d)
+trap "rm -rf $TMP" EXIT
+echo "Downloading rclone $RCLONE_VERSION (linux-arm)..."
+curl -fSL "$URL" -o "$TMP/$ARCHIVE"
+GOT_SHA=$(sha256sum "$TMP/$ARCHIVE" | awk "{print \\$1}")
+if [ "$GOT_SHA" != "$EXPECTED_SHA" ]; then
+  echo "ERROR: rclone archive sha256 mismatch:" >&2
+  echo "  expected: $EXPECTED_SHA" >&2
+  echo "  got:      $GOT_SHA" >&2
+  exit 1
+fi
+unzip -j "$TMP/$ARCHIVE" "*/rclone" -d "$DEST"
+chmod +x "$DEST/rclone"
+echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
+'"""
+
 # `build-ui`: compile crates/ui to wasm via dioxus-cli (`dx build --release`).
 # Output lands in target/dx/bananas-ui/release/web/public/ (index.html, wasm/,
 # assets/, …). Staged into serve/ui/ AND packed into serve/bin/bananas-ui.tar.gz
@@ -199,7 +237,7 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
 # now-correctly-staged servers. No buttons, no SD writes, no wedge.
 [tasks.iterate]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-ui && pixi run build-server-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-ui && pixi run build-server-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
 [dependencies]
 python = "==3.11"

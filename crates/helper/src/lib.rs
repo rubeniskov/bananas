@@ -106,6 +106,12 @@ pub enum Command {
     /// then `systemctl restart <unit>` so the new config takes effect.
     /// `name` is allowlisted, same as ReadServiceConfig.
     WriteServiceConfig { name: String, content: String },
+    /// Run a single cloud sync entry by index. The helper reads
+    /// /etc/bananas/cloud.toml, looks up the entry + its account, and
+    /// invokes rclone with the right env (no on-disk rclone.conf — the
+    /// account token never hits disk for the duration of the run).
+    /// `output` carries combined stdout+stderr from rclone.
+    RunCloudSync { idx: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

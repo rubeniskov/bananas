@@ -999,10 +999,24 @@ pub async fn delete_cloud_sync(idx: usize) -> Result<(), ApiError> {
     helper_status(resp).await
 }
 
-pub async fn run_cloud_sync(idx: usize) -> Result<(), ApiError> {
+pub async fn run_cloud_sync(idx: usize) -> Result<String, ApiError> {
+    // Synchronous call — server forwards to helper, helper invokes
+    // rclone and waits for it to finish. Big trees can take a while;
+    // gloo-net's default timeout is generous (no client-side limit).
     let resp = Request::post(&format!("/api/cloud/syncs/{idx}/run"))
         .send().await.map_err(|e| ApiError::Other(e.to_string()))?;
-    helper_status(resp).await
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    let txt = resp.text().await.map_err(|e| ApiError::Other(e.to_string()))?;
+    let body: serde_json::Value = serde_json::from_str(&txt)
+        .unwrap_or_else(|_| serde_json::json!({ "ok": false, "error": txt }));
+    if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(body.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string())
+    } else {
+        let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("rclone failed").to_string();
+        Err(ApiError::Other(msg))
+    }
 }
 
 fn urlencode(s: &str) -> String {

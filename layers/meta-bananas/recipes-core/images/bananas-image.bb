@@ -172,6 +172,13 @@ IMAGE_INSTALL += " \
     bananas-modprobe \
 "
 
+# Cloud sync runtime: ships /usr/bin/rclone (vendored prebuilt armv7
+# binary). Pulled by the helper's RunCloudSync command when the operator
+# clicks "Run now" in the Cloud tab.
+IMAGE_INSTALL += " \
+    bananas-rclone \
+"
+
 # LCD dashboard (Slint app on /dev/fb0 via DRM/KMS). Pulls bananas-stats
 # + the runtime libs (fontconfig + udev + xkbcommon + libinput) in as
 # RDEPENDS via the recipe. Software renderer only — no Mali GPU path,

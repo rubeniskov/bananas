@@ -162,6 +162,10 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
                 Err(e) => Response::err(e.to_string(), String::new()),
             }
         }
+        Command::RunCloudSync { idx } => match run_cloud_sync(idx).await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -751,6 +755,24 @@ fn lookup_user(uid: u32) -> Option<String> {
     None
 }
 
+/// Forward lookup: name → (uid, gid). Used by run_cloud_sync to
+/// drop privileges from root → `bananas` before exec'ing rclone, so
+/// files written under /srv/* end up bananas-owned.
+fn lookup_uid_gid(name: &str) -> Option<(u32, u32)> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in passwd.lines() {
+        let mut fields = line.splitn(7, ':');
+        let entry_name = fields.next()?;
+        let _ = fields.next()?;
+        let uid: u32 = fields.next()?.parse().ok()?;
+        let gid: u32 = fields.next()?.parse().ok()?;
+        if entry_name == name {
+            return Some((uid, gid));
+        }
+    }
+    None
+}
+
 fn lookup_group_name(gid: u32) -> Option<String> {
     let group = std::fs::read_to_string("/etc/group").ok()?;
     for line in group.lines() {
@@ -892,6 +914,160 @@ async fn systemd_daemon_reload() -> Result<String> {
             "systemctl daemon-reload failed (status {}): {combined}",
             out.status
         );
+    }
+    Ok(combined)
+}
+
+async fn run_cloud_sync(idx: usize) -> Result<String> {
+    // Read cloud.toml fresh — the user might have edited entries via
+    // the API just before triggering the run.
+    let raw = match tokio::fs::read_to_string("/etc/bananas/cloud.toml").await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("/etc/bananas/cloud.toml does not exist (no accounts configured)");
+        }
+        Err(e) => return Err(e).context("reading /etc/bananas/cloud.toml"),
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Cfg {
+        #[serde(default)]
+        accounts: Vec<Account>,
+        #[serde(default)]
+        syncs: Vec<SyncEntry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Account {
+        name: String,
+        provider: String,
+        #[serde(default)]
+        token: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct SyncEntry {
+        account: String,
+        local_path: String,
+        remote_path: String,
+        #[serde(default)]
+        direction: String,
+        #[serde(default)]
+        schedule: String,
+    }
+
+    let cfg: Cfg =
+        toml::from_str(&raw).context("parsing /etc/bananas/cloud.toml")?;
+    let entry = cfg
+        .syncs
+        .get(idx)
+        .ok_or_else(|| anyhow::anyhow!("sync entry {idx} not found"))?;
+    let account = cfg
+        .accounts
+        .iter()
+        .find(|a| a.name == entry.account)
+        .ok_or_else(|| {
+            anyhow::anyhow!("sync entry references missing account {:?}", entry.account)
+        })?;
+
+    if account.token.trim().is_empty() {
+        anyhow::bail!(
+            "account {:?} has no token configured — paste an `rclone authorize \"{}\"` token through the Cloud tab first",
+            account.name,
+            account.provider
+        );
+    }
+
+    // Map our provider key to rclone's `type` value.
+    let rclone_type = match account.provider.as_str() {
+        "google_drive" => "drive",
+        "dropbox" => "dropbox",
+        "onedrive" => "onedrive",
+        "s3" => "s3",
+        "webdav" => "webdav",
+        "ftp" => "ftp",
+        other => anyhow::bail!("unsupported provider {other:?} for rclone runtime"),
+    };
+
+    // `rclone copy <local> <remote>:<path>` for push,
+    // `rclone copy <remote>:<path> <local>` for pull,
+    // `rclone bisync <local> <remote>:<path>` for bidirectional.
+    // bisync needs an initial `--resync` on first run; we pass it
+    // unconditionally so first-time sync entries don't fail with
+    // "first run needs --resync".
+    let direction = if entry.direction.is_empty() {
+        "push"
+    } else {
+        entry.direction.as_str()
+    };
+    let remote_arg = format!("{}:{}", account.name, entry.remote_path);
+
+    // Drop privileges from root → bananas so synced files end up
+    // owned by the right user (and rclone can't accidentally read /
+    // overwrite root-only paths). Falls back to running as root with
+    // a warning if the user is missing — should never happen on the
+    // BPI image since the bananas-server recipe creates it via USERADD.
+    let bananas = lookup_uid_gid("bananas");
+    if bananas.is_none() {
+        tracing::warn!("`bananas` user missing from /etc/passwd; rclone will run as root");
+    }
+
+    let mut cmd = TokioCommand::new("rclone");
+    cmd.env_clear();
+    if let Some((uid, gid)) = bananas {
+        cmd.uid(uid);
+        cmd.gid(gid);
+        cmd.env("HOME", format!("/home/{}", "bananas"));
+        cmd.env("USER", "bananas");
+    }
+    // Preserve PATH so rclone can find /bin tools it might shell out
+    // to. systemd's environment for the helper unit already provides
+    // this; we just don't want our env_clear to nuke it.
+    if let Ok(path) = std::env::var("PATH") {
+        cmd.env("PATH", path);
+    }
+    // Tell rclone to use a temporary in-memory config — no on-disk
+    // rclone.conf with the token.
+    cmd.env("RCLONE_CONFIG", "/dev/null");
+    // Per-remote env-var-style config. rclone reads
+    // RCLONE_CONFIG_<NAME>_<KEY> at runtime; the underscore-uppercase
+    // mangling matches the docs.
+    let env_prefix = format!("RCLONE_CONFIG_{}", account.name.to_uppercase());
+    cmd.env(format!("{env_prefix}_TYPE"), rclone_type);
+    cmd.env(format!("{env_prefix}_TOKEN"), &account.token);
+
+    match direction {
+        "push" => {
+            cmd.args(["copy", &entry.local_path, &remote_arg, "--progress"]);
+        }
+        "pull" => {
+            cmd.args(["copy", &remote_arg, &entry.local_path, "--progress"]);
+        }
+        "bidirectional" | "bisync" => {
+            cmd.args([
+                "bisync",
+                &entry.local_path,
+                &remote_arg,
+                "--resync",
+                "--progress",
+            ]);
+        }
+        other => anyhow::bail!("unknown direction {other:?}"),
+    }
+
+    let _ = entry.schedule; // honored by an external timer, not here
+
+    let out = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .context("spawning rclone")?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        anyhow::bail!("rclone exited with {}: {}", out.status, combined);
     }
     Ok(combined)
 }

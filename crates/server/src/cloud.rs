@@ -360,15 +360,22 @@ pub async fn delete_sync(
 }
 
 pub async fn run_sync(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AxumPath(idx): AxumPath<usize>,
 ) -> Response {
-    // Sync engine (rclone) lands in a follow-up commit. For now,
-    // surface a clear "not yet implemented" so the UI can disable the
-    // button while presenting the operator with the right message.
-    let _ = idx;
-    err(
-        StatusCode::NOT_IMPLEMENTED,
-        "Sync engine not yet wired — config persists, run-on-demand will arrive with the rclone integration.",
-    )
+    let cmd = Command::RunCloudSync { idx };
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse { ok: true, output, .. }) => {
+            Json(json!({ "ok": true, "output": output })).into_response()
+        }
+        Ok(HelperResponse { error, output, .. }) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{}\n\n{}",
+                error.unwrap_or_else(|| "rclone failed".into()),
+                output
+            ),
+        ),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")),
+    }
 }

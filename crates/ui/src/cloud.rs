@@ -154,9 +154,18 @@ pub fn CloudPage() -> Element {
                             on_run: {
                                 let idx = s.idx;
                                 move |_| {
+                                    banner.set(Some((BannerKind::Ok, format!("Syncing row {idx}… (browser may take a while on large trees)"))));
                                     spawn(async move {
                                         match api::run_cloud_sync(idx).await {
-                                            Ok(()) => banner.set(Some((BannerKind::Ok, "Sync started.".into()))),
+                                            Ok(output) => {
+                                                let summary = if output.trim().is_empty() {
+                                                    "Sync complete.".to_string()
+                                                } else {
+                                                    let last_line = output.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("Sync complete.");
+                                                    format!("Sync complete. {last_line}")
+                                                };
+                                                banner.set(Some((BannerKind::Ok, summary)));
+                                            }
                                             Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
                                             Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
                                         }
