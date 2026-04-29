@@ -927,3 +927,27 @@ textarea {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+/* ───────── Recent-runs row layout ───────── */
+/* Label cell holds the text on the left, the live progress + cancel
+ * button hugging the right edge. flex with `justify-content: space-between`
+ * keeps the right side stable as the percentage ticks up. */
+.label-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.label-cell .label-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.label-cell .run-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}

@@ -199,6 +199,10 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::CancelCloudSync { idx } => match cancel_cloud_sync(idx).await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -1562,6 +1566,14 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
         .spawn()
         .context("spawning rclone")?;
 
+    // Record the PID so the operator can hit Cancel from the UI.
+    // Cancel reads `/run/bananas/sync-progress/<idx>.pid` and SIGTERMs;
+    // see `cancel_cloud_sync` below.
+    let pid_path = sync_pid_path(idx);
+    if let Some(pid) = child.id() {
+        let _ = fs::write(&pid_path, pid.to_string()).await;
+    }
+
     let stdout = child.stdout.take().expect("piped");
     let stderr = child.stderr.take().expect("piped");
 
@@ -1596,11 +1608,13 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     let status = child.wait().await.context("waiting on rclone")?;
     let stdout_capture = stdout_task.await.unwrap_or_default();
     let stderr_capture = stderr_task.await.unwrap_or_default();
-    // Done, regardless of outcome — the file is the "live progress"
-    // contract. After the job finishes the JobManager surfaces
-    // success/failure via `status`, and a stale 99% would just be
-    // confusing.
+    // Done, regardless of outcome — the progress + pid files are the
+    // "live state" contract. After the job finishes the JobManager
+    // surfaces success/failure via `status`, and a stale 99% / lingering
+    // pid would just be confusing or block a Cancel against the next
+    // run.
     let _ = tokio::fs::remove_file(&progress_path).await;
+    let _ = tokio::fs::remove_file(&pid_path).await;
 
     let combined = format!("{stdout_capture}{stderr_capture}");
     if !status.success() {
@@ -1635,6 +1649,55 @@ fn parse_rclone_progress(line: &str) -> Option<u32> {
 /// declaration creates `/run/bananas` for us.
 fn sync_progress_path(idx: usize) -> std::path::PathBuf {
     std::path::PathBuf::from(format!("/run/bananas/sync-progress/{idx}.progress"))
+}
+
+/// Sibling of the progress file: holds the rclone child PID while the
+/// run is in flight so the Cancel button has something to target.
+fn sync_pid_path(idx: usize) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/run/bananas/sync-progress/{idx}.pid"))
+}
+
+/// Cancel the in-flight rclone for `idx` by sending SIGTERM to the PID
+/// the run task wrote into `<idx>.pid`. SIGTERM lets rclone close
+/// open transfers cleanly; if it doesn't exit within ~5 s the OS sends
+/// SIGKILL (handled by the Drop on the spawned process). Returns a
+/// human-readable status line for the apply banner.
+async fn cancel_cloud_sync(idx: usize) -> Result<String> {
+    let pid_path = sync_pid_path(idx);
+    let pid_str = match fs::read_to_string(&pid_path).await {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => {
+            return Ok(format!("no live PID for sync {idx} (already finished?)"));
+        }
+    };
+    let pid: i32 = pid_str
+        .parse()
+        .with_context(|| format!("parsing pid {pid_str:?} from {}", pid_path.display()))?;
+
+    // SIGTERM = 15. We avoid the `nix` crate dependency and just shell
+    // out to /bin/kill — same gate as the rest of the privileged ops.
+    let out = TokioCommand::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .context("spawning kill")?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if out.status.success() {
+        Ok(format!(
+            "cancelled sync {idx} (SIGTERM → pid {pid})\n{combined}"
+        ))
+    } else {
+        anyhow::bail!(
+            "kill -TERM {pid} failed (status {}): {combined}",
+            out.status
+        );
+    }
 }
 
 async fn exportfs_reload() -> Result<String> {

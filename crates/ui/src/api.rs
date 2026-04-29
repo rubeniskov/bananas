@@ -1230,6 +1230,26 @@ struct RunsResp {
     runs: Vec<CloudJob>,
 }
 
+/// SIGTERM the rclone process owning the given sync_idx, if any. The
+/// server forwards to the helper which reads the PID file written
+/// when the run started. Idempotent — calling on a finished run is a
+/// no-op.
+pub async fn cancel_cloud_sync(idx: usize) -> Result<(), ApiError> {
+    let resp = Request::post(&format!("/api/cloud/syncs/{idx}/cancel"))
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        let status = resp.status();
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
+    }
+    Ok(())
+}
+
 pub async fn list_cloud_runs() -> Result<Vec<CloudJob>, ApiError> {
     let resp = Request::get("/api/cloud/runs")
         .send()

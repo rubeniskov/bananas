@@ -166,6 +166,7 @@ async fn main() -> Result<()> {
             put(cloud::update_sync).delete(cloud::delete_sync),
         )
         .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
+        .route("/cloud/syncs/{idx}/cancel", post(cloud::cancel_sync))
         .route("/cloud/runs", get(cloud::list_runs))
         .route("/cloud/runs/{job_id}", get(cloud::get_run))
         .route(

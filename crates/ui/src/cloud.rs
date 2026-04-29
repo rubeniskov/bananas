@@ -284,7 +284,22 @@ pub fn CloudPage() -> Element {
                 }
                 tbody {
                     for j in runs.read().iter().take(20) {
-                        RunRow { key: "{j.id}", job: j.clone() }
+                        RunRow {
+                            key: "{j.id}",
+                            job: j.clone(),
+                            on_cancel: move |idx: usize| {
+                                spawn(async move {
+                                    match api::cancel_cloud_sync(idx).await {
+                                        Ok(()) => {
+                                            banner.set(Some((BannerKind::Ok, format!("Cancel signaled to sync {idx}"))));
+                                            runs_tick.set(runs_tick() + 1);
+                                        }
+                                        Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                        Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
+                                    }
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -449,6 +464,7 @@ fn SyncRow(props: SyncRowProps) -> Element {
 #[derive(Props, Clone, PartialEq)]
 struct RunRowProps {
     job: api::CloudJob,
+    on_cancel: EventHandler<usize>,
 }
 
 #[component]
@@ -466,22 +482,32 @@ fn RunRow(props: RunRowProps) -> Element {
         j.label.clone()
     };
     let is_running = j.status == api::CloudJobStatus::Running;
+    let sync_idx = j.sync_idx;
+    let progress = j.progress;
     rsx! {
         tr {
             td { code { "#{j.id}" } }
-            td {
-                if is_running {
-                    div { class: "run-status",
-                        CircularProgress { percent: j.progress }
-                        span { class: "{status_class}", "{j.status.label()}" }
-                    }
-                } else {
-                    span { class: "{status_class}", "{j.status.label()}" }
-                }
-            }
+            td { span { class: "{status_class}", "{j.status.label()}" } }
             td { code { "{started}" } }
             td { code { "{finished}" } }
-            td { span { class: "muted", "{label}" } }
+            td {
+                // Label sits left, progress + cancel hug the right edge
+                // via the .label-cell flex layout in main.css.
+                div { class: "label-cell",
+                    span { class: "muted label-text", "{label}" }
+                    if is_running {
+                        div { class: "run-controls",
+                            CircularProgress { percent: progress }
+                            button {
+                                class: "btn-icon delete",
+                                "data-tip": "Cancel this in-flight sync (SIGTERM to rclone).",
+                                onclick: move |_| props.on_cancel.call(sync_idx),
+                                Icon { name: "x" }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -459,6 +459,31 @@ pub async fn run_sync(State(state): State<AppState>, AxumPath(idx): AxumPath<usi
     Json(json!({ "ok": true, "job_id": job_id })).into_response()
 }
 
+/// Cancel an in-flight sync — sends SIGTERM to the rclone child via
+/// the helper. Idempotent: if no run is in flight (or it just finished)
+/// the helper returns a benign "no live PID" message instead of an
+/// error, so the UI's Cancel button doesn't need to know about timing.
+pub async fn cancel_sync(
+    State(state): State<AppState>,
+    AxumPath(idx): AxumPath<usize>,
+) -> Response {
+    let cmd = Command::CancelCloudSync { idx };
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{}\n\n{}",
+                error.unwrap_or_else(|| "cancel failed".into()),
+                output
+            ),
+        ),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")),
+    }
+}
+
 /// List recent jobs (newest first). Bounded to ~100 by the job manager.
 pub async fn list_runs(State(state): State<AppState>) -> Response {
     let jobs = state.jobs.list().await;

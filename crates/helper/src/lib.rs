@@ -123,6 +123,13 @@ pub enum Command {
     /// account token never hits disk for the duration of the run).
     /// `output` carries combined stdout+stderr from rclone.
     RunCloudSync { idx: usize },
+    /// Stop a running cloud sync. The helper records each rclone child's
+    /// PID at `/run/bananas/sync-progress/<idx>.pid` while the run is
+    /// in flight; this reads it back and SIGTERMs the process. The
+    /// original `RunCloudSync` call returns shortly after with a
+    /// non-zero exit, which the JobManager picks up and surfaces as a
+    /// failed run.
+    CancelCloudSync { idx: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
