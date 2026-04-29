@@ -19,13 +19,12 @@ Group=bananas
 SupplementaryGroups=video render input
 ExecStart=/usr/bin/bananas-dashboard
 Environment=RUST_LOG=info
-# SLINT_BACKEND format is <backend>-<renderer>. The `-noseat` Cargo
-# feature only changes whether libseatd is linked at build time —
-# at RUNTIME the backend name is plain `linuxkms`, and we only built
-# the software renderer in, so `linuxkms-software` is the explicit
-# choice. (Setting `linuxkms-noseat` makes Slint warn
-# "unrecognized renderer noseat, falling back default" and fail.)
-Environment=SLINT_BACKEND=linuxkms-software
+# SLINT_BACKEND format is <backend>-<renderer>. femtovg uses GLES2 on
+# top of GBM (libgbm + lima Gallium driver) — picks up the Mali-400
+# automatically once /dev/dri/renderD128 + the lima userspace are
+# present. Falls back to the software renderer if the GPU path fails
+# at startup, so this stays robust even on a transient probe error.
+Environment=SLINT_BACKEND=linuxkms-femtovg
 Environment=SLINT_KMS_DEVICE=/dev/dri/card0
 # Re-attempt forever — if the panel is briefly unavailable during a
 # hot-plug the dashboard should come back, not give up.

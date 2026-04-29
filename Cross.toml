@@ -28,5 +28,5 @@ build.env.passthrough = [
 pre-build = [
     "dpkg --add-architecture armhf",
     "apt-get update",
-    "apt-get install --assume-yes --no-install-recommends pkg-config libfontconfig1-dev:armhf libudev-dev:armhf libxkbcommon-dev:armhf libinput-dev:armhf",
+    "apt-get install --assume-yes --no-install-recommends pkg-config libfontconfig1-dev:armhf libudev-dev:armhf libxkbcommon-dev:armhf libinput-dev:armhf libgbm-dev:armhf libdrm-dev:armhf",
 ]

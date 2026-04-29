@@ -24,21 +24,32 @@ INSANE_SKIP:${PN} += "arch already-stripped"
 SYSTEMD_SERVICE:${PN} = "bananas-dashboard.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
-# Runtime libraries the cross-rs build linked against. Software
-# renderer + linuxkms-noseat backend, no OpenGL: only fontconfig (for
-# fontique font discovery), libudev + libinput (input device
-# enumeration), libxkbcommon (keymap). libdrm/libgbm only enter the
-# graph if we re-enable Slint's femtovg renderer for GPU acceleration.
-#
-# `dejavu-fonts-ttf-sans` provides actual TTF files at /usr/share/fonts/.
-# Without a real font package, fontconfig returns no matches and
-# fontique panics with `NoMatch` before the dashboard's first paint.
+# Runtime libraries the cross-rs build linked against. Software +
+# femtovg renderers, linuxkms-noseat backend, GLES2 via Mali-400's
+# lima driver:
+#  * fontconfig — fontique font discovery (panics with NoMatch if
+#    fonts aren't there).
+#  * libudev + libinput — input device enumeration on KMS.
+#  * libxkbcommon — keymap.
+#  * libdrm + libgbm — GBM buffer allocation between CPU and the GPU
+#    for the femtovg path.
+#  * mesa-driver-lima — userspace Gallium driver that talks to the
+#    in-kernel `lima` DRM driver. Without this the GLES2 paint calls
+#    fall back to softpipe and we lose the perf win that justified
+#    enabling femtovg in the first place.
+#  * kernel-module-lima — autoloaded so /dev/dri/renderD128 appears
+#    before the dashboard tries to open it.
+#  * ttf-dejavu-sans — at least one TTF on disk.
 RDEPENDS:${PN} += " \
     bananas-stats \
     fontconfig \
     libudev \
     libxkbcommon \
     libinput \
+    libdrm \
+    libgbm \
+    mesa-driver-lima \
+    kernel-module-lima \
     ttf-dejavu-sans \
 "
 
