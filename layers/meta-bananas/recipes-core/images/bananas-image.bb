@@ -72,9 +72,13 @@ install_firstboot_resize() {
     install -d -m 0755 ${IMAGE_ROOTFS}/lib/systemd/system
     install -m 0644 ${FIRSTBOOT_UNIT} \
         ${IMAGE_ROOTFS}/lib/systemd/system/bananas-firstboot-resize.service
-    install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/local-fs.target.wants
+    # multi-user.target.wants — see the inline comment in the unit file
+    # for why this is NOT local-fs.target.wants. tl;dr: the previous
+    # placement created an ordering cycle that silently broke
+    # systemd-tmpfiles-setup and cascaded into 4 other services failing.
+    install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants
     ln -sf /lib/systemd/system/bananas-firstboot-resize.service \
-        ${IMAGE_ROOTFS}/etc/systemd/system/local-fs.target.wants/bananas-firstboot-resize.service
+        ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/bananas-firstboot-resize.service
 }
 
 # Bake fstab entries for the SATA storage volumes. nofail = don't drop to

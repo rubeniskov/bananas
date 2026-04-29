@@ -4,11 +4,18 @@ Description=BanaNAS first-boot rootfs resize
 # unit is a no-op, but ConditionPathExists short-circuits it before
 # even invoking the script — the cheapest possible idle cost.
 ConditionPathExists=!/var/lib/bananas/firstboot-resize.done
-# Run as soon as / is writable. local-fs.target gives us a guaranteed
-# point at which the rootfs is mounted but the system is still single-user
-# enough that nothing important is racing us.
-After=local-fs.target
-Before=systemd-tmpfiles-setup.service
+# Run after rootfs is fully mounted AND the system bring-up tmpfiles /
+# users / etc. have settled. The earlier draft used
+# `WantedBy=local-fs.target` + `Before=systemd-tmpfiles-setup.service`,
+# which produced a three-way ordering cycle (tmpfiles-setup After
+# local-fs.target → us Before tmpfiles-setup → us WantedBy
+# local-fs.target). systemd silently broke the cycle by skipping
+# tmpfiles-setup itself, which cascaded into systemd-logind,
+# systemd-hostnamed, chronyd, and DBus failing on every boot. ext4
+# online resize works fine after sysinit, so there's no reason to fight
+# the early-boot ordering — `WantedBy=multi-user.target` keeps us out
+# of the boot-critical chain entirely.
+After=local-fs.target sysinit.target
 
 [Service]
 Type=oneshot
@@ -21,4 +28,4 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=local-fs.target
+WantedBy=multi-user.target
