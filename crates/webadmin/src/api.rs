@@ -605,12 +605,6 @@ pub struct DiskSeriesPoint {
     pub util_pct: f32,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct TempSeriesPoint {
-    pub ts: i64,
-    pub celsius: f32,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 struct PointsEnvelope<T> {
     points: Vec<T>,
@@ -747,32 +741,6 @@ pub async fn fetch_disk_range(
         return Err(ApiError::Other(format!("HTTP {}", resp.status())));
     }
     let env: PointsEnvelope<DiskSeriesPoint> = resp
-        .json()
-        .await
-        .map_err(|e| ApiError::Other(e.to_string()))?;
-    Ok(env.points)
-}
-
-pub async fn fetch_temp_range(
-    sensor: &str,
-    window: &str,
-) -> Result<Vec<TempSeriesPoint>, ApiError> {
-    let url = format!(
-        "/api/stats/range?metric=temp&key={}&window={}",
-        urlencode(sensor),
-        urlencode(window)
-    );
-    let resp = Request::get(&url)
-        .send()
-        .await
-        .map_err(|e| ApiError::Other(e.to_string()))?;
-    if resp.status() == 401 {
-        return Err(ApiError::Unauthorized);
-    }
-    if !resp.ok() {
-        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
-    }
-    let env: PointsEnvelope<TempSeriesPoint> = resp
         .json()
         .await
         .map_err(|e| ApiError::Other(e.to_string()))?;

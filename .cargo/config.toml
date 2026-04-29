@@ -9,4 +9,4 @@
 # float unit unlocks better instruction selection (5–15 % runtime
 # speedup on hot Rust paths — sampler arithmetic, SQLite writer,
 # femtovg path tessellation).
-rustflags = ["-C", "target-cpu=cortex-a7", "-C", "target-feature=+vfp4,+thumb2"]
+rustflags = ["-C", "target-cpu=cortex-a7", "-C", "target-feature=+vfp4"]
