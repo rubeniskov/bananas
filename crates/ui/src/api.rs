@@ -1211,6 +1211,12 @@ pub struct CloudJob {
     pub output: String,
     #[serde(default)]
     pub label: String,
+    /// Live transfer percent (0..=100) when `status == running`. None
+    /// while rclone is in its initial directory scan / on terminal
+    /// states. Drives the circular progress indicator in the Recent
+    /// runs panel.
+    #[serde(default)]
+    pub progress: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

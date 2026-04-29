@@ -1182,42 +1182,115 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     cmd.env(format!("{env_prefix}_TYPE"), rclone_type);
     cmd.env(format!("{env_prefix}_TOKEN"), &account.token);
 
+    // `--stats=2s --stats-one-line` prints a periodic progress summary to
+    // stderr in a parseable shape:
+    //   "Transferred: 5.2 GiB / 12.3 GiB, 42%, 1.2 MiB/s, ETA 1h41m"
+    // We tee that into the per-sync progress file so the server-side
+    // JobManager (and the UI's RunRow circular bar) can poll it without
+    // any IPC changes to the helper protocol.
     match direction {
         "push" => {
-            cmd.args(["copy", &entry.local_path, &remote_arg, "--progress"]);
+            cmd.args(["copy", &entry.local_path, &remote_arg]);
         }
         "pull" => {
-            cmd.args(["copy", &remote_arg, &entry.local_path, "--progress"]);
+            cmd.args(["copy", &remote_arg, &entry.local_path]);
         }
         "bidirectional" | "bisync" => {
-            cmd.args([
-                "bisync",
-                &entry.local_path,
-                &remote_arg,
-                "--resync",
-                "--progress",
-            ]);
+            cmd.args(["bisync", &entry.local_path, &remote_arg, "--resync"]);
         }
         other => anyhow::bail!("unknown direction {other:?}"),
     }
+    cmd.args(["--stats=2s", "--stats-one-line"]);
 
     let _ = entry.schedule; // honored by an external timer, not here
 
-    let out = cmd
+    let progress_path = sync_progress_path(idx);
+    if let Some(parent) = progress_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    // Stale progress file from a previous run for this sync_idx — wipe it
+    // so the UI doesn't see a frozen percentage from minutes ago.
+    let _ = tokio::fs::remove_file(&progress_path).await;
+
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .await
+        .spawn()
         .context("spawning rclone")?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    if !out.status.success() {
-        anyhow::bail!("rclone exited with {}: {}", out.status, combined);
+
+    let stdout = child.stdout.take().expect("piped");
+    let stderr = child.stderr.take().expect("piped");
+
+    let progress_for_stdout = progress_path.clone();
+    let stdout_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout).lines();
+        let mut captured = String::new();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if let Some(pct) = parse_rclone_progress(&line) {
+                let _ = tokio::fs::write(&progress_for_stdout, pct.to_string()).await;
+            }
+            captured.push_str(&line);
+            captured.push('\n');
+        }
+        captured
+    });
+
+    let progress_for_stderr = progress_path.clone();
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr).lines();
+        let mut captured = String::new();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if let Some(pct) = parse_rclone_progress(&line) {
+                let _ = tokio::fs::write(&progress_for_stderr, pct.to_string()).await;
+            }
+            captured.push_str(&line);
+            captured.push('\n');
+        }
+        captured
+    });
+
+    let status = child.wait().await.context("waiting on rclone")?;
+    let stdout_capture = stdout_task.await.unwrap_or_default();
+    let stderr_capture = stderr_task.await.unwrap_or_default();
+    // Done, regardless of outcome — the file is the "live progress"
+    // contract. After the job finishes the JobManager surfaces
+    // success/failure via `status`, and a stale 99% would just be
+    // confusing.
+    let _ = tokio::fs::remove_file(&progress_path).await;
+
+    let combined = format!("{stdout_capture}{stderr_capture}");
+    if !status.success() {
+        anyhow::bail!("rclone exited with {status}: {combined}");
     }
     Ok(combined)
+}
+
+/// rclone's `--stats-one-line` lines look like:
+///   "Transferred: 5.2 GiB / 12.3 GiB, 42%, 1.2 MiB/s, ETA 1h41m"
+/// We pluck the `42%` out. Best-effort — if the line shape changes in a
+/// future rclone release, we just lose progress (the run still works).
+fn parse_rclone_progress(line: &str) -> Option<u32> {
+    let line = line.trim();
+    if !line.contains("Transferred:") {
+        return None;
+    }
+    let pct_idx = line.find('%')?;
+    let prefix = &line[..pct_idx];
+    let digits: String = prefix
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let digits: String = digits.chars().rev().collect();
+    digits.parse().ok()
+}
+
+/// Where to write the live progress percentage for a given sync index.
+/// `/run/bananas/sync-progress/<idx>.progress` is in tmpfs (cleared on
+/// reboot) and the bananas-helper systemd unit's RuntimeDirectory=
+/// declaration creates `/run/bananas` for us.
+fn sync_progress_path(idx: usize) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/run/bananas/sync-progress/{idx}.progress"))
 }
 
 async fn exportfs_reload() -> Result<String> {

@@ -64,6 +64,14 @@ pub struct JobState {
     /// UI can render "personal: /srv/photos → personal:photos" without
     /// re-fetching cloud.toml.
     pub label: String,
+    /// Live transfer percentage (0..=100) tee'd by the helper while
+    /// rclone is running. `None` when the job is not running, or while
+    /// rclone is still in its initial directory scan and hasn't
+    /// produced a progress line yet. Read off
+    /// `/run/bananas/sync-progress/<sync_idx>.progress` on each
+    /// JobManager `get`/`list` so the value is fresh per request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u32>,
 }
 
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
@@ -126,6 +134,7 @@ impl JobManager {
                 finished_unix: None,
                 output: String::new(),
                 label,
+                progress: None,
             };
             inner.jobs.insert(id, state);
             inner.order.push_back(id);
@@ -180,22 +189,44 @@ impl JobManager {
 
     pub async fn list(&self) -> Vec<JobState> {
         let inner = self.inner.read().await;
-        // Newest first.
+        // Newest first. For each running job, overlay the live percent
+        // the helper has been writing to /run/bananas/sync-progress/.
         inner
             .order
             .iter()
             .rev()
             .filter_map(|id| inner.jobs.get(id).cloned())
+            .map(|mut s| {
+                if s.status == JobStatus::Running {
+                    s.progress = read_sync_progress(s.sync_idx);
+                }
+                s
+            })
             .collect()
     }
 
     pub async fn get(&self, id: u64) -> Option<JobState> {
-        self.inner.read().await.jobs.get(&id).cloned()
+        let mut state = self.inner.read().await.jobs.get(&id).cloned()?;
+        if state.status == JobStatus::Running {
+            state.progress = read_sync_progress(state.sync_idx);
+        }
+        Some(state)
     }
 
     pub async fn last_run(&self, sync_idx: usize) -> Option<i64> {
         self.inner.read().await.last_run.get(&sync_idx).copied()
     }
+}
+
+/// Best-effort read of the live progress percent the helper writes to
+/// `/run/bananas/sync-progress/<idx>.progress`. Returns None when the
+/// file is absent (rclone hasn't started, finished, or crashed without
+/// cleaning up — the latter is fine, the next run for this idx wipes
+/// stale state on entry) or when the contents fail to parse.
+fn read_sync_progress(sync_idx: usize) -> Option<u32> {
+    let path = format!("/run/bananas/sync-progress/{sync_idx}.progress");
+    let text = std::fs::read_to_string(&path).ok()?;
+    text.trim().parse().ok().filter(|n: &u32| *n <= 100)
 }
 
 fn truncate_tail(s: &str, max: usize) -> String {

@@ -465,14 +465,96 @@ fn RunRow(props: RunRowProps) -> Element {
     } else {
         j.label.clone()
     };
+    let is_running = j.status == api::CloudJobStatus::Running;
     rsx! {
         tr {
             td { code { "#{j.id}" } }
-            td { span { class: "{status_class}", "{j.status.label()}" } }
+            td {
+                if is_running {
+                    div { class: "run-status",
+                        CircularProgress { percent: j.progress }
+                        span { class: "{status_class}", "{j.status.label()}" }
+                    }
+                } else {
+                    span { class: "{status_class}", "{j.status.label()}" }
+                }
+            }
             td { code { "{started}" } }
             td { code { "{finished}" } }
             td { span { class: "muted", "{label}" } }
         }
+    }
+}
+
+/// Circular progress indicator. Determinate when `percent` is `Some`
+/// (renders an SVG arc filling 0..=100% of the circumference); shows
+/// an animated indeterminate spinner otherwise. Sized to fit inline
+/// with a status badge — see the matching CSS classes
+/// `.circ-progress` / `.circ-progress.spinning` in main.scss.
+#[derive(Props, Clone, PartialEq)]
+struct CircularProgressProps {
+    percent: Option<u32>,
+}
+
+#[component]
+fn CircularProgress(props: CircularProgressProps) -> Element {
+    // 18 px radius / 56.5 circumference. The dasharray = full
+    // circumference, dashoffset = (1 - p/100) * circumference yields
+    // the standard "stroke fills clockwise" effect.
+    const RADIUS: f32 = 8.0;
+    let circumference: f32 = 2.0 * std::f32::consts::PI * RADIUS;
+    match props.percent {
+        Some(p) => {
+            let p = p.min(100) as f32;
+            let offset = circumference * (1.0 - p / 100.0);
+            let label = format!("{}%", p as u32);
+            rsx! {
+                svg {
+                    class: "circ-progress",
+                    width: "20",
+                    height: "20",
+                    view_box: "0 0 20 20",
+                    role: "img",
+                    "aria-label": "{label}",
+                    circle {
+                        class: "track",
+                        cx: "10", cy: "10", r: "{RADIUS}",
+                        fill: "none",
+                    }
+                    circle {
+                        class: "fill",
+                        cx: "10", cy: "10", r: "{RADIUS}",
+                        fill: "none",
+                        stroke_dasharray: "{circumference}",
+                        stroke_dashoffset: "{offset}",
+                        // Rotate -90deg so the arc starts at 12 o'clock.
+                        transform: "rotate(-90 10 10)",
+                    }
+                }
+            }
+        }
+        None => rsx! {
+            svg {
+                class: "circ-progress spinning",
+                width: "20",
+                height: "20",
+                view_box: "0 0 20 20",
+                role: "img",
+                "aria-label": "loading",
+                circle {
+                    class: "track",
+                    cx: "10", cy: "10", r: "{RADIUS}",
+                    fill: "none",
+                }
+                circle {
+                    class: "fill",
+                    cx: "10", cy: "10", r: "{RADIUS}",
+                    fill: "none",
+                    // Quarter-arc that animates around (CSS rotates).
+                    stroke_dasharray: "{circumference / 4.0} {circumference}",
+                }
+            }
+        },
     }
 }
 

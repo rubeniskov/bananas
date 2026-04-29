@@ -892,3 +892,38 @@ textarea {
 .entries .name { flex: 1; }
 .entries li.file { color: var(--text-soft); cursor: default; }
 .entries li.file:hover { background: transparent; }
+
+/* ───────── Circular progress (cloud-sync Recent runs) ───────── */
+/* Sized to sit inline with the status badge inside .run-status. The
+ * track is the soft background ring; .fill is the arc that fills as
+ * the helper writes percentages. Indeterminate variant rotates an
+ * unfilled quarter-arc as a generic spinner. */
+.run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.circ-progress {
+  flex-shrink: 0;
+}
+.circ-progress .track {
+  stroke: var(--line);
+  stroke-width: 2.5;
+}
+.circ-progress .fill {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 600ms ease-out;
+}
+.circ-progress.spinning {
+  animation: circ-progress-spin 1s linear infinite;
+}
+.circ-progress.spinning .fill {
+  /* No transition while spinning — let the rotation drive motion. */
+  transition: none;
+}
+@keyframes circ-progress-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
