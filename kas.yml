@@ -63,6 +63,13 @@ local_conf_header:
 
     # Speed / disk usage
     INHERIT += "rm_work"
+    # Keep the bananas-image WORKDIR around — without it, Yocto's
+    # do_image_complete sometimes restores from sstate and reports
+    # success without actually populating ${DEPLOY_DIR_IMAGE}, leaving
+    # extract-rootfs to fail with "No such file or directory". Preserving
+    # the work dir lets the build task copy from
+    # work/.../deploy-bananas-image-image-complete/ as a recovery step.
+    RM_WORK_EXCLUDE += "bananas-image"
     BB_NUMBER_THREADS ?= "8"
     PARALLEL_MAKE ?= "-j8"
 

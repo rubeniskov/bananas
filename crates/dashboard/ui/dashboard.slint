@@ -1,0 +1,910 @@
+// Slint markup for the Banana Pi dashboard.
+// Tuned for the 7" 1024x600 LCD.
+// Layout follows the NEXUMBRIA-NAS-style mockup:
+//   - Pure black background, monochromatic cyan accents.
+//   - Big white number + smaller cyan unit. Role label (RX/TX/READ/WRITE)
+//     sits *under* the number, not above.
+//   - Sparklines have a small Y-axis tick column on their left (peak / mid / 0)
+//     and the most-recent sample is highlighted brighter than the rest.
+//   - Capacity bars are segmented (LED-style) rather than a solid fill.
+//   - PARTITIONS gains explicit column headers and a percentage column
+//     coloured by threshold (cyan / amber / red).
+
+// ---------------------------------------------------------------------------
+// Data structs (mirrored from the Rust side).
+
+export struct NetIfaceUi {
+    name: string,
+    rx-value: string,
+    rx-unit: string,
+    rx-peak-text: string,
+    rx-mid-text: string,
+    tx-value: string,
+    tx-unit: string,
+    tx-peak-text: string,
+    tx-mid-text: string,
+}
+
+export struct DiskIoUi {
+    device: string,
+    bus: string,
+    read-value: string,
+    read-unit: string,
+    read-peak-text: string,
+    read-mid-text: string,
+    write-value: string,
+    write-unit: string,
+    write-peak-text: string,
+    write-mid-text: string,
+    util-text: string,
+}
+
+export struct PartitionUi {
+    device: string,
+    mount: string,
+    fs: string,
+    used-text: string,
+    total-text: string,
+    pct: float,
+    pct-text: string,
+}
+
+// ---------------------------------------------------------------------------
+// Theme
+
+export global Theme {
+    // Toggled at runtime by pressing `t`. The Rust side seeds it from
+    // cfg.theme on launch (or AM/PM auto) and may flip it on the
+    // noon/midnight boundary in auto mode.
+    in-out property <bool> dark: true;
+
+    // Light palette is a saturated electric-blue trio:
+    //   outer bg    #0726CC
+    //   panel base  #0A2FFF
+    //   inner section #123BFF (used for borders + dividers + spark dim)
+    // Text and accents are tuned for contrast against those blues.
+    out property <color> bg:           dark ? #000000 : #0726CC;
+    out property <color> panel-bg:     dark ? #000000 : #0A2FFF;
+    out property <color> divider:      dark ? #1a2a40 : #123BFF;
+    out property <color> panel-border: dark ? #1a2a40 : #123BFF;
+
+    out property <color> text:         dark ? #ffffff : #ffffff;
+    out property <color> text-muted:   dark ? #7891b3 : #b6c4ff;
+    out property <color> text-faint:   dark ? #3d5675 : #6c80d8;
+
+    out property <color> accent:       dark ? #5fa0e8 : #ffd040;
+    out property <color> spark:        dark ? #5fb4ff : #ffffff;
+    out property <color> spark-latest: dark ? #b8dcff : #ffd040;
+    out property <color> spark-empty:  dark ? #16243a : #123BFF;
+
+    out property <color> ok:           dark ? #5fb4ff : #ffffff;
+    out property <color> warn:         dark ? #e8b040 : #ffd040;
+    out property <color> danger:       dark ? #ff5544 : #ff7050;
+}
+
+// ---------------------------------------------------------------------------
+// Generic primitives
+
+component PanelTitle inherits Text {
+    color: Theme.accent;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+}
+
+component MicroLabel inherits Text {
+    color: Theme.accent;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.0px;
+}
+
+// Big white number on the left; the role label (RX / TX / READ / WRITE)
+// stacked above the unit on the right. Both right-stack texts share the
+// cyan accent and align to the bottom of the number so the layout reads
+// as one block — e.g.
+//
+//   73.5  READ
+//         MB/s
+component RateBig inherits HorizontalLayout {
+    in property <string> value;
+    in property <string> unit;
+    in property <string> role-label;
+    spacing: 6px;
+    alignment: start;
+
+    Text {
+        text: root.value;
+        font-size: 22px;
+        font-weight: 700;
+        color: Theme.text;
+        vertical-alignment: bottom;
+    }
+    VerticalLayout {
+        alignment: end;
+        spacing: 0;
+        padding-bottom: 3px;
+        Text {
+            text: root.role-label;
+            font-size: 9px;
+            font-weight: 700;
+            color: Theme.accent;
+            letter-spacing: 1.0px;
+            horizontal-alignment: left;
+        }
+        Text {
+            text: root.unit;
+            font-size: 11px;
+            font-weight: 700;
+            color: Theme.accent;
+            letter-spacing: 0.3px;
+            horizontal-alignment: left;
+        }
+    }
+}
+
+// Three-row Y-axis tick column for a sparkline. The middle text floats
+// vertically centred so it tracks the sparkline's geometry rather than
+// the column's overall height.
+component SparkAxis inherits Rectangle {
+    in property <string> peak;
+    in property <string> mid;
+    width: 36px;
+    Text {
+        x: 0; y: 0;
+        text: root.peak;
+        color: Theme.text-muted;
+        font-size: 9px;
+        horizontal-alignment: left;
+        width: parent.width;
+    }
+    Text {
+        x: 0;
+        y: (parent.height - self.font-size) / 2;
+        text: root.mid;
+        color: Theme.text-muted;
+        font-size: 9px;
+        horizontal-alignment: left;
+        width: parent.width;
+    }
+    Text {
+        x: 0;
+        y: parent.height - self.font-size - 1px;
+        text: "0";
+        color: Theme.text-muted;
+        font-size: 9px;
+        horizontal-alignment: left;
+        width: parent.width;
+    }
+}
+
+// Sparkline: row of fixed-width bars, end-anchored so the latest sample sits
+// at the right edge. We use absolute positioning (`x: parent.width - …`)
+// rather than a HorizontalLayout because the bar heights depend on
+// `parent.height`, and that creates a layout binding loop when the parent
+// itself uses `vertical-stretch` to grow with the slot.
+// End-anchored sparkline: latest sample sits at the right edge, older
+// samples extend to the left at a fixed 3 px stride. As new samples
+// arrive the row visually slides left. clip: true keeps oldest samples
+// that don't fit from drawing over the axis labels in the column to the
+// left of the chart.
+component Sparkline inherits Rectangle {
+    in property <[float]> samples;
+    clip: true;
+
+    for s[i] in samples: Rectangle {
+        width: 2px;
+        x: parent.width - 2px - (samples.length - 1 - i) * 3px;
+        height: parent.height * Math.clamp(s, 0.02, 1.0);
+        y: parent.height - self.height;
+        background: i == samples.length - 1 ? Theme.spark-latest : Theme.spark;
+        border-radius: 1px;
+    }
+}
+
+// Compact two-tone bar — single bright fill on a dim track. Used in the
+// header strip where we want a small unobtrusive indicator next to a label.
+component CompactBar inherits Rectangle {
+    in property <float> pct;
+    height: 8px;
+    border-radius: 4px;
+    background: Theme.spark-empty;
+
+    property <float> clamped: Math.clamp(root.pct, 0.0, 1.0);
+    property <color> fill:
+        clamped >= 0.9 ? Theme.danger :
+        clamped >= 0.7 ? Theme.warn :
+        Theme.ok;
+
+    Rectangle {
+        x: 0;
+        width: parent.width * clamped;
+        height: parent.height;
+        background: root.fill;
+        border-radius: parent.border-radius;
+    }
+}
+
+// Segmented LED-style capacity bar. Renders `cells` discrete blocks; the
+// first floor(pct * cells) are bright, the rest are the dim "empty" tone.
+component BarMeter inherits HorizontalLayout {
+    in property <float> pct;
+    in property <int> cells: 80;
+    spacing: 1px;
+    height: 14px;
+
+    property <float> clamped: Math.clamp(root.pct, 0.0, 1.0);
+    property <int> filled: Math.floor(clamped * cells);
+    property <color> fill:
+        clamped >= 0.9 ? Theme.danger :
+        clamped >= 0.7 ? Theme.warn :
+        Theme.ok;
+
+    for c[i] in [
+        0,1,2,3,4,5,6,7,8,9, 10,11,12,13,14,15,16,17,18,19,
+        20,21,22,23,24,25,26,27,28,29, 30,31,32,33,34,35,36,37,38,39,
+        40,41,42,43,44,45,46,47,48,49, 50,51,52,53,54,55,56,57,58,59,
+        60,61,62,63,64,65,66,67,68,69, 70,71,72,73,74,75,76,77,78,79,
+    ] : Rectangle {
+        height: parent.height;
+        horizontal-stretch: 1;
+        background: i < root.filled ? root.fill : Theme.spark-empty;
+        border-radius: 1px;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Composite rows
+
+// Top row borrows the 3-column label structure from DiskIoBlock (name on
+// the left, RX and TX rates side-by-side on the right) so the headers
+// match the disk panel. Sparklines stay full-width and stacked below —
+// network traffic reads more clearly with one wide chart per direction
+// than two half-width ones.
+// 4-column layout. Brings the chart axis to the very left edge of each
+// slot, with the iface name sitting directly above the RX axis ticks so
+// the label and chart visually share a column.
+//
+//   eth0           1.4 RX MB/s          2 MB    2.9 TX MB/s
+//   2 MB                                 1 MB
+//   1 MB    <RX sparkline>                 0    <TX sparkline>
+//      0
+component NetIfaceBlock inherits HorizontalLayout {
+    in property <NetIfaceUi> n;
+    in property <[float]> rx-spark;
+    in property <[float]> tx-spark;
+
+    spacing: 6px;
+    padding-top: 6px;
+    padding-bottom: 4px;
+
+    // Column 1 — iface name on top, RX axis ticks underneath.
+    VerticalLayout {
+        width: 56px;
+        spacing: 2px;
+        Rectangle {
+            height: 28px;
+            Text {
+                x: 0; y: (parent.height - self.font-size) / 2;
+                text: n.name;
+                color: Theme.accent;
+                font-size: 12px;
+                font-weight: 700;
+            }
+        }
+        SparkAxis {
+            width: parent.width;
+            vertical-stretch: 1;
+            peak: n.rx-peak-text;
+            mid: n.rx-mid-text;
+        }
+    }
+
+    // Column 2 — RX rate (right-aligned) + sparkline.
+    VerticalLayout {
+        horizontal-stretch: 1;
+        max-width: 320px;
+        spacing: 2px;
+        HorizontalLayout {
+            height: 28px;
+            alignment: end;
+            RateBig {
+                value: n.rx-value; unit: n.rx-unit; role-label: "RX";
+                height: 24px;
+            }
+        }
+        Sparkline {
+            vertical-stretch: 1;
+            samples: rx-spark;
+        }
+    }
+
+    // Column 3 — TX axis ticks (own narrow column).
+    VerticalLayout {
+        width: 36px;
+        spacing: 2px;
+        Rectangle { height: 28px; }
+        SparkAxis {
+            width: parent.width;
+            vertical-stretch: 1;
+            peak: n.tx-peak-text;
+            mid: n.tx-mid-text;
+        }
+    }
+
+    // Column 4 — TX rate (right-aligned) + sparkline.
+    VerticalLayout {
+        horizontal-stretch: 1;
+        max-width: 320px;
+        spacing: 2px;
+        HorizontalLayout {
+            height: 28px;
+            alignment: end;
+            RateBig {
+                value: n.tx-value; unit: n.tx-unit; role-label: "TX";
+                height: 24px;
+            }
+        }
+        Sparkline {
+            vertical-stretch: 1;
+            samples: tx-spark;
+        }
+    }
+}
+
+// 4-column layout (matches NetIfaceBlock):
+//
+//   sda (SATA)        62.1 READ MB/s            10 MB    9.1 WRITE MB/s
+//   86% busy
+//   100 MB                                       5 MB
+//    50 MB    <READ sparkline>                     0    <WRITE sparkline>
+//      0
+//
+// The READ axis ticks live underneath the device label so the sparkline
+// in column 2 can start at the slot's left edge; the WRITE axis ticks
+// get their own narrow column to the left of the WRITE sparkline.
+component DiskIoBlock inherits HorizontalLayout {
+    in property <DiskIoUi> d;
+    in property <[float]> read-spark;
+    in property <[float]> write-spark;
+
+    spacing: 6px;
+    padding-top: 6px;
+    padding-bottom: 4px;
+
+    // Column 1 — device + busy% on top, READ axis ticks underneath.
+    VerticalLayout {
+        width: 70px;
+        spacing: 2px;
+        VerticalLayout {
+            height: 28px;
+            spacing: 1px;
+            Text {
+                text: d.device + " (" + d.bus + ")";
+                color: Theme.accent;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            Text {
+                text: d.util-text;
+                color: Theme.text-muted;
+                font-size: 10px;
+                letter-spacing: 0.3px;
+            }
+        }
+        SparkAxis {
+            width: parent.width;
+            vertical-stretch: 1;
+            peak: d.read-peak-text;
+            mid: d.read-mid-text;
+        }
+    }
+
+    // Column 2 — READ rate (right-aligned) + sparkline (no internal axis).
+    VerticalLayout {
+        horizontal-stretch: 1;
+        max-width: 320px;
+        spacing: 2px;
+        HorizontalLayout {
+            height: 28px;
+            alignment: end;
+            RateBig {
+                value: d.read-value; unit: d.read-unit; role-label: "READ";
+                height: 24px;
+            }
+        }
+        Sparkline {
+            vertical-stretch: 1;
+            samples: read-spark;
+        }
+    }
+
+    // Column 3 — WRITE axis ticks alone.
+    VerticalLayout {
+        width: 36px;
+        spacing: 2px;
+        Rectangle { height: 28px; }
+        SparkAxis {
+            width: parent.width;
+            vertical-stretch: 1;
+            peak: d.write-peak-text;
+            mid: d.write-mid-text;
+        }
+    }
+
+    // Column 4 — WRITE rate (right-aligned) + sparkline.
+    VerticalLayout {
+        horizontal-stretch: 1;
+        max-width: 320px;
+        spacing: 2px;
+        HorizontalLayout {
+            height: 28px;
+            alignment: end;
+            RateBig {
+                value: d.write-value; unit: d.write-unit; role-label: "WRITE";
+                height: 24px;
+            }
+        }
+        Sparkline {
+            vertical-stretch: 1;
+            samples: write-spark;
+        }
+    }
+}
+
+component PartitionRow inherits HorizontalLayout {
+    in property <PartitionUi> p;
+    spacing: 8px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+
+    Text {
+        text: p.device;
+        color: Theme.text;
+        font-size: 11px;
+        width: 80px;
+        vertical-alignment: center;
+    }
+    Text {
+        text: p.mount;
+        color: Theme.text;
+        font-size: 11px;
+        width: 100px;
+        vertical-alignment: center;
+    }
+    Text {
+        text: p.fs;
+        color: Theme.text;
+        font-size: 11px;
+        width: 50px;
+        vertical-alignment: center;
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 2px;
+        BarMeter { pct: p.pct; height: 8px; }
+        Text {
+            text: p.used-text + " used / " + p.total-text + " total";
+            color: Theme.text-muted;
+            font-size: 9px;
+        }
+    }
+    Text {
+        text: p.pct-text;
+        font-size: 13px;
+        font-weight: 700;
+        width: 44px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        color:
+            p.pct >= 0.9 ? Theme.danger :
+            p.pct >= 0.7 ? Theme.warn :
+            Theme.ok;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-scrolling carousel for network interfaces — same machinery as the
+// disk and partition carousels, sized for a single iface block per page so
+// the dashboard fits comfortably in the LCD's 800-px height.
+component NetworkCarousel inherits Rectangle {
+    in property <[NetIfaceUi]> network;
+    in property <[[float]]> rx-sparks;
+    in property <[[float]]> tx-sparks;
+
+    // Floor + comfort target. We always try to show at least `min-visible`
+    // ifaces if there are that many; if the parent gives us extra vertical
+    // room beyond `natural-item-height` per slot, more rows fill in
+    // automatically. Slots stretch to fill whatever the carousel's height
+    // is, divided by the chosen visible-count.
+    property <int> min-visible: 2;
+    property <length> natural-item-height: 70px;
+    property <length> divider-height: 1px;
+
+    property <int> max-fit:
+        Math.floor((self.height + divider-height)
+                   / (natural-item-height + divider-height));
+    property <int> visible-count:
+        Math.min(network.length, Math.max(min-visible, max-fit));
+
+    property <length> item-height:
+        (self.height - Math.max(0, visible-count - 1) * divider-height)
+        / Math.max(1, visible-count);
+    property <length> step: item-height + divider-height;
+
+    in-out property <int> page: 0;
+    property <int> max-page: Math.max(0, network.length - visible-count);
+    property <int> safe-page: Math.clamp(page, 0, max-page);
+
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        y: -root.safe-page * root.step;
+        width: parent.width;
+        height: root.network.length * root.item-height
+              + Math.max(0, root.network.length - 1) * root.divider-height;
+        animate y { duration: 700ms; easing: ease-in-out; }
+
+        VerticalLayout {
+            spacing: 0;
+            for n[i] in root.network : VerticalLayout {
+                if i > 0 : Rectangle { height: root.divider-height; background: Theme.divider; }
+                Rectangle {
+                    height: root.item-height;
+                    NetIfaceBlock {
+                        x: 0; y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        n: n;
+                        rx-spark: i < root.rx-sparks.length ? root.rx-sparks[i] : [];
+                        tx-spark: i < root.tx-sparks.length ? root.tx-sparks[i] : [];
+                    }
+                }
+            }
+        }
+    }
+
+    Timer {
+        interval: 12s;
+        running: root.max-page > 0;
+        triggered => {
+            root.page = Math.mod(root.safe-page + 1, root.max-page + 1);
+        }
+    }
+}
+
+// Auto-scrolling carousel for disks. Renders the entire list internally and
+// translates the inner stack on the Y axis to reveal the next page. A timer
+// advances the page every few seconds; when there are fewer items than the
+// visible window, scrolling is suppressed.
+
+component DiskCarousel inherits Rectangle {
+    in property <[DiskIoUi]> disks;
+    in property <[[float]]> read-sparks;
+    in property <[[float]]> write-sparks;
+
+    property <int> min-visible: 2;
+    property <length> natural-item-height: 70px;
+    property <length> divider-height: 1px;
+
+    property <int> max-fit:
+        Math.floor((self.height + divider-height)
+                   / (natural-item-height + divider-height));
+    property <int> visible-count:
+        Math.min(disks.length, Math.max(min-visible, max-fit));
+
+    property <length> item-height:
+        (self.height - Math.max(0, visible-count - 1) * divider-height)
+        / Math.max(1, visible-count);
+    property <length> step: item-height + divider-height;
+
+    in-out property <int> page: 0;
+    property <int> max-page: Math.max(0, disks.length - visible-count);
+    property <int> safe-page: Math.clamp(page, 0, max-page);
+
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        y: -root.safe-page * root.step;
+        width: parent.width;
+        height: root.disks.length * root.item-height
+              + Math.max(0, root.disks.length - 1) * root.divider-height;
+        animate y { duration: 700ms; easing: ease-in-out; }
+
+        VerticalLayout {
+            spacing: 0;
+            for d[i] in root.disks : VerticalLayout {
+                if i > 0 : Rectangle { height: root.divider-height; background: Theme.divider; }
+                Rectangle {
+                    height: root.item-height;
+                    DiskIoBlock {
+                        x: 0; y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        d: d;
+                        read-spark: i < root.read-sparks.length ? root.read-sparks[i] : [];
+                        write-spark: i < root.write-sparks.length ? root.write-sparks[i] : [];
+                    }
+                }
+            }
+        }
+    }
+
+    Timer {
+        interval: 12s;
+        running: root.max-page > 0;
+        triggered => {
+            root.page = Math.mod(root.safe-page + 1, root.max-page + 1);
+        }
+    }
+}
+
+// Auto-scrolling carousel for partitions, same idea but with a 4-row window.
+
+component PartitionCarousel inherits Rectangle {
+    in property <[PartitionUi]> partitions;
+
+    property <int> min-visible: 4;
+    property <length> natural-item-height: 40px;
+    property <length> divider-height: 1px;
+
+    property <int> max-fit:
+        Math.floor((self.height + divider-height)
+                   / (natural-item-height + divider-height));
+    property <int> visible-count:
+        Math.min(partitions.length, Math.max(min-visible, max-fit));
+
+    property <length> item-height:
+        (self.height - Math.max(0, visible-count - 1) * divider-height)
+        / Math.max(1, visible-count);
+    property <length> step: item-height + divider-height;
+
+    in-out property <int> page: 0;
+    property <int> max-page: Math.max(0, partitions.length - visible-count);
+    property <int> safe-page: Math.clamp(page, 0, max-page);
+
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        y: -root.safe-page * root.step;
+        width: parent.width;
+        height: root.partitions.length * root.item-height
+              + Math.max(0, root.partitions.length - 1) * root.divider-height;
+        animate y { duration: 700ms; easing: ease-in-out; }
+
+        VerticalLayout {
+            spacing: 0;
+            for p[i] in root.partitions : VerticalLayout {
+                if i > 0 : Rectangle { height: root.divider-height; background: Theme.divider; }
+                Rectangle {
+                    height: root.item-height;
+                    PartitionRow {
+                        x: 0; y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        p: p;
+                    }
+                }
+            }
+        }
+    }
+
+    Timer {
+        interval: 15s;
+        running: root.max-page > 0;
+        triggered => {
+            root.page = Math.mod(root.safe-page + 1, root.max-page + 1);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reusable section panel (title + horizontal rule + body).
+
+component Section inherits Rectangle {
+    in property <string> title;
+    background: Theme.panel-bg;
+    border-color: Theme.panel-border;
+    border-width: 1px;
+    border-radius: 5px;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+        PanelTitle { text: root.title; }
+        @children
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main window
+
+export component MainWindow inherits Window {
+    title: "bananas-dashboard";
+    // Pinned to the Banana Pi 7" LCD's native 800×480 active area
+    // (RGB888, ~61.5 Hz). Larger sizes are still allowed for desktop preview.
+    min-width: 800px;
+    min-height: 480px;
+    preferred-width: 800px;
+    preferred-height: 480px;
+    background: Theme.bg;
+
+    in property <string> ts-text;
+    in property <float> cpu-pct;
+    in property <float> mem-pct;
+
+    in property <[NetIfaceUi]> network;
+    in property <[DiskIoUi]> disks;
+    in property <[PartitionUi]> partitions;
+    in property <[[float]]> net-rx-spark;
+    in property <[[float]]> net-tx-spark;
+    in property <[[float]]> disk-read-spark;
+    in property <[[float]]> disk-write-spark;
+
+    forward-focus: keyboard;
+    keyboard := FocusScope {
+        key-pressed(event) => {
+            if (event.text == "t" || event.text == "T") {
+                Theme.dark = !Theme.dark;
+                return accept;
+            }
+            reject
+        }
+    }
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+
+        // Compact header card: CPU bar + MEM bar + clock, all in one row.
+        Rectangle {
+            background: Theme.panel-bg;
+            border-color: Theme.panel-border;
+            border-width: 1px;
+            border-radius: 5px;
+            height: 32px;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 10px;
+                alignment: stretch;
+
+                // CPU label + bar + percent
+                HorizontalLayout {
+                    spacing: 6px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: "CPU";
+                        color: Theme.accent;
+                        font-size: 10px;
+                        font-weight: 700;
+                        letter-spacing: 1.0px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        CompactBar {
+                            x: 0;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width;
+                            pct: root.cpu-pct;
+                            height: 6px;
+                        }
+                    }
+                    Text {
+                        text: Math.round(root.cpu-pct * 100) + " %";
+                        color: Theme.text;
+                        font-size: 11px;
+                        font-weight: 700;
+                        width: 36px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // MEM label + bar + percent
+                HorizontalLayout {
+                    spacing: 6px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: "MEM";
+                        color: Theme.accent;
+                        font-size: 10px;
+                        font-weight: 700;
+                        letter-spacing: 1.0px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        CompactBar {
+                            x: 0;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width;
+                            pct: root.mem-pct;
+                            height: 6px;
+                        }
+                    }
+                    Text {
+                        text: Math.round(root.mem-pct * 100) + " %";
+                        color: Theme.text;
+                        font-size: 11px;
+                        font-weight: 700;
+                        width: 36px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Clock — last item, fixed width, right-aligned content
+                Text {
+                    text: root.ts-text;
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                    letter-spacing: 1.0px;
+                    width: 80px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Top half: NETWORK + DISK I/O side by side. Each panel gets ~50%
+        // of the window width; the carousels inside compute their own
+        // visible-count from whatever vertical room the layout assigns.
+        HorizontalLayout {
+            spacing: 6px;
+            vertical-stretch: 1;
+            Section {
+                title: "NETWORK";
+                horizontal-stretch: 1;
+                NetworkCarousel {
+                    vertical-stretch: 1;
+                    network: root.network;
+                    rx-sparks: root.net-rx-spark;
+                    tx-sparks: root.net-tx-spark;
+                }
+            }
+            Section {
+                title: "DISK I/O";
+                horizontal-stretch: 1;
+                DiskCarousel {
+                    vertical-stretch: 1;
+                    disks: root.disks;
+                    read-sparks: root.disk-read-spark;
+                    write-sparks: root.disk-write-spark;
+                }
+            }
+        }
+
+        // PARTITIONS, full width
+        Section {
+            title: "PARTITIONS";
+            vertical-stretch: 1;
+
+            // Column headers
+            HorizontalLayout {
+                spacing: 8px;
+                padding-top: 2px;
+                MicroLabel { text: "DEVICE"; width: 80px; }
+                MicroLabel { text: "MOUNTPOINT"; width: 100px; }
+                MicroLabel { text: "FSTYPE"; width: 50px; }
+                MicroLabel {
+                    text: "USAGE";
+                    horizontal-stretch: 1;
+                    horizontal-alignment: center;
+                }
+                Rectangle { width: 44px; }
+            }
+
+            PartitionCarousel {
+                vertical-stretch: 1;
+                partitions: root.partitions;
+            }
+        }
+    }
+}

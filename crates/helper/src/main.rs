@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use bananas_helper::{Command, Response};
+use serde_json::json;
 use tokio::{
     fs,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -40,6 +41,17 @@ async fn main() -> Result<()> {
     fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o660))
         .await
         .ok();
+    // The unprivileged frontend (bananas-server) runs as the `bananas`
+    // user. Without this chown the socket is root:root 0660, which the
+    // frontend can't open. Look up the GID by reading /etc/group; falls
+    // back to a no-op log if the group is missing.
+    if let Some(gid) = lookup_group_gid("bananas") {
+        if let Err(e) = std::os::unix::fs::chown(&socket_path, Some(0), Some(gid)) {
+            tracing::warn!(error=%e, "failed to chown socket to root:bananas");
+        }
+    } else {
+        tracing::warn!("group 'bananas' not found in /etc/group — frontend won't be able to connect");
+    }
 
     tracing::info!(
         socket=%socket_path.display(),
@@ -91,6 +103,68 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::WriteFstab { content } => match write_fstab(&content).await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::Smart { device } => match smart(&device).await {
+            Ok(json) => Response::ok(json),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::ListUsers => match list_users(false).await {
+            Ok(json) => Response::ok(json),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::ExportUsers => match list_users(true).await {
+            Ok(json) => Response::ok(json),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::CreateUser { username, password, full_name, admin, password_is_hash } => {
+            match create_user(&username, &password, full_name.as_deref(), admin, password_is_hash).await {
+                Ok(()) => Response::ok(format!("created {username}")),
+                Err(e) => Response::err(e.to_string(), String::new()),
+            }
+        }
+        Command::DeleteUser { username } => match delete_user(&username).await {
+            Ok(()) => Response::ok(format!("deleted {username}")),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::SetPassword { username, password } => {
+            match set_password(&username, &password).await {
+                Ok(()) => Response::ok(format!("password updated for {username}")),
+                Err(e) => Response::err(e.to_string(), String::new()),
+            }
+        }
+        Command::SetAdmin { username, admin } => match set_admin(&username, admin).await {
+            Ok(()) => Response::ok(format!(
+                "{username} is {} an admin",
+                if admin { "now" } else { "no longer" }
+            )),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::Stat { path } => match stat_path(&path).await {
+            Ok(json) => Response::ok(json),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::SetPermissions { path, uid, gid, mode, recursive } => {
+            match set_permissions(&path, uid, gid, mode.as_deref(), recursive).await {
+                Ok(out) => Response::ok(out),
+                Err(e) => Response::err(e.to_string(), String::new()),
+            }
+        }
+        Command::Authenticate { username, password } => {
+            // Generic failure message — same string for missing user, locked
+            // account, and wrong password. Avoids confirming which usernames
+            // exist on the system to an attacker probing the API.
+            const GENERIC_FAIL: &str = "invalid credentials";
+            match authenticate(&username, &password).await {
+                Ok(()) => Response::ok(format!("authenticated {username}")),
+                Err(e) => {
+                    tracing::warn!(user=%username, error=%e, "auth failed");
+                    Response::err(GENERIC_FAIL, String::new())
+                }
+            }
+        }
     }
 }
 
@@ -133,6 +207,683 @@ fn validate_exports(content: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Group whose members are authorized to sign in to the web admin. Root
+/// bypasses this check (it can sign in unconditionally); every other user
+/// must be a member or the auth call fails with the same generic error
+/// as a wrong password.
+const ADMIN_GROUP: &str = "bananas-admin";
+
+/// Verify `password` against the hash stored for `username` in /etc/shadow,
+/// then check that the user is authorized (root or a member of
+/// `bananas-admin`). Only `$6$` (SHA-512) hashes are accepted — that's what
+/// the BanaNAS image produces via `mkpasswd -m sha-512`.
+async fn authenticate(username: &str, password: &str) -> Result<()> {
+    if username.is_empty() || username.contains(':') || username.contains('\n') {
+        anyhow::bail!("malformed username");
+    }
+    if password.is_empty() {
+        anyhow::bail!("empty password");
+    }
+    let shadow = fs::read_to_string("/etc/shadow")
+        .await
+        .context("reading /etc/shadow (helper must run as root)")?;
+
+    let hash = shadow
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.splitn(3, ':');
+            let user = fields.next()?;
+            let pw = fields.next()?;
+            if user == username { Some(pw.to_string()) } else { None }
+        })
+        .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+
+    // Locked / disabled accounts: "*", "!", "!!", or any "!"-prefixed hash
+    // (passwd -l). The empty string means no password set — treat as locked.
+    if hash.is_empty() || hash == "*" || hash.starts_with('!') {
+        anyhow::bail!("account locked");
+    }
+    if !hash.starts_with("$6$") {
+        anyhow::bail!("only SHA-512 ($6$) hashes are supported, got prefix {:?}", &hash[..hash.find('$').map(|i| i + 1).unwrap_or(0).min(hash.len())]);
+    }
+
+    sha_crypt::sha512_check(password, &hash).map_err(|_| anyhow::anyhow!("password mismatch"))?;
+
+    // Authorization gate. Root is always trusted; everyone else must be in
+    // the bananas-admin group. Same error string as a password mismatch so
+    // the API can't be used to enumerate which users have admin access.
+    if username != "root" && !is_in_group(username, ADMIN_GROUP).await? {
+        anyhow::bail!("user not in {ADMIN_GROUP} group");
+    }
+    Ok(())
+}
+
+/// Read /etc/group and return true if `username` is listed as a member of
+/// `group`. The primary-GID case (i.e. user's primary group is `group`)
+/// is handled separately below.
+async fn is_in_group(username: &str, group: &str) -> Result<bool> {
+    let group_file = fs::read_to_string("/etc/group")
+        .await
+        .context("reading /etc/group")?;
+    let target_gid: Option<u32> = group_file.lines().find_map(|line| {
+        let mut fields = line.splitn(4, ':');
+        let name = fields.next()?;
+        let _passwd = fields.next()?;
+        let gid_s = fields.next()?;
+        if name == group { gid_s.parse().ok() } else { None }
+    });
+    for line in group_file.lines() {
+        let mut fields = line.splitn(4, ':');
+        let name = fields.next().unwrap_or("");
+        if name != group {
+            continue;
+        }
+        if let Some(members) = fields.nth(2) {
+            if members.split(',').any(|m| m == username) {
+                return Ok(true);
+            }
+        }
+        break;
+    }
+    // Primary-group check — a user whose primary GID is `group`'s GID is
+    // also a member, even if they don't appear in the comma list.
+    if let Some(gid) = target_gid {
+        let passwd = fs::read_to_string("/etc/passwd")
+            .await
+            .context("reading /etc/passwd")?;
+        for line in passwd.lines() {
+            let fields: Vec<&str> = line.splitn(7, ':').collect();
+            if fields.len() < 7 {
+                continue;
+            }
+            if fields[0] == username && fields[3].parse::<u32>().ok() == Some(gid) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Tiny `/etc/group` parser. We avoid pulling in `nix`/`libc` for one
+/// lookup — the format is `name:passwd:gid:members`, one record per line.
+fn lookup_group_gid(name: &str) -> Option<u32> {
+    let content = std::fs::read_to_string("/etc/group").ok()?;
+    for line in content.lines() {
+        let mut fields = line.splitn(4, ':');
+        let n = fields.next()?;
+        let _passwd = fields.next()?;
+        let gid_s = fields.next()?;
+        if n == name {
+            return gid_s.parse().ok();
+        }
+    }
+    None
+}
+
+// --- User management ------------------------------------------------------
+
+/// Lowest UID we'll let the API touch. Anything below is system-managed
+/// (root, daemon, the `bananas` service user) and locking ourselves out
+/// of those would brick the admin server itself.
+const MIN_USER_UID: u32 = 1000;
+
+/// Validate POSIX-portable usernames: leading lowercase or underscore,
+/// then alnum/underscore/hyphen. useradd already enforces this, but we
+/// reject up-front so the error message is sane.
+fn valid_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 32 {
+        return false;
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !(first.is_ascii_lowercase() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+fn ensure_password_safe(password: &str) -> Result<()> {
+    if password.is_empty() {
+        anyhow::bail!("password must not be empty");
+    }
+    if password.contains('\0') || password.contains('\n') || password.contains(':') {
+        anyhow::bail!("password may not contain NUL, newline, or colon");
+    }
+    if password.len() > 128 {
+        anyhow::bail!("password too long (>128 chars)");
+    }
+    Ok(())
+}
+
+async fn list_users(include_hashes: bool) -> Result<String> {
+    let passwd = fs::read_to_string("/etc/passwd").await.context("reading /etc/passwd")?;
+    let group = fs::read_to_string("/etc/group").await.context("reading /etc/group")?;
+    let shadow = fs::read_to_string("/etc/shadow").await.context("reading /etc/shadow")?;
+
+    // Build a name → primary-group lookup table for the GID column.
+    let mut gid_to_name: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    // user → secondary groups (where they appear in `members`).
+    let mut user_groups: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for line in group.lines() {
+        let mut fields = line.splitn(4, ':');
+        let Some(name) = fields.next() else { continue };
+        let _passwd = fields.next();
+        let Some(gid_s) = fields.next() else { continue };
+        let Ok(gid) = gid_s.parse::<u32>() else { continue };
+        gid_to_name.entry(gid).or_insert_with(|| name.to_string());
+        if let Some(members) = fields.next() {
+            for m in members.split(',').filter(|s| !s.is_empty()) {
+                user_groups.entry(m.to_string()).or_default().push(name.to_string());
+            }
+        }
+    }
+
+    let mut shadow_locked: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut shadow_hashes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for line in shadow.lines() {
+        let mut fields = line.splitn(3, ':');
+        let Some(name) = fields.next() else { continue };
+        let Some(hash) = fields.next() else { continue };
+        let locked = hash.is_empty() || hash == "*" || hash.starts_with('!');
+        shadow_locked.insert(name.to_string(), locked);
+        if include_hashes && !locked {
+            shadow_hashes.insert(name.to_string(), hash.to_string());
+        }
+    }
+
+    let mut users = Vec::new();
+    for line in passwd.lines() {
+        let fields: Vec<&str> = line.splitn(7, ':').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let name = fields[0].to_string();
+        let Ok(uid) = fields[2].parse::<u32>() else { continue };
+        let Ok(gid) = fields[3].parse::<u32>() else { continue };
+        let gecos = fields[4].split(',').next().unwrap_or("").to_string();
+        let home = fields[5].to_string();
+        let shell = fields[6].to_string();
+        let primary_group = gid_to_name.get(&gid).cloned();
+        let mut groups = user_groups.remove(&name).unwrap_or_default();
+        groups.sort();
+        groups.dedup();
+        let mut entry = json!({
+            "name": name.clone(),
+            "uid": uid,
+            "gid": gid,
+            "primary_group": primary_group,
+            "full_name": if gecos.is_empty() { serde_json::Value::Null } else { json!(gecos) },
+            "home": home,
+            "shell": shell,
+            "locked": shadow_locked.get(&name).copied().unwrap_or(true),
+            "groups": groups,
+            "system": uid < MIN_USER_UID,
+        });
+        if include_hashes {
+            // Empty Option<&String> → null, real hash → string. Only present
+            // for non-system, unlocked accounts (filtered above).
+            if let Some(h) = shadow_hashes.get(&name) {
+                entry["password_hash"] = json!(h);
+            }
+        }
+        users.push(entry);
+    }
+    Ok(serde_json::to_string(&json!({ "users": users }))?)
+}
+
+async fn create_user(
+    username: &str,
+    password: &str,
+    full_name: Option<&str>,
+    admin: bool,
+    password_is_hash: bool,
+) -> Result<()> {
+    if !valid_name(username) {
+        anyhow::bail!("invalid username");
+    }
+    if password_is_hash {
+        ensure_hash_safe(password)?;
+    } else {
+        ensure_password_safe(password)?;
+    }
+    if user_exists(username).await? {
+        anyhow::bail!("user already exists");
+    }
+    let mut cmd = TokioCommand::new("useradd");
+    cmd.arg("-m");
+    if let Some(name) = full_name {
+        if name.contains(':') || name.contains('\n') {
+            anyhow::bail!("invalid full name");
+        }
+        cmd.args(["-c", name]);
+    }
+    cmd.arg(username);
+    let out = cmd.output().await.context("spawning useradd")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "useradd failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    if password_is_hash {
+        chpasswd_encrypted(username, password).await?;
+    } else {
+        chpasswd(username, password).await?;
+    }
+    if admin {
+        set_admin(username, true).await?;
+    }
+    Ok(())
+}
+
+/// Validate a shadow-style password hash. Looser than the plaintext check
+/// because hashes intentionally contain `$` separators — but they must
+/// still be a single line of printable ASCII without colons (which would
+/// break /etc/shadow's field separator) and start with `$<id>$`.
+fn ensure_hash_safe(hash: &str) -> Result<()> {
+    if hash.is_empty() {
+        anyhow::bail!("password hash must not be empty");
+    }
+    if hash.contains('\n') || hash.contains('\0') || hash.contains(':') {
+        anyhow::bail!("password hash may not contain newline, NUL, or colon");
+    }
+    if !hash.starts_with('$') {
+        anyhow::bail!("password hash must be in $id$salt$digest format");
+    }
+    Ok(())
+}
+
+/// `chpasswd -e` reads "user:hash" pairs and writes the hash to
+/// /etc/shadow without rehashing. Used by the config-import path to
+/// restore accounts with their original passwords.
+async fn chpasswd_encrypted(username: &str, hash: &str) -> Result<()> {
+    let mut child = TokioCommand::new("chpasswd")
+        .arg("-e")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning chpasswd -e")?;
+    let mut stdin = child.stdin.take().context("chpasswd stdin missing")?;
+    let line = format!("{}:{}\n", username, hash);
+    stdin.write_all(line.as_bytes()).await.context("writing chpasswd stdin")?;
+    drop(stdin);
+    let out = child.wait_with_output().await.context("waiting on chpasswd")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "chpasswd -e failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+async fn set_admin(username: &str, admin: bool) -> Result<()> {
+    if !valid_name(username) {
+        anyhow::bail!("invalid username");
+    }
+    if username == "root" {
+        anyhow::bail!("root is implicitly an admin; nothing to do");
+    }
+    let uid = uid_of(username).await?.context("user not found")?;
+    if uid < MIN_USER_UID {
+        anyhow::bail!("refusing to modify groups for system user (uid {uid})");
+    }
+    let arg = if admin { "-a" } else { "-d" };
+    let out = TokioCommand::new("gpasswd")
+        .args([arg, username, "bananas-admin"])
+        .output()
+        .await
+        .context("spawning gpasswd")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "gpasswd failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+async fn delete_user(username: &str) -> Result<()> {
+    if !valid_name(username) {
+        anyhow::bail!("invalid username");
+    }
+    let uid = uid_of(username).await?.context("user not found")?;
+    if uid < MIN_USER_UID {
+        anyhow::bail!("refusing to delete system user (uid {uid})");
+    }
+    let out = TokioCommand::new("userdel")
+        .args(["-r", username])
+        .output()
+        .await
+        .context("spawning userdel")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "userdel failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+async fn set_password(username: &str, password: &str) -> Result<()> {
+    if !valid_name(username) {
+        anyhow::bail!("invalid username");
+    }
+    ensure_password_safe(password)?;
+    let uid = uid_of(username).await?.context("user not found")?;
+    if uid < MIN_USER_UID {
+        anyhow::bail!("refusing to change password for system user (uid {uid})");
+    }
+    chpasswd(username, password).await
+}
+
+async fn chpasswd(username: &str, password: &str) -> Result<()> {
+    let mut child = TokioCommand::new("chpasswd")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning chpasswd")?;
+    let mut stdin = child.stdin.take().context("chpasswd stdin missing")?;
+    let line = format!("{}:{}\n", username, password);
+    stdin.write_all(line.as_bytes()).await.context("writing chpasswd stdin")?;
+    drop(stdin);
+    let out = child.wait_with_output().await.context("waiting on chpasswd")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "chpasswd failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+async fn user_exists(username: &str) -> Result<bool> {
+    Ok(uid_of(username).await?.is_some())
+}
+
+async fn uid_of(username: &str) -> Result<Option<u32>> {
+    let passwd = fs::read_to_string("/etc/passwd").await.context("reading /etc/passwd")?;
+    for line in passwd.lines() {
+        let fields: Vec<&str> = line.splitn(7, ':').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        if fields[0] == username {
+            return Ok(fields[2].parse().ok());
+        }
+    }
+    Ok(None)
+}
+
+// --- Filesystem permissions ----------------------------------------------
+
+/// Allowlist for paths the UI is permitted to chown/chmod. We don't want
+/// to give the web admin a way to chmod /etc, /usr, /, etc. Anything
+/// under these prefixes is fair game; everything else gets a 403-style
+/// reply on the wire.
+const PERMS_ALLOW_PREFIXES: &[&str] = &[
+    "/srv/", "/mnt/", "/media/", "/home/", "/opt/",
+    // Match the prefix-with-trailing-slash check below; bare /srv is
+    // also explicitly allowed so the operator can fix the mount root
+    // ownership itself (the original NFS-write motivation).
+    "/srv", "/mnt", "/media", "/home", "/opt",
+];
+
+fn is_safe_perms_path(path: &str) -> bool {
+    if !path.starts_with('/') || path.contains("..") {
+        return false;
+    }
+    PERMS_ALLOW_PREFIXES.iter().any(|p| {
+        // exact-match (e.g. "/srv") OR starts-with-with-slash ("/srv/x")
+        path == *p || path.starts_with(&format!("{}/", p.trim_end_matches('/')))
+    })
+}
+
+async fn stat_path(path: &str) -> Result<String> {
+    if !is_safe_perms_path(path) {
+        anyhow::bail!("path not allowed: {path}");
+    }
+    use std::os::unix::fs::MetadataExt;
+    let md = std::fs::symlink_metadata(path)
+        .with_context(|| format!("stat {path}"))?;
+    let uid = md.uid();
+    let gid = md.gid();
+    let mode = md.mode() & 0o7777;
+    let kind = if md.is_dir() { "dir" }
+        else if md.file_type().is_symlink() { "symlink" }
+        else if md.is_file() { "file" }
+        else { "other" };
+    let user = lookup_user(uid).unwrap_or_default();
+    let group = lookup_group_name(gid).unwrap_or_default();
+    Ok(serde_json::to_string(&serde_json::json!({
+        "path": path,
+        "uid": uid,
+        "gid": gid,
+        "user": user,
+        "group": group,
+        "mode": format!("{mode:o}"),
+        "mode_decimal": mode,
+        "kind": kind,
+    }))?)
+}
+
+async fn set_permissions(
+    path: &str,
+    uid: Option<u32>,
+    gid: Option<u32>,
+    mode: Option<&str>,
+    recursive: bool,
+) -> Result<String> {
+    if !is_safe_perms_path(path) {
+        anyhow::bail!("path not allowed: {path}");
+    }
+    if uid.is_none() && gid.is_none() && mode.is_none() {
+        anyhow::bail!("nothing to change — set at least one of uid, gid, mode");
+    }
+    let mut steps = Vec::<String>::new();
+
+    if uid.is_some() || gid.is_some() {
+        let owner = format!(
+            "{}:{}",
+            uid.map(|n| n.to_string()).unwrap_or_default(),
+            gid.map(|n| n.to_string()).unwrap_or_default()
+        );
+        let mut cmd = TokioCommand::new("chown");
+        if recursive { cmd.arg("-R"); }
+        cmd.args([owner.as_str(), path]);
+        let out = cmd.output().await.context("spawning chown")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "chown failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        steps.push(format!("chown {owner} {}", if recursive { "-R " } else { "" }.to_string() + path));
+    }
+
+    if let Some(mode_str) = mode {
+        // Accept either decimal ("493") or octal-with-prefix ("0o755") /
+        // bare octal ("755"). chmod's own parser handles bare octal.
+        let mode_arg = mode_str.trim_start_matches("0o");
+        if !mode_arg.chars().all(|c| c.is_ascii_digit()) {
+            anyhow::bail!("mode must be numeric (octal), got {mode_str:?}");
+        }
+        let mut cmd = TokioCommand::new("chmod");
+        if recursive { cmd.arg("-R"); }
+        cmd.args([mode_arg, path]);
+        let out = cmd.output().await.context("spawning chmod")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "chmod failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        steps.push(format!("chmod {mode_arg} {}", if recursive { "-R " } else { "" }.to_string() + path));
+    }
+    Ok(steps.join("\n"))
+}
+
+fn lookup_user(uid: u32) -> Option<String> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in passwd.lines() {
+        let mut fields = line.splitn(4, ':');
+        let name = fields.next()?;
+        let _ = fields.next()?;
+        let uid_s = fields.next()?;
+        if uid_s.parse::<u32>().ok() == Some(uid) {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn lookup_group_name(gid: u32) -> Option<String> {
+    let group = std::fs::read_to_string("/etc/group").ok()?;
+    for line in group.lines() {
+        let mut fields = line.splitn(4, ':');
+        let name = fields.next()?;
+        let _ = fields.next()?;
+        let gid_s = fields.next()?;
+        if gid_s.parse::<u32>().ok() == Some(gid) {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+/// Run smartctl against a validated block device. Returns the JSON output
+/// verbatim — the server passes it through to the UI, which extracts the
+/// fields it cares about (smart_status.passed, ata_smart_attributes, etc.).
+async fn smart(device: &str) -> Result<String> {
+    if !is_valid_block_device(device) {
+        anyhow::bail!("invalid device path {device:?}");
+    }
+    let out = TokioCommand::new("smartctl")
+        .args(["-j", "-H", "-A", device])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .context("spawning smartctl")?;
+    // smartctl uses a bitmask exit code: bit 0 = command line error, bits
+    // 1+ = various drive states. Bits 4+ (failures predicted etc.) still
+    // return useful JSON, so we accept everything except bit 0.
+    let code = out.status.code().unwrap_or(0);
+    if code & 0b1 != 0 {
+        anyhow::bail!(
+            "smartctl rejected the request: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let json = String::from_utf8(out.stdout).context("smartctl produced non-UTF-8 output")?;
+    Ok(json)
+}
+
+/// Allowlist for device paths the helper will hand to smartctl. Matches
+/// the kernel's typical block-device naming: sd[a-z]+, nvme<n>n<n>,
+/// mmcblk<n>. Anything with a path separator past `/dev/` or non-ASCII is
+/// rejected outright.
+fn is_valid_block_device(device: &str) -> bool {
+    let Some(name) = device.strip_prefix("/dev/") else {
+        return false;
+    };
+    if name.is_empty() || name.len() > 32 || !name.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return false;
+    }
+    // sd[a-z]+, nvme*n*, mmcblk* covers our cases. We don't bother with
+    // a regex — the alphanumeric check above already constrains it.
+    name.starts_with("sd") || name.starts_with("nvme") || name.starts_with("mmcblk")
+}
+
+async fn write_fstab(content: &str) -> Result<String> {
+    validate_fstab(content)?;
+    let path = Path::new("/etc/fstab");
+    let dir = path.parent().unwrap_or_else(|| Path::new("/"));
+    let tmp = dir.join(".fstab.tmp");
+    fs::write(&tmp, content)
+        .await
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644))
+        .await
+        .ok();
+    fs::rename(&tmp, path)
+        .await
+        .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
+
+    let reload = systemd_daemon_reload()
+        .await
+        .unwrap_or_else(|e| format!("(daemon-reload failed: {e})"));
+    Ok(format!(
+        "wrote /etc/fstab ({} bytes)\n{}",
+        content.len(),
+        reload
+    ))
+}
+
+/// Reject obviously malformed fstab content. Each non-blank, non-comment
+/// line must have 6 whitespace-separated fields and an absolute
+/// mountpoint. We don't try to validate the device spec or fstype — both
+/// can take many shapes (LABEL=, UUID=, /dev/X, tmpfs, swap, none, etc.)
+/// and `mount` will surface specific errors when actually mounting.
+fn validate_fstab(content: &str) -> Result<()> {
+    for (i, raw) in content.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() != 6 {
+            anyhow::bail!(
+                "line {}: expected 6 fields (device, mountpoint, fstype, options, dump, pass), got {}",
+                i + 1,
+                fields.len()
+            );
+        }
+        if fields[1] != "none" && fields[1] != "swap" && !fields[1].starts_with('/') {
+            anyhow::bail!(
+                "line {}: mountpoint must be absolute (got {:?})",
+                i + 1,
+                fields[1]
+            );
+        }
+        for (which, idx) in [("dump", 4), ("pass", 5)] {
+            if fields[idx].parse::<u32>().is_err() {
+                anyhow::bail!(
+                    "line {}: {} must be a non-negative integer (got {:?})",
+                    i + 1,
+                    which,
+                    fields[idx]
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn systemd_daemon_reload() -> Result<String> {
+    let out = TokioCommand::new("systemctl")
+        .arg("daemon-reload")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .context("spawning systemctl daemon-reload")?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        anyhow::bail!(
+            "systemctl daemon-reload failed (status {}): {combined}",
+            out.status
+        );
+    }
+    Ok(combined)
 }
 
 async fn exportfs_reload() -> Result<String> {

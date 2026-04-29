@@ -1,11 +1,12 @@
 [workspace]
-members = ["crates/server", "crates/helper"]
+members = ["crates/server", "crates/helper", "crates/ui", "crates/stats", "crates/dashboard"]
 exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"   # scarthgap's rust-native is 1.75 — edition 2024 needs 1.85+
+edition = "2024"
+rust-version = "1.85"
 authors = ["rubeniskov <me@rubeniskov.com>"]
 license = "MIT"
 
@@ -15,9 +16,65 @@ license = "MIT"
 # manifest, and tries to enumerate our member crates with the wrong toolchain.
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["full"] }
-axum = "0.7"
-serde = { version = "1", features = ["derive"] }
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Internal crates — referenced by `package.workspace = true` from members so
+# the path is defined exactly once.
+bananas-helper = { path = "crates/helper" }
+bananas-server = { path = "crates/server" }
+bananas-ui = { path = "crates/ui" }
+bananas-stats = { path = "crates/stats" }
+bananas-dashboard = { path = "crates/dashboard" }
+
+tokio = { version = "1.52", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+anyhow = "1.0.102"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tower-http = { version = "0.6", features = ["trace", "fs"] }
+# Auth — pure-Rust SHA-512 crypt for /etc/shadow verification + HMAC for
+# session cookies. All no-std-friendly so the cross-compile via zigbuild
+# stays clean.
+sha-crypt = "0.5"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+libc = "0.2"
+toml = "1"
+# Stats / dashboard deps
+rusqlite = { version = "0.39", features = ["bundled"] }
+time = { version = "0.3", features = ["serde", "macros", "formatting", "local-offset"] }
+nix = { version = "0.31", features = ["fs"] }
+thiserror = "2"
+slint = { version = "1.16", default-features = false, features = ["compat-1-2", "renderer-femtovg", "renderer-software", "backend-linuxkms-noseat", "std"] }
+slint-build = "1.16"
+
+# UI (wasm) deps — pinned at the workspace level so the bananas-ui crate
+# doesn't drift from the rest of the tree on a `cargo update`.
+dioxus = { version = "0.7", features = ["web", "router"] }
+gloo-net = { version = "0.6", features = ["http"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "Window",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "HtmlAnchorElement",
+  "HtmlInputElement",
+  "Blob",
+  "BlobPropertyBag",
+  "Url",
+  "File",
+  "FileList",
+  "CssStyleDeclaration",
+  "Location",
+] }
+tracing-wasm = "0.2"
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

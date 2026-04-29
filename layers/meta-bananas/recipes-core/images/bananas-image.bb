@@ -141,7 +141,15 @@ IMAGE_INSTALL += " \
     usbutils \
     i2c-tools \
     bananas-server \
+    bananas-stats \
 "
+# bananas-dashboard (Slint LCD UI) and the Mali GPU userspace stack
+# (mesa lima + libegl + libgles2 + libgbm + libdrm + fontconfig + fonts)
+# are intentionally NOT pulled in yet — the Slint cross-compile needs an
+# armhf fontconfig + pkg-config sysroot we don't have. Add them back once
+# build-stats-arm switches to `cross` (docker w/ multiarch fontconfig-dev)
+# or vendors a sysroot. The CONFIG_DRM_LIMA kernel fragment stays so a
+# userspace lima driver is functional the moment we ship it.
 
 # Optional CIFS/Samba (comment in if needed)
 # IMAGE_INSTALL += " samba samba-client cifs-utils"

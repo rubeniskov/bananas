@@ -11,8 +11,18 @@ info = "python --version && kas --version"
 # `build`: kas → bitbake. Sources .env first so NFS_EXPORT_NETWORK and
 # ROOT_PASSWORD_HASH (declared in kas.yml's `env:` block) reach the recipe.
 # Without them install_nfs_exports / set_root_password call bbfatal.
+#
+# We force `-c rootfs` so the rootfs is regenerated each run. Forcing only
+# `image_complete` is not enough — its sstate restoration can hit, mark
+# the task done, and never actually copy the tarball into deploy/. Forcing
+# rootfs cascades through to do_image_*, which DO write to deploy/.
+#
+# The post-build copy-from-work fallback handles the residual case where
+# sstate still convinces bitbake the deploy step is done: the image's
+# WORKDIR is preserved by RM_WORK_EXCLUDE in kas.yml, so we can copy from
+# there if deploy/ is missing the tarball.
 [tasks.build]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; kas build kas.yml'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; kas build kas.yml -- -c rootfs -f bananas-image && kas build kas.yml; ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz; if [ ! -f \"$ROOTFS\" ] || [ \"$ROOTFS\" -ot $(ls -t build/tmp/work/bananapro-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/bananas-image-bananapro.rootfs-*.tar.gz 2>/dev/null | head -1) ]; then echo \"deploy/ tarball stale or missing — copying from work/\"; mkdir -p build/tmp/deploy/images/bananapro; cp -f build/tmp/work/bananapro-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/* build/tmp/deploy/images/bananapro/ 2>/dev/null || true; fi'"
 
 [tasks.setup-fel]
 cmd = "test -d vendor/sunxi-tools || git clone --depth 1 https://github.com/linux-sunxi/sunxi-tools.git vendor/sunxi-tools && make -C vendor/sunxi-tools tools"
@@ -21,17 +31,65 @@ cmd = "test -d vendor/sunxi-tools || git clone --depth 1 https://github.com/linu
 cmd = "./vendor/sunxi-tools/sunxi-fel"
 depends-on = ["setup-fel"]
 
+# `setup-dx`: one-shot install of dioxus-cli into ~/.cargo/bin so `dx build`
+# works from `build-ui`. Cached after first install — `dx --version` short-circuits.
+[tasks.setup-dx]
+cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v dx >/dev/null || cargo install dioxus-cli --locked --version ^0.7'"
+
+# `build-ui`: compile crates/ui to wasm via dioxus-cli (`dx build --release`).
+# Output lands in target/dx/bananas-ui/release/web/public/ (index.html, wasm/,
+# assets/, …). Staged into serve/ui/ AND packed into serve/bin/bananas-ui.tar.gz
+# so the Yocto recipe sees the bundle as a tracked SRC_URI input — without the
+# tarball, do_install's cache key doesn't depend on the bundle's contents and
+# `bitbake` keeps shipping a stale UI on subsequent iterations even when the
+# wasm/CSS changed. Wipes target/dx output dir first because dx-cli appends
+# asset hashes per-build and never garbage-collects stale ones.
+#
+# We unset CARGO/RUSTC and force RUSTUP_TOOLCHAIN=stable so dx falls back to
+# the host rustup toolchain, which has wasm32-unknown-unknown installed.
+# The pixi conda rust does not ship a wasm std and would error with
+# "Missing rust target wasm32-unknown-unknown".
+[tasks.build-ui]
+cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; rm -rf target/dx/bananas-ui/release/web/public && dx build --release --package bananas-ui --platform web && rm -rf serve/ui && mkdir -p serve/ui serve/bin && cp -r target/dx/bananas-ui/release/web/public/. serve/ui/ && tar -C serve/ui -czf serve/bin/bananas-ui.tar.gz .'"
+depends-on = ["setup-dx"]
+
 # `build-server-arm`: cross-compile bananas-server + bananas-helper for the
 # BPI's armv7-unknown-linux-gnueabihf target using cargo-zigbuild (zig as the
 # cross linker, no per-target gcc needed). Stages the stripped binaries in
-# serve/bin/ where the bananas-server.bb recipe picks them up.
+# serve/bin/ where the bananas-server.bb recipe picks them up. crates/ui is
+# wasm-only and excluded from the host workspace build via -p flags.
+#
+# `env -u CFLAGS …` strips pixi's conda-env x86_64-host CFLAGS so cc-rs
+# doesn't try to feed `-march=haswell` into the armv7 cross-compile of
+# rusqlite-bundled (pulled in transitively via bananas-stats). Without
+# this, libsqlite3-sys's build script dies with `unknown CPU: 'haswell'`.
 [tasks.build-server-arm]
-cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\" cargo zigbuild --release --workspace --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-server target/armv7-unknown-linux-gnueabihf/release/bananas-helper serve/bin/'"
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-server -p bananas-helper --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-server target/armv7-unknown-linux-gnueabihf/release/bananas-helper serve/bin/'"
+
+# `build-stats-arm`: cross-compile bananas-stats (the sampler daemon)
+# for armv7 via cargo-zigbuild. Pure-Rust deps + bundled rusqlite, so no
+# sysroot needed. The companion bananas-dashboard (Slint LCD UI) is NOT
+# built here yet — Slint's text stack pulls in `yeslogic-fontconfig-sys`
+# which requires an armhf fontconfig + pkg-config sysroot at link time.
+# That follow-up either ports the build to `cross` (docker image with
+# multiarch fontconfig-dev) or vendors a minimal armhf sysroot.
+#
+# CFLAGS/CXXFLAGS are unset because pixi injects host-x86_64 march flags
+# (`-march=nocona -mtune=haswell`) from its conda env. Those leak into
+# cc-rs's invocation when rusqlite-bundled compiles SQLite, breaking the
+# armv7 cross-compile with "unknown CPU: 'haswell'".
+[tasks.build-stats-arm]
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-stats --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-stats serve/bin/'"
 
 # --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
-# `serve-tftp`: stage kernel+dtb into ./serve/tftp/. Wrapped in `bash -c` because deno_task_shell's builtin `cp` doesn't support `-L`.
+# `serve-tftp`: stage kernel+dtb into ./serve/tftp/. Wrapped in `bash -c`
+# because deno_task_shell's builtin `cp` doesn't support `-L`. Also
+# asserts the rootfs tarball is present so we fail with a useful message
+# instead of letting extract-rootfs error with "No such file" inside a
+# Docker container. The `build` task is supposed to guarantee this; this
+# guard is just a belt-and-suspenders.
 [tasks.serve-tftp]
-cmd = "bash -c 'mkdir -p serve/tftp && rm -f serve/tftp/* && cp -L build/tmp/deploy/images/bananapro/uImage build/tmp/deploy/images/bananapro/sun7i-a20-bananapro.dtb serve/tftp/'"
+cmd = "bash -c 'set -e; ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz; [ -f \"$ROOTFS\" ] || { echo \"ERROR: rootfs missing at $ROOTFS — build/recovery did not populate it. Try: pixi run build (which forces image_complete and falls back to copying from work/).\" >&2; exit 1; }; mkdir -p serve/tftp && rm -f serve/tftp/* && cp -L build/tmp/deploy/images/bananapro/uImage build/tmp/deploy/images/bananapro/sun7i-a20-bananapro.dtb serve/tftp/'"
 
 # `extract-rootfs`: unpack the rootfs tarball into ./serve/nfs/bananas/ as root via a throwaway alpine container.
 # `--userns=host` is required because the daemon has userns-remap enabled — without it, container UID 0 maps to host
@@ -51,8 +109,15 @@ depends-on = ["serve-tftp"]
 # BPI_HOST is required — set in .env or export before running. Tasks below
 # `set -a; . .env; set +a` so .env values populate the env, then the
 # `${BPI_HOST:?...}` shell-expansion fails fast with a helpful message.
+#
+# UserKnownHostsFile=/dev/null + StrictHostKeyChecking=no: each `iterate`
+# wipes /etc on the BPI (rootfs is re-extracted from the Yocto tarball), so
+# OpenSSH regenerates host keys on first boot. Tracking them in known_hosts
+# would refuse every connection past iteration #2 with
+# "REMOTE HOST IDENTIFICATION HAS CHANGED". For a development NAS that gets
+# its rootfs swapped under it, MITM-detection via known_hosts isn't useful.
 [tasks.reboot]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; ssh -o StrictHostKeyChecking=accept-new root@\"$host\" reboot || true'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR root@\"$host\" reboot || true'"
 
 # `wait-board-down`: poll ICMP until $BPI_HOST stops answering, so the next
 # step (extract-rootfs) runs against an idle NFS share. Without this, the
@@ -68,7 +133,7 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
 # now-correctly-staged servers. No buttons, no SD writes, no wedge.
 [tasks.iterate]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-server-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-ui && pixi run build-server-arm && pixi run build-stats-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
 [dependencies]
 python = "==3.11"

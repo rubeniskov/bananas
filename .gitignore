@@ -15,6 +15,8 @@
 /serve/nfs/
 # host-cross-compiled bananas-server/helper binaries staged for the recipe
 /serve/bin/
+# host-built Dioxus Web wasm bundle staged for the recipe
+/serve/ui/
 # local secrets / per-deployment config — see .env.example
 .env
 # rust workspace build output

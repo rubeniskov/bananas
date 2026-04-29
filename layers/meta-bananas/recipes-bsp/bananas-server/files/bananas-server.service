@@ -9,8 +9,14 @@ Type=simple
 User=bananas
 Group=bananas
 ExecStart=/usr/bin/bananas-server
+# StateDirectory=bananas → /var/lib/bananas, owned by the User above with
+# mode 0700. Cheapest place to stash the persistent HMAC session key.
+StateDirectory=bananas
+StateDirectoryMode=0700
 Environment=BANANAS_HELPER_SOCKET=/run/bananas/helper.sock
 Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
+Environment=BANANAS_UI_DIR=/usr/share/bananas/ui
+Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
 Restart=on-failure
 RestartSec=2
 

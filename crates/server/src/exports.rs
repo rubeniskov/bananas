@@ -53,18 +53,39 @@ pub fn rows(input: &str) -> Vec<Row> {
         .collect()
 }
 
+/// Column-aligned `/etc/exports` output. Path is left-padded to the
+/// widest path in the set so the host(options) column lines up
+/// vertically — easier to scan, and `exportfs` doesn't care about
+/// whitespace runs between fields.
 pub fn serialize(rows: &[Row]) -> String {
-    rows.iter()
+    if rows.is_empty() {
+        return String::new();
+    }
+    let formatted_paths: Vec<String> = rows
+        .iter()
         .map(|r| {
-            let path = if r.path.contains(char::is_whitespace) {
+            if r.path.contains(char::is_whitespace) {
                 format!("\"{}\"", r.path)
             } else {
                 r.path.clone()
-            };
+            }
+        })
+        .collect();
+    let path_width = formatted_paths
+        .iter()
+        .map(|p| p.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    rows.iter()
+        .zip(formatted_paths.iter())
+        .map(|(r, path)| {
+            let pad = path_width.saturating_sub(path.chars().count());
+            let spaces = " ".repeat(pad);
             if r.options.is_empty() {
-                format!("{} {}\n", path, r.host)
+                format!("{path}{spaces}  {}\n", r.host)
             } else {
-                format!("{} {}({})\n", path, r.host, r.options)
+                format!("{path}{spaces}  {}({})\n", r.host, r.options)
             }
         })
         .collect()
@@ -285,7 +306,19 @@ mod tests {
     fn round_trip_serialize() {
         let r = rows("/a 1.1.1.1(rw,sync)");
         let out = serialize(&r);
-        assert_eq!(out, "/a 1.1.1.1(rw,sync)\n");
+        // Two-space gutter between path column and host(options).
+        assert_eq!(out, "/a  1.1.1.1(rw,sync)\n");
+    }
+
+    #[test]
+    fn aligns_columns_when_paths_differ_in_length() {
+        let r = rows("/short *(ro)\n/a/much/longer/path *(rw)");
+        let out = serialize(&r);
+        // Both rows should have the same column for the host token.
+        let lines: Vec<&str> = out.lines().collect();
+        let host_col_a = lines[0].find('*').unwrap();
+        let host_col_b = lines[1].find('*').unwrap();
+        assert_eq!(host_col_a, host_col_b);
     }
 
     #[test]

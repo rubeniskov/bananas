@@ -1,0 +1,26 @@
+[package]
+name = "bananas-dashboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Slint LCD dashboard for the BanaNAS — reads /var/lib/bananas/stats.db (WAL) and renders live CPU/mem/network/disk on the BPI's 5\" panel via Mali-400 (lima) + KMS."
+
+[[bin]]
+name = "bananas-dashboard"
+path = "src/main.rs"
+
+[dependencies]
+bananas-stats.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+time.workspace = true
+slint.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
