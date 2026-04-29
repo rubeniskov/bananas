@@ -77,6 +77,17 @@ pub enum Command {
     /// you can't lock yourself out of the helper by chpass-ing the
     /// `bananas` user.
     SetPassword { username: String, password: String },
+    /// Self-service password change: verifies `old_password` against
+    /// /etc/shadow and only on success writes `new_password`. Allowed for
+    /// root (no UID gate) — that's the whole point: the firstboot
+    /// shadow-expiry hook leaves root with lastchg=0, and this command
+    /// is the only way the UI can clear it. The login flow surfaces
+    /// `error == "password_expired"` to trigger this on the client.
+    ChangeOwnPassword {
+        username: String,
+        old_password: String,
+        new_password: String,
+    },
     /// Add or remove `username` from the `bananas-admin` group. Used to
     /// toggle UI sign-in privilege for an existing account.
     SetAdmin { username: String, admin: bool },

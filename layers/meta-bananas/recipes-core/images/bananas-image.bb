@@ -44,6 +44,19 @@ install_root_authkey() {
     chown -R root:root ${IMAGE_ROOTFS}${root_home}/.ssh
 }
 
+# Force root to change its password on first sign-in. This sets shadow's
+# third field (last password change, in days since epoch) to 0 — PAM
+# treats that as "must change at next login" for both serial console and
+# any password-using SSH session. The web UI checks the same field via
+# bananas-helper and surfaces a "set new password" form on the login
+# page until it's been rotated. After the first ChangePassword the
+# field is bumped to today's day count and the prompt stops appearing.
+ROOTFS_POSTPROCESS_COMMAND += "expire_root_password;"
+
+expire_root_password() {
+    sed -i 's%^\(root:[^:]*\):[^:]*:%\1:0:%' ${IMAGE_ROOTFS}/etc/shadow
+}
+
 # First-boot rootfs grow — only fires on MMC boots; NFS rootfs (the
 # iterate-loop dev path) makes the script a no-op. The guard file is
 # created on success so the service short-circuits on every subsequent

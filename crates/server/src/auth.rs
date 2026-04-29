@@ -24,8 +24,11 @@ use crate::{
 /// the /api nest prefix is stripped).
 ///
 /// `/logout` is public so a user with an expired/tampered cookie can still
-/// clear it without first logging in again.
-const PUBLIC_ROUTES: &[&str] = &["/login", "/logout", "/healthz"];
+/// clear it without first logging in again. `/password` is public because
+/// it's the only escape hatch when login returns `password_expired` —
+/// the caller has to prove the old password anyway, so an extra session
+/// cookie would be redundant.
+const PUBLIC_ROUTES: &[&str] = &["/login", "/logout", "/healthz", "/password"];
 
 /// Cookie TTLs. "Remember me" trades off security for convenience —
 /// 30 days is the same default Cockpit uses.
@@ -98,6 +101,80 @@ pub async fn logout() -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(header::SET_COOKIE, expire_cookie_header());
     (StatusCode::OK, headers, Json(json!({ "ok": true }))).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub username: String,
+    pub old_password: String,
+    pub new_password: String,
+    #[serde(default)]
+    pub remember: bool,
+}
+
+/// Self-service password change. Used both for "first login" expiry
+/// recovery (when /login returns `password_expired`) and as a generic
+/// "change my password" path. On success we also issue a session cookie
+/// so the UI can drop the user straight into the admin panel without a
+/// follow-up /login round-trip.
+pub async fn change_password(
+    State(state): State<AppState>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Response {
+    if req.username.is_empty() || req.old_password.is_empty() || req.new_password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "all fields are required" })),
+        )
+            .into_response();
+    }
+    if req.new_password == req.old_password {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "new password must differ from the old one" })),
+        )
+            .into_response();
+    }
+
+    let cmd = Command::ChangeOwnPassword {
+        username: req.username.clone(),
+        old_password: req.old_password,
+        new_password: req.new_password,
+    };
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse { ok: true, .. }) => {
+            let ttl = if req.remember {
+                TTL_REMEMBER_SECS
+            } else {
+                TTL_SHORT_SECS
+            };
+            let value = Session::sign(&state.session_key, &req.username, ttl);
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::SET_COOKIE,
+                cookie_header(&value, if req.remember { Some(ttl) } else { None }),
+            );
+            (
+                StatusCode::OK,
+                headers,
+                Json(json!({ "ok": true, "username": req.username })),
+            )
+                .into_response()
+        }
+        Ok(HelperResponse { error, .. }) => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "ok": false,
+                "error": error.unwrap_or_else(|| "invalid credentials".into())
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "ok": false, "error": format!("helper unreachable: {e}") })),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn me(headers: HeaderMap, State(state): State<AppState>) -> Response {

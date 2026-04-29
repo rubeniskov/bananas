@@ -127,6 +127,12 @@ pub async fn fetch_me() -> Result<Option<Me>, String> {
     }
 }
 
+/// Sentinel error string returned by `login` when /etc/shadow's lastchg
+/// field is 0 — the user must rotate their password before the session
+/// is granted. The login UI checks for this exact value and switches to
+/// the "set new password" form.
+pub const PASSWORD_EXPIRED: &str = "password_expired";
+
 pub async fn login(body: &LoginRequest) -> Result<Me, String> {
     let resp = Request::post("/api/login")
         .json(body)
@@ -135,8 +141,49 @@ pub async fn login(body: &LoginRequest) -> Result<Me, String> {
         .await
         .map_err(|e| e.to_string())?;
     if !resp.ok() {
+        // Try to parse the JSON body so callers can detect the
+        // password-expired sentinel without string-matching the entire
+        // "HTTP 401: …" line.
         let status = resp.status();
         let txt = resp.text().await.unwrap_or_default();
+        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&txt) {
+            if let Some(msg) = body.get("error").and_then(|v| v.as_str()) {
+                return Err(msg.to_string());
+            }
+        }
+        return Err(format!("HTTP {status}: {txt}"));
+    }
+    Ok(Me {
+        username: body.username.clone(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangePasswordRequest {
+    pub username: String,
+    pub old_password: String,
+    pub new_password: String,
+    pub remember: bool,
+}
+
+/// POST /api/password — self-service password rotation. On success the
+/// server also issues a session cookie, so the caller can treat this
+/// like a successful login.
+pub async fn change_password(body: &ChangePasswordRequest) -> Result<Me, String> {
+    let resp = Request::post("/api/password")
+        .json(body)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.ok() {
+        let status = resp.status();
+        let txt = resp.text().await.unwrap_or_default();
+        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&txt) {
+            if let Some(msg) = body.get("error").and_then(|v| v.as_str()) {
+                return Err(msg.to_string());
+            }
+        }
         return Err(format!("HTTP {status}: {txt}"));
     }
     Ok(Me {

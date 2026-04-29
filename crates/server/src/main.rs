@@ -126,6 +126,7 @@ async fn main() -> Result<()> {
     let api = Router::new()
         .route("/login", post(auth::login))
         .route("/logout", post(auth::logout))
+        .route("/password", post(auth::change_password))
         .route("/me", get(auth::me))
         .route("/healthz", get(|| async { "ok" }))
         .route("/exports", get(get_exports).post(post_export))

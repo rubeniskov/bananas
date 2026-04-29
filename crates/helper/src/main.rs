@@ -151,6 +151,19 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
                 Err(e) => Response::err(e.to_string(), String::new()),
             }
         }
+        Command::ChangeOwnPassword {
+            username,
+            old_password,
+            new_password,
+        } => {
+            match change_own_password(&username, &old_password, &new_password).await {
+                Ok(()) => Response::ok(format!("password rotated for {username}")),
+                // Same redaction rule as authenticate — bury the specific
+                // reason behind a single "invalid credentials" so we don't
+                // confirm whether the user exists.
+                Err(_) => Response::err("invalid credentials", String::new()),
+            }
+        }
         Command::SetAdmin { username, admin } => match set_admin(&username, admin).await {
             Ok(()) => Response::ok(format!(
                 "{username} is {} an admin",
@@ -271,6 +284,38 @@ const ADMIN_GROUP: &str = "bananas-admin";
 /// `bananas-admin`). Only `$6$` (SHA-512) hashes are accepted — that's what
 /// the BanaNAS image produces via `mkpasswd -m sha-512`.
 async fn authenticate(username: &str, password: &str) -> Result<()> {
+    let entry = verify_shadow_password(username, password).await?;
+
+    // The shadow file's third field is "days since 1970-01-01 of the last
+    // password change". `0` is the magic value `chage -d 0` writes — PAM
+    // treats it as "must change at next login". We surface it as a stable
+    // sentinel so the UI can show a "set new password" form instead of a
+    // generic 401.
+    if entry.lastchg_zero {
+        anyhow::bail!("password_expired");
+    }
+
+    // Authorization gate. Root is always trusted; everyone else must be in
+    // the bananas-admin group. Same error string as a password mismatch so
+    // the API can't be used to enumerate which users have admin access.
+    if username != "root" && !is_in_group(username, ADMIN_GROUP).await? {
+        anyhow::bail!("user not in {ADMIN_GROUP} group");
+    }
+    Ok(())
+}
+
+struct ShadowEntry {
+    /// True when /etc/shadow's third field (last password change in days
+    /// since epoch) is exactly `0` — i.e. `chage -d 0` was applied.
+    lastchg_zero: bool,
+}
+
+/// Verify `password` against the hash stored for `username` in /etc/shadow.
+/// Returns the parsed shadow row on success so callers can also inspect
+/// the expiry field. Used by both `authenticate` and `change_own_password`
+/// — the latter wants to accept the password even when expired so the
+/// user can rotate it.
+async fn verify_shadow_password(username: &str, password: &str) -> Result<ShadowEntry> {
     if username.is_empty() || username.contains(':') || username.contains('\n') {
         anyhow::bail!("malformed username");
     }
@@ -281,14 +326,15 @@ async fn authenticate(username: &str, password: &str) -> Result<()> {
         .await
         .context("reading /etc/shadow (helper must run as root)")?;
 
-    let hash = shadow
+    let (hash, lastchg) = shadow
         .lines()
         .find_map(|line| {
-            let mut fields = line.splitn(3, ':');
+            let mut fields = line.splitn(4, ':');
             let user = fields.next()?;
             let pw = fields.next()?;
+            let lastchg = fields.next()?;
             if user == username {
-                Some(pw.to_string())
+                Some((pw.to_string(), lastchg.to_string()))
             } else {
                 None
             }
@@ -309,13 +355,25 @@ async fn authenticate(username: &str, password: &str) -> Result<()> {
 
     sha_crypt::sha512_check(password, &hash).map_err(|_| anyhow::anyhow!("password mismatch"))?;
 
-    // Authorization gate. Root is always trusted; everyone else must be in
-    // the bananas-admin group. Same error string as a password mismatch so
-    // the API can't be used to enumerate which users have admin access.
-    if username != "root" && !is_in_group(username, ADMIN_GROUP).await? {
-        anyhow::bail!("user not in {ADMIN_GROUP} group");
+    Ok(ShadowEntry {
+        lastchg_zero: lastchg.trim() == "0",
+    })
+}
+
+/// Self-service password change. Verifies the old password, then runs
+/// `chpasswd` to set the new one. Unlike `set_password`, this is allowed
+/// for any user — including root — because the caller already proved
+/// they know the current password. After `chpasswd` succeeds, `chage`
+/// stamps lastchg with today's day count, which clears the
+/// `password_expired` state for future logins.
+async fn change_own_password(username: &str, old_password: &str, new_password: &str) -> Result<()> {
+    // Same shape-check as authenticate, plus the new-password rules.
+    let _ = verify_shadow_password(username, old_password).await?;
+    if !valid_name(username) {
+        anyhow::bail!("invalid username");
     }
-    Ok(())
+    ensure_password_safe(new_password)?;
+    chpasswd(username, new_password).await
 }
 
 /// Read /etc/group and return true if `username` is listed as a member of
