@@ -40,8 +40,8 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .or_else(default_config_path);
 
-    let cfg = match cfg_path {
-        Some(p) if p.exists() => config::Config::load(&p)?,
+    let cfg = match cfg_path.as_ref() {
+        Some(p) if p.exists() => config::Config::load(p)?,
         _ => config::Config::default(),
     };
 
@@ -67,8 +67,10 @@ fn main() -> Result<()> {
     });
 
     // Hand off to Slint. `app::launch` blocks until the user closes the
-    // window or the process is signalled.
-    app::launch(cfg.ui, snapshot_rx, local_offset)?;
+    // window or the process is signalled. Pass the resolved config path
+    // so the live-reload watcher inside `launch` knows which file to
+    // poll for theme changes (`/etc/bananas/stats.toml` on the BPI).
+    app::launch(cfg.ui, cfg_path, snapshot_rx, local_offset)?;
     Ok(())
 }
 

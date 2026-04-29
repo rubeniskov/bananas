@@ -1756,20 +1756,19 @@ async fn exportfs_reload() -> Result<String> {
 /// request, so a malicious server can't ask the helper to write
 /// /etc/passwd or restart sshd.
 /// Map a logical config name to its on-disk path + the systemd units
-/// that need to be bounced when the file changes. The list shape lets
-/// us hit BOTH bananas-stats AND bananas-dashboard for the stats
-/// config — the dashboard reads the same `/etc/bananas/stats.toml`
-/// for its UI section (theme, panel size, spark window) so the
-/// operator changing the theme via the web UI used to update the
-/// file but leave bananas-dashboard running with the old theme. An
-/// empty slice skips the restart entirely (cloud.toml is read live
-/// by bananas-server on each request).
+/// that need to be bounced when the file changes. Restart behaviour:
+///   - `bananas-stats` is restarted on stats.toml changes — sampling
+///     interval / retention / device filters are read once at startup.
+///   - `bananas-dashboard` is intentionally NOT in this list anymore.
+///     The dashboard polls /etc/bananas/stats.toml's mtime every 2 s
+///     and reapplies theme + UI changes in place, so the LCD doesn't
+///     blink off + redo KMS+EGL init every time the operator flips
+///     a setting through the web UI.
+///   - cloud.toml is read live by bananas-server on each /api/cloud/*
+///     request — no daemon to restart, hence the empty slice.
 fn service_config_target(name: &str) -> Option<(&'static str, &'static [&'static str])> {
     match name {
-        "stats" => Some((
-            "/etc/bananas/stats.toml",
-            &["bananas-stats.service", "bananas-dashboard.service"],
-        )),
+        "stats" => Some(("/etc/bananas/stats.toml", &["bananas-stats.service"])),
         "cloud" => Some(("/etc/bananas/cloud.toml", &[])),
         _ => None,
     }

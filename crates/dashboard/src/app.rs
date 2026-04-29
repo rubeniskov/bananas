@@ -54,6 +54,7 @@ impl History {
 
 pub fn launch(
     cfg: UiCfg,
+    cfg_path: Option<std::path::PathBuf>,
     mut rx: watch::Receiver<Snapshot>,
     local_offset: time::UtcOffset,
 ) -> Result<()> {
@@ -88,6 +89,51 @@ pub fn launch(
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.global::<Theme>().set_dark(now_pm);
+                    }
+                });
+            }
+        });
+    }
+
+    // Live config reload — poll mtime on the config file every 2 s and
+    // reapply theme if the file changed. Lets the operator save a new
+    // theme through the web UI's Stats config modal without
+    // bananas-dashboard.service being bounced (which previously closed
+    // the LCD window for ~1 s while Slint re-initialised KMS+EGL).
+    if let Some(path) = cfg_path {
+        let weak = main.as_weak();
+        let initial_offset = local_offset;
+        tokio::runtime::Handle::current().spawn(async move {
+            let mut last_mtime: Option<std::time::SystemTime> =
+                std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                let mtime = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                if last_mtime == Some(mtime) {
+                    continue;
+                }
+                last_mtime = Some(mtime);
+                tracing::info!(path = %path.display(), "config file changed; reloading theme");
+                let new_cfg = match crate::config::Config::load(&path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "config reload failed; keeping existing theme");
+                        continue;
+                    }
+                };
+                let new_dark = match new_cfg.ui.theme.as_str() {
+                    "light" => false,
+                    "dark" => true,
+                    _ => is_pm_local(initial_offset),
+                };
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<Theme>().set_dark(new_dark);
                     }
                 });
             }
