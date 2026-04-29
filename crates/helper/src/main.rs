@@ -248,15 +248,104 @@ async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
         .await
         .with_context(|| format!("renaming {} -> {}", tmp.display(), exports_path.display()))?;
 
-    let reload = exportfs_reload()
-        .await
-        .unwrap_or_else(|e| format!("(exportfs failed: {e})"));
+    // Service state follows export state: zero entries → stop nfs-server,
+    // any entries → ensure it's running, then `exportfs -rv` to push the
+    // new table to the kernel without disturbing existing client mounts.
+    // Both branches surface their stdout/stderr in the operator-facing
+    // banner so a misbehaving export rule (or a stale unit dependency)
+    // is visible without an SSH round-trip.
+    let active = count_active_exports(content);
+    let nfs_state = if active > 0 {
+        ensure_nfs_server_running().await
+    } else {
+        ensure_nfs_server_stopped().await
+    };
+
+    let reload = if active > 0 {
+        exportfs_reload()
+            .await
+            .unwrap_or_else(|e| format!("(exportfs failed: {e})"))
+    } else {
+        "(no exports — skipping exportfs)".to_string()
+    };
+
     Ok(format!(
-        "wrote {} ({} bytes)\n{}",
+        "wrote {} ({} bytes)\n{}\n{}",
         exports_path.display(),
         content.len(),
+        nfs_state,
         reload
     ))
+}
+
+/// Lines that aren't pure whitespace or comment-only count as active
+/// exports. Matches the same filter `validate_exports` uses below.
+fn count_active_exports(content: &str) -> usize {
+    content
+        .lines()
+        .filter(|raw| {
+            let line = raw.trim();
+            !line.is_empty() && !line.starts_with('#')
+        })
+        .count()
+}
+
+async fn ensure_nfs_server_running() -> String {
+    // `systemctl restart` is intentionally avoided here — it would
+    // briefly drop active clients even if the file's only change is a
+    // new row. `is-active` + start-if-not-running is enough; the actual
+    // export-table push happens in `exportfs -rv` afterwards.
+    let active = TokioCommand::new("systemctl")
+        .args(["is-active", "nfs-server.service"])
+        .output()
+        .await;
+    let already_active = matches!(active, Ok(o) if o.status.success());
+    if already_active {
+        return "nfs-server.service: active".to_string();
+    }
+    let out = TokioCommand::new("systemctl")
+        .args(["start", "nfs-server.service"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => "nfs-server.service: started".to_string(),
+        Ok(o) => format!(
+            "nfs-server.service: failed to start ({}): {}{}",
+            o.status,
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr),
+        ),
+        Err(e) => format!("nfs-server.service: spawn error: {e}"),
+    }
+}
+
+async fn ensure_nfs_server_stopped() -> String {
+    let active = TokioCommand::new("systemctl")
+        .args(["is-active", "nfs-server.service"])
+        .output()
+        .await;
+    let already_inactive = matches!(active, Ok(o) if !o.status.success());
+    if already_inactive {
+        return "nfs-server.service: inactive (no exports)".to_string();
+    }
+    let out = TokioCommand::new("systemctl")
+        .args(["stop", "nfs-server.service"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => "nfs-server.service: stopped (no exports)".to_string(),
+        Ok(o) => format!(
+            "nfs-server.service: failed to stop ({}): {}{}",
+            o.status,
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr),
+        ),
+        Err(e) => format!("nfs-server.service: spawn error: {e}"),
+    }
 }
 
 /// Reject obviously malformed exports content before atomic-replacing the
@@ -1219,11 +1308,7 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     // before it reaches stderr. Without this flag the helper sees no
     // "Transferred: …%" lines at all and the UI's circular progress
     // bar stays indeterminate forever.
-    cmd.args([
-        "--stats=2s",
-        "--stats-one-line",
-        "--stats-log-level=NOTICE",
-    ]);
+    cmd.args(["--stats=2s", "--stats-one-line", "--stats-log-level=NOTICE"]);
 
     let _ = entry.schedule; // honored by an external timer, not here
 

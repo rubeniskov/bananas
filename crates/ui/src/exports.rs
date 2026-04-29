@@ -25,6 +25,7 @@ pub fn ExportsPage() -> Element {
     let auth_ctx = use_context::<AuthCtx>();
     let mut rows: Signal<Vec<api::ExportRow>> = use_signal(Vec::new);
     let mut preview: Signal<String> = use_signal(String::new);
+    let mut nfs_status: Signal<String> = use_signal(String::new);
     let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
     let mut reload_tick = use_signal(|| 0u32);
     let mut form_mode: Signal<Option<FormMode>> = use_signal(|| None);
@@ -41,6 +42,7 @@ pub fn ExportsPage() -> Element {
                 Ok(list) => {
                     rows.set(list.rows);
                     preview.set(list.preview);
+                    nfs_status.set(list.nfs_server_status);
                 }
                 Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
                 Err(err) => banner.set(Some((
@@ -54,6 +56,7 @@ pub fn ExportsPage() -> Element {
     rsx! {
         div { class: "section-header",
             h2 { "NFS exports" }
+            NfsServerBadge { status: nfs_status(), has_rows: !rows.read().is_empty() }
             span { class: "spacer" }
             button {
                 class: "ghost",
@@ -503,5 +506,63 @@ fn default_export_row() -> api::ExportRow {
             insecure: false,
             extra: vec![],
         },
+    }
+}
+
+/// Status badge that sits next to the "NFS exports" heading, mirroring
+/// the result of `systemctl is-active nfs-server.service` on the BPI.
+/// Surface a yellow warning specifically when there ARE rows but the
+/// daemon isn't active — the most common operator-visible failure mode.
+#[derive(Props, Clone, PartialEq)]
+struct NfsServerBadgeProps {
+    status: String,
+    has_rows: bool,
+}
+
+#[component]
+fn NfsServerBadge(props: NfsServerBadgeProps) -> Element {
+    let s = props.status.as_str();
+    if s.is_empty() {
+        return rsx! {};
+    }
+    let (class, label, tip): (&'static str, &'static str, &'static str) = match s {
+        "active" => (
+            "badge ok",
+            "nfs-server: active",
+            "nfs-server.service is running and serving any rows below.",
+        ),
+        "inactive" if !props.has_rows => (
+            "badge",
+            "nfs-server: stopped",
+            "Idle on purpose — no exports defined. Adding the first row will start nfs-server automatically.",
+        ),
+        "inactive" => (
+            "badge warn",
+            "nfs-server: stopped",
+            "There are exports below but nfs-server.service isn't running. Save any row to (re)start it.",
+        ),
+        "failed" => (
+            "badge err",
+            "nfs-server: failed",
+            "nfs-server.service is in the failed state. SSH in and run `journalctl -u nfs-server -b` for details.",
+        ),
+        "activating" => (
+            "badge",
+            "nfs-server: starting…",
+            "nfs-server.service is in the activating state — refresh in a moment.",
+        ),
+        "deactivating" => (
+            "badge",
+            "nfs-server: stopping…",
+            "nfs-server.service is in the deactivating state — refresh in a moment.",
+        ),
+        _ => (
+            "badge",
+            "nfs-server: unknown",
+            "Could not query systemctl is-active. Service state is unknown.",
+        ),
+    };
+    rsx! {
+        span { class: "{class}", style: "margin-left: 12px", "data-tip": "{tip}", "{label}" }
     }
 }

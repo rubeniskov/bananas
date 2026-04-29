@@ -240,12 +240,36 @@ impl From<&Opts> for ExportOpts {
     }
 }
 
+/// `systemctl is-active` is a read-only check the unprivileged
+/// `bananas` user can run without going through the helper. We surface
+/// the result on `/api/exports` so the UI can warn when /etc/exports
+/// has rows but nfs-server.service isn't running (or vice versa).
+async fn nfs_server_status() -> &'static str {
+    use tokio::process::Command;
+    match Command::new("systemctl")
+        .args(["is-active", "nfs-server.service"])
+        .output()
+        .await
+    {
+        Ok(out) => match String::from_utf8_lossy(&out.stdout).trim() {
+            "active" => "active",
+            "inactive" => "inactive",
+            "failed" => "failed",
+            "activating" => "activating",
+            "deactivating" => "deactivating",
+            _ => "unknown",
+        },
+        Err(_) => "unknown",
+    }
+}
+
 async fn get_exports(State(state): State<AppState>) -> impl IntoResponse {
     let raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
     let parsed_rows = exports::rows(&raw);
     // Canonical pretty-printed view — same string the helper writes to
     // /etc/exports on save, so the UI's preview can't drift from disk.
     let preview = exports::serialize(&parsed_rows);
+    let nfs_status = nfs_server_status().await;
     let rows: Vec<ExportRow> = parsed_rows
         .into_iter()
         .enumerate()
@@ -260,7 +284,12 @@ async fn get_exports(State(state): State<AppState>) -> impl IntoResponse {
             }
         })
         .collect();
-    Json(json!({ "rows": rows, "preview": preview })).into_response()
+    Json(json!({
+        "rows": rows,
+        "preview": preview,
+        "nfs_server_status": nfs_status,
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]

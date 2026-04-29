@@ -61,6 +61,12 @@ pub struct ExportsList {
     /// writes on save. Use for the read-only preview so it can't drift.
     #[serde(default)]
     pub preview: String,
+    /// `systemctl is-active nfs-server.service` result as observed by
+    /// the server right before it serialized the response. Drives the
+    /// status badge on the Exports tab so the operator can spot a
+    /// running daemon vs one that's failed / never started.
+    #[serde(default)]
+    pub nfs_server_status: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
