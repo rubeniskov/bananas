@@ -97,6 +97,15 @@ jobs:
           pixi-version: v0.66.0
           cache: true
 
+      # pixi ships rust via conda but not the per-target std; cargo-zigbuild
+      # still needs the armv7 sysroot. Pull it in via rustup so cargo can
+      # find `core` for the cross-target. Local dev hosts already have it
+      # via `rustup target add` — CI was the missing case.
+      - name: Install rust toolchain (armv7 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
       - name: Cache cargo registry + target
         uses: actions/cache@v4
         with:
