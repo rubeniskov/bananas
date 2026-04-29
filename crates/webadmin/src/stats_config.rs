@@ -1,9 +1,14 @@
-//! Form-based stats-service config editor. Loads /etc/bananas/stats.toml
-//! through /api/stats/config (server falls back to compiled-in defaults
-//! when the file is missing), parses it into typed form fields, lets
-//! the operator edit each value, and serializes a clean TOML payload
-//! on save. The raw TOML is also surfaced in a read-only textarea so a
-//! power user can copy / inspect / paste it without leaving the modal.
+//! Form-based stats-service config editor. Renders inline inside the
+//! Settings → Stats tab. Loads /etc/bananas/stats.toml through
+//! /api/stats/config (server falls back to compiled-in defaults when
+//! the file is missing), parses it into typed form fields, lets the
+//! operator edit each value, and serializes a clean TOML payload on
+//! save. The composed TOML is also surfaced in a read-only textarea
+//! so a power user can copy / inspect it without leaving the page.
+//!
+//! [ui] / [live_socket] sections moved to dashboard.toml after the
+//! split, so this module no longer surfaces dashboard appearance
+//! fields. Those live in `dashboard_config::DashboardConfigForm`.
 
 #![allow(non_snake_case)]
 
@@ -12,13 +17,7 @@ use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{AuthCtx, components::TextareaWithCopy, icons::Icon};
-
-#[derive(Props, Clone, PartialEq)]
-pub struct StatsConfigModalProps {
-    pub on_close: EventHandler<()>,
-    pub on_saved: EventHandler<String>,
-}
+use crate::{AuthCtx, components::TextareaWithCopy};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ConfigResp {
@@ -26,10 +25,10 @@ struct ConfigResp {
     config: String,
 }
 
-/// Mirror of `bananas_stats::config::Config`. Mirrored here (rather than
-/// shared via a workspace crate) so the wasm bundle doesn't pull
-/// rusqlite + nix + tokio in transitively. Keep in sync with the
-/// upstream defaults — the recipe at
+/// Mirror of `bananas_stats::config::Config` minus the dashboard-side
+/// fields. Mirrored here (rather than shared via a workspace crate) so
+/// the wasm bundle doesn't pull rusqlite + nix + tokio in transitively.
+/// Keep in sync with the upstream defaults — the recipe at
 /// `recipes-bsp/bananas-stats/files/stats.toml` is the canonical
 /// source-of-truth for the on-disk format.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -39,13 +38,12 @@ struct Cfg {
     storage: Storage,
     devices: Devices,
     network: Network,
-    ui: Ui,
     live_socket: LiveSocket,
 }
 
 /// Path of the Unix socket bananas-stats binds for live pub/sub. Not
 /// surfaced in the form (operators rarely change it) but round-tripped
-/// in the TOML so saving from the modal doesn't drop the section.
+/// in the TOML so saving from the form doesn't drop the section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct LiveSocket {
@@ -122,27 +120,6 @@ impl Default for Network {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-struct Ui {
-    width: u32,
-    height: u32,
-    title: String,
-    theme: String,
-    spark_window: usize,
-}
-impl Default for Ui {
-    fn default() -> Self {
-        Self {
-            width: 800,
-            height: 480,
-            title: "bananas-dashboard".into(),
-            theme: "auto".into(),
-            spark_window: 60,
-        }
-    }
-}
-
 fn parse_csv(s: &str) -> Vec<String> {
     s.split(',')
         .map(|t| t.trim().to_string())
@@ -155,15 +132,13 @@ fn join_csv(v: &[String]) -> String {
 }
 
 #[component]
-pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
+pub fn StatsConfigForm() -> Element {
     let auth_ctx = use_context::<AuthCtx>();
 
-    // Form state — initialized to defaults; replaced on hydrate.
-    // We keep the loaded Cfg around so non-form fields (e.g. live_socket.path)
-    // round-trip on save without ever being shown in the UI.
+    // We keep the loaded Cfg around so non-form fields (e.g.
+    // live_socket.path) round-trip on save without ever being shown
+    // in the UI.
     let mut cfg = use_signal(Cfg::default);
-    // Mirror fields the user types into, kept as strings so partial
-    // input (e.g. typing "5" before "500") doesn't get clobbered.
     let mut interval_ms = use_signal(|| "1000".to_string());
     let mut storage_path = use_signal(|| "/var/lib/bananas/stats.db".to_string());
     let mut raw_hours = use_signal(|| "24".to_string());
@@ -174,19 +149,13 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
     let mut devices_excl = use_signal(String::new);
     let mut net_include = use_signal(|| "eth*, en*".to_string());
     let mut net_exclude = use_signal(String::new);
-    let mut ui_width = use_signal(|| "800".to_string());
-    let mut ui_height = use_signal(|| "480".to_string());
-    let mut ui_title = use_signal(|| "bananas-dashboard".to_string());
-    let mut ui_theme = use_signal(|| "auto".to_string());
-    let mut spark_window = use_signal(|| "60".to_string());
 
     let mut error: Signal<Option<String>> = use_signal(|| None);
+    let mut info: Signal<Option<String>> = use_signal(|| None);
     let mut busy = use_signal(|| false);
     let mut hydrated = use_signal(|| false);
     let mut load_failed = use_signal(|| false);
 
-    // First-load hydrate: pull /api/stats/config, parse into Cfg, push
-    // each field into the form signals.
     use_effect(move || {
         if hydrated() {
             return;
@@ -213,11 +182,6 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
                         devices_excl.set(join_csv(&parsed.devices.exclude_names));
                         net_include.set(join_csv(&parsed.network.include_patterns));
                         net_exclude.set(join_csv(&parsed.network.exclude_names));
-                        ui_width.set(parsed.ui.width.to_string());
-                        ui_height.set(parsed.ui.height.to_string());
-                        ui_title.set(parsed.ui.title.clone());
-                        ui_theme.set(parsed.ui.theme.clone());
-                        spark_window.set(parsed.ui.spark_window.to_string());
                         cfg.set(parsed);
                         hydrated.set(true);
                     }
@@ -238,9 +202,6 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
         });
     });
 
-    // Re-derive Cfg + serialize → TOML whenever any form field changes.
-    // This drives both the "what we send on save" payload and the
-    // read-only preview at the bottom of the modal.
     let composed_toml = move || -> String {
         let mut new = Cfg::default();
         new.sampling.interval_ms = interval_ms().parse().unwrap_or(1000);
@@ -253,13 +214,6 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
         new.devices.exclude_names = parse_csv(&devices_excl());
         new.network.include_patterns = parse_csv(&net_include());
         new.network.exclude_names = parse_csv(&net_exclude());
-        new.ui.width = ui_width().parse().unwrap_or(800);
-        new.ui.height = ui_height().parse().unwrap_or(480);
-        new.ui.title = ui_title();
-        new.ui.theme = ui_theme();
-        new.ui.spark_window = spark_window().parse().unwrap_or(60);
-        // Preserve advanced sections we don't surface in the form
-        // (live_socket path) by carrying them across from the loaded Cfg.
         new.live_socket = cfg().live_socket.clone();
         toml::to_string_pretty(&new).unwrap_or_default()
     };
@@ -272,6 +226,7 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
         }
         busy.set(true);
         error.set(None);
+        info.set(None);
         let body = json!({ "config": composed_toml() });
         spawn(async move {
             let resp = Request::put("/api/stats/config")
@@ -292,16 +247,7 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
                 }
                 Ok(r) if r.ok() => {
                     busy.set(false);
-                    let payload = r.text().await.unwrap_or_default();
-                    let summary = match serde_json::from_str::<serde_json::Value>(&payload) {
-                        Ok(v) => v
-                            .get("output")
-                            .and_then(|o| o.as_str())
-                            .unwrap_or("Saved.")
-                            .to_string(),
-                        Err(_) => "Saved.".into(),
-                    };
-                    props.on_saved.call(summary);
+                    info.set(Some("Saved & restarted bananas-stats.".into()));
                 }
                 Ok(r) => {
                     let status = r.status();
@@ -322,221 +268,155 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
     };
 
     rsx! {
-        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
-            form {
-                class: "modal form-modal",
-                onclick: move |e| e.stop_propagation(),
-                onsubmit: move |e| { e.prevent_default(); submit(()); },
+        form {
+            class: "settings-form",
+            onsubmit: move |e| { e.prevent_default(); submit(()); },
 
-                div { class: "modal-header",
-                    h3 { "Stats service config" }
-                    button {
-                        class: "ghost", r#type: "button",
-                        onclick: move |_| props.on_close.call(()),
-                        Icon { name: "x" }
-                    }
-                }
+            p { class: "preview-label",
+                "Edits land in "
+                code { "/etc/bananas/stats.toml" }
+                " and atomically restart "
+                code { "bananas-stats.service" }
+                ". Hover any label for a tooltip."
+            }
 
-                div { class: "modal-body form-modal-body",
-                    p { class: "preview-label",
-                        "Edits land in "
-                        code { "/etc/bananas/stats.toml" }
-                        " and atomically restart "
-                        code { "bananas-stats.service" }
-                        ". Hover any label for a tooltip."
-                    }
+            if let Some(msg) = error() {
+                div { class: "banner err", pre { "{msg}" } }
+            }
+            if let Some(msg) = info() {
+                div { class: "banner ok", pre { "{msg}" } }
+            }
 
-                    if let Some(msg) = error() {
-                        div { class: "banner err", pre { "{msg}" } }
-                    }
+            if !hydrated() && !load_failed() {
+                p { class: "preview-label", "Loading…" }
+            }
 
-                    if !hydrated() && !load_failed() {
-                        p { class: "preview-label", "Loading…" }
-                    }
-
-                    fieldset {
-                        legend { "Sampling" }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "How often the sampler reads /proc + /sys (in milliseconds). 1000 = once per second.",
-                                "Interval (ms)" }
-                            input { r#type: "number", min: "100", step: "100", required: true,
-                                value: "{interval_ms()}",
-                                oninput: move |e| interval_ms.set(e.value()) }
-                            span {}
-                        }
-                    }
-
-                    fieldset {
-                        legend { "Storage" }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Path to the WAL-mode SQLite database. The bananas user owns this directory via systemd's StateDirectory.",
-                                "Database path" }
-                            input { r#type: "text", required: true,
-                                value: "{storage_path()}",
-                                oninput: move |e| storage_path.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Hours of raw 1-second samples kept before they're aggregated into the longer-window tables.",
-                                "Raw retention (h)" }
-                            input { r#type: "number", min: "1", required: true,
-                                value: "{raw_hours()}",
-                                oninput: move |e| raw_hours.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Days the per-minute aggregated rows are kept. Older data is dropped.",
-                                "Aggregated retention (d)" }
-                            input { r#type: "number", min: "1", required: true,
-                                value: "{agg_days()}",
-                                oninput: move |e| agg_days.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "How often the writer fsyncs the WAL. Lower = fewer rows lost on power cut, higher = fewer disk writes.",
-                                "Flush interval (ms)" }
-                            input { r#type: "number", min: "100", step: "100", required: true,
-                                value: "{flush_ms()}",
-                                oninput: move |e| flush_ms.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Hard ceiling on the SQLite file (in MB). Empty = auto: min(5% free space, 100 MB) at first run.",
-                                "Max DB size (MB)" }
-                            input { r#type: "number", min: "10",
-                                placeholder: "auto",
-                                value: "{max_db_mb()}",
-                                oninput: move |e| max_db_mb.set(e.value()) }
-                            span {}
-                        }
-                    }
-
-                    fieldset {
-                        legend { "Devices" }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Comma-separated list of block-device buses to track. Add 'nvme' if the board ever ships an NVMe drive.",
-                                "Include buses" }
-                            input { r#type: "text",
-                                placeholder: "sata, usb, nvme",
-                                value: "{devices_buses()}",
-                                oninput: move |e| devices_buses.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Comma-separated exact device names to skip (e.g. 'sda1' to drop a partition).",
-                                "Exclude names" }
-                            input { r#type: "text",
-                                placeholder: "(none)",
-                                value: "{devices_excl()}",
-                                oninput: move |e| devices_excl.set(e.value()) }
-                            span {}
-                        }
-                    }
-
-                    fieldset {
-                        legend { "Network" }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Comma-separated interface name patterns. '*' matches anything; 'eth*' matches kernel-classic names; 'en*' matches systemd predictable names.",
-                                "Include patterns" }
-                            input { r#type: "text",
-                                placeholder: "eth*, en*",
-                                value: "{net_include()}",
-                                oninput: move |e| net_include.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Comma-separated exact interface names to skip (e.g. 'docker0' if patterns are too broad).",
-                                "Exclude names" }
-                            input { r#type: "text",
-                                placeholder: "(none)",
-                                value: "{net_exclude()}",
-                                oninput: move |e| net_exclude.set(e.value()) }
-                            span {}
-                        }
-                    }
-
-                    fieldset {
-                        legend { "LCD dashboard" }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Render width in pixels. Native panel is 800. Change only if you swap the LCD.",
-                                "Width (px)" }
-                            input { r#type: "number", min: "320", required: true,
-                                value: "{ui_width()}",
-                                oninput: move |e| ui_width.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Render height in pixels. Native panel is 480.",
-                                "Height (px)" }
-                            input { r#type: "number", min: "240", required: true,
-                                value: "{ui_height()}",
-                                oninput: move |e| ui_height.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Window title (only visible if you ever run the dashboard on a desktop with a window manager).",
-                                "Title" }
-                            input { r#type: "text",
-                                value: "{ui_title()}",
-                                oninput: move |e| ui_title.set(e.value()) }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "auto = dark in PM hours / light in AM. Or pin to dark/light.",
-                                "Theme" }
-                            select {
-                                value: "{ui_theme()}",
-                                onchange: move |e| ui_theme.set(e.value()),
-                                option { value: "auto", "auto (dark/light by clock)" }
-                                option { value: "dark", "dark" }
-                                option { value: "light", "light" }
-                            }
-                            span {}
-                        }
-                        div { class: "row",
-                            label { class: "hint",
-                                "data-tip": "Number of historical points kept on the live sparklines.",
-                                "Sparkline window" }
-                            input { r#type: "number", min: "10", max: "1000", required: true,
-                                value: "{spark_window()}",
-                                oninput: move |e| spark_window.set(e.value()) }
-                            span {}
-                        }
-                    }
-
-                    h4 { style: "margin: .8em 0 .4em",
-                        "Generated TOML"
-                    }
-                    p { class: "preview-label",
-                        "Read-only — exactly what we'll write to /etc/bananas/stats.toml on save. "
-                        "Copy the block if you'd rather edit it by hand on the device."
-                    }
-                    TextareaWithCopy { value: preview, id: "stats-config-toml" }
-                }
-
-                div { class: "modal-footer",
-                    button { class: "ghost", r#type: "button",
-                        onclick: move |_| props.on_close.call(()), "Cancel" }
-                    button { class: "primary", r#type: "submit",
-                        disabled: busy() || !hydrated(),
-                        if busy() { "Saving…" } else { "Save & restart service" }
-                    }
+            fieldset {
+                legend { "Sampling" }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "How often the sampler reads /proc + /sys (in milliseconds). 1000 = once per second.",
+                        "Interval (ms)" }
+                    input { r#type: "number", min: "100", step: "100", required: true,
+                        value: "{interval_ms()}",
+                        oninput: move |e| interval_ms.set(e.value()) }
+                    span {}
                 }
             }
+
+            fieldset {
+                legend { "Storage" }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Path to the WAL-mode SQLite database. The bananas user owns this directory via systemd's StateDirectory.",
+                        "Database path" }
+                    input { r#type: "text", required: true,
+                        value: "{storage_path()}",
+                        oninput: move |e| storage_path.set(e.value()) }
+                    span {}
+                }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Hours of raw 1-second samples kept before they're aggregated into the longer-window tables.",
+                        "Raw retention (h)" }
+                    input { r#type: "number", min: "1", required: true,
+                        value: "{raw_hours()}",
+                        oninput: move |e| raw_hours.set(e.value()) }
+                    span {}
+                }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Days the per-minute aggregated rows are kept. Older data is dropped.",
+                        "Aggregated retention (d)" }
+                    input { r#type: "number", min: "1", required: true,
+                        value: "{agg_days()}",
+                        oninput: move |e| agg_days.set(e.value()) }
+                    span {}
+                }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "How often the writer fsyncs the WAL. Lower = fewer rows lost on power cut, higher = fewer disk writes.",
+                        "Flush interval (ms)" }
+                    input { r#type: "number", min: "100", step: "100", required: true,
+                        value: "{flush_ms()}",
+                        oninput: move |e| flush_ms.set(e.value()) }
+                    span {}
+                }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Hard ceiling on the SQLite file (in MB). Empty = auto: min(5% free space, 100 MB) at first run.",
+                        "Max DB size (MB)" }
+                    input { r#type: "number", min: "10",
+                        placeholder: "auto",
+                        value: "{max_db_mb()}",
+                        oninput: move |e| max_db_mb.set(e.value()) }
+                    span {}
+                }
+            }
+
+            fieldset {
+                legend { "Devices" }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Comma-separated list of block-device buses to track. Add 'nvme' if the board ever ships an NVMe drive.",
+                        "Include buses" }
+                    input { r#type: "text",
+                        placeholder: "sata, usb, nvme",
+                        value: "{devices_buses()}",
+                        oninput: move |e| devices_buses.set(e.value()) }
+                    span {}
+                }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Comma-separated exact device names to skip (e.g. 'sda1' to drop a partition).",
+                        "Exclude names" }
+                    input { r#type: "text",
+                        placeholder: "(none)",
+                        value: "{devices_excl()}",
+                        oninput: move |e| devices_excl.set(e.value()) }
+                    span {}
+                }
+            }
+
+            fieldset {
+                legend { "Network" }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Comma-separated interface name patterns. '*' matches anything; 'eth*' matches kernel-classic names; 'en*' matches systemd predictable names.",
+                        "Include patterns" }
+                    input { r#type: "text",
+                        placeholder: "eth*, en*",
+                        value: "{net_include()}",
+                        oninput: move |e| net_include.set(e.value()) }
+                    span {}
+                }
+                div { class: "row",
+                    label { class: "hint",
+                        "data-tip": "Comma-separated exact interface names to skip (e.g. 'docker0' if patterns are too broad).",
+                        "Exclude names" }
+                    input { r#type: "text",
+                        placeholder: "(none)",
+                        value: "{net_exclude()}",
+                        oninput: move |e| net_exclude.set(e.value()) }
+                    span {}
+                }
+            }
+
+            div { class: "settings-actions",
+                button { class: "primary", r#type: "submit",
+                    disabled: busy() || !hydrated(),
+                    if busy() { "Saving…" } else { "Save & restart service" }
+                }
+            }
+
+            h4 { style: "margin: 1.2em 0 .4em",
+                "Generated TOML"
+            }
+            p { class: "preview-label",
+                "Read-only — exactly what we'll write to /etc/bananas/stats.toml on save. "
+                "Copy the block if you'd rather edit it by hand on the device."
+            }
+            TextareaWithCopy { value: preview, id: "stats-config-toml" }
         }
     }
 }

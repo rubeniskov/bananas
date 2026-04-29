@@ -11,6 +11,7 @@ mod api;
 mod browse;
 mod cloud;
 mod components;
+mod dashboard_config;
 mod exports;
 mod icons;
 mod login;

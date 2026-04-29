@@ -1,13 +1,13 @@
 //! Settings page — canonical home for all service config files. Three
-//! tabs: Stats (sampler), Dashboard (LCD UI), General (timezone, etc.).
-//! Each tab renders a TOML editor backed by /api/<name>/config; the
-//! General tab also exposes a focused timezone picker that hits
-//! /api/system/timezone so the operator doesn't have to round-trip
-//! through TOML for the most common change.
+//! tabs:
+//!   - Stats   → parsed form for stats.toml + readonly Generated TOML
+//!   - Dashboard → parsed form for dashboard.toml + readonly Generated TOML
+//!   - General → focused timezone picker + raw system.toml editor
 //!
-//! Power users who want the rich form for stats.toml can still open
-//! the gear-icon modal from the Stats page; this page is the
-//! plain-and-canonical view.
+//! Stats and Dashboard tabs delegate to dedicated form components
+//! (`stats_config::StatsConfigForm` and
+//! `dashboard_config::DashboardConfigForm`). Each handles its own
+//! load / save / readonly preview.
 
 #![allow(non_snake_case)]
 
@@ -16,7 +16,10 @@ use gloo_net::http::Request;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{AuthCtx, components::Spinner, icons::Icon};
+use crate::{
+    AuthCtx, components::Spinner, dashboard_config::DashboardConfigForm,
+    stats_config::StatsConfigForm,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -31,26 +34,6 @@ impl Tab {
             Self::Stats => "Stats",
             Self::Dashboard => "Dashboard",
             Self::General => "General",
-        }
-    }
-
-    fn config_endpoint(self) -> &'static str {
-        match self {
-            Self::Stats => "/api/stats/config",
-            Self::Dashboard => "/api/dashboard/config",
-            Self::General => "/api/system/config",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Self::Stats => "Sampler-side config. Restarts bananas-stats on save.",
-            Self::Dashboard => {
-                "LCD dashboard appearance + refresh cadence. Hot-reloads — no service restart."
-            }
-            Self::General => {
-                "Host-level settings (timezone). The General tab below has a focused picker for timezone."
-            }
         }
     }
 }
@@ -79,11 +62,11 @@ pub fn SettingsPage() -> Element {
             }
         }
         match tab() {
-            Tab::Stats => rsx! { ConfigEditor { tab: Tab::Stats } },
-            Tab::Dashboard => rsx! { ConfigEditor { tab: Tab::Dashboard } },
+            Tab::Stats => rsx! { StatsConfigForm {} },
+            Tab::Dashboard => rsx! { DashboardConfigForm {} },
             Tab::General => rsx! {
                 TimezoneCard {}
-                ConfigEditor { tab: Tab::General }
+                SystemTomlEditor {}
             },
         }
     }
@@ -95,119 +78,50 @@ struct ConfigResp {
     config: String,
 }
 
-#[derive(Props, Clone, PartialEq)]
-struct ConfigEditorProps {
-    tab: Tab,
-}
-
-/// Generic raw-TOML editor backed by /api/<name>/config. Three-state
-/// banner: idle / saving / ok / err. Reuses the same shape as the
-/// existing stats_config modal but without the parsed form fields —
-/// the canonical source of truth on disk is the TOML, so we let the
-/// operator edit it directly.
+/// Read-only system.toml viewer at the bottom of the General tab. The
+/// timezone is set via the focused TimezoneCard above; a raw textarea
+/// is here only so power users can inspect / copy the file's full
+/// contents (and future fields beyond timezone, when those land).
 #[component]
-fn ConfigEditor(props: ConfigEditorProps) -> Element {
+fn SystemTomlEditor() -> Element {
     let auth_ctx = use_context::<AuthCtx>();
-    let endpoint: &'static str = props.tab.config_endpoint();
     let mut content = use_signal(String::new);
     let mut loading = use_signal(|| true);
-    let mut busy = use_signal(|| false);
-    let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
-    let mut tick = use_signal(|| 0u32);
+    let tick = use_signal(|| 0u32);
 
     use_effect(move || {
         let _ = tick();
         let _ = auth_ctx.refresh.read();
-        let endpoint = endpoint;
         spawn(async move {
             loading.set(true);
-            match Request::get(endpoint).send().await {
+            match Request::get("/api/system/config").send().await {
                 Ok(resp) if resp.status() == 401 => auth_ctx.signal_unauthorized(),
-                Ok(resp) if resp.ok() => match resp.json::<ConfigResp>().await {
-                    Ok(c) => content.set(c.config),
-                    Err(e) => banner.set(Some((BannerKind::Err, format!("Parse failed: {e}")))),
-                },
-                Ok(resp) => banner.set(Some((
-                    BannerKind::Err,
-                    format!("HTTP {} loading config", resp.status()),
-                ))),
-                Err(e) => banner.set(Some((BannerKind::Err, format!("Network: {e}")))),
+                Ok(resp) if resp.ok() => {
+                    if let Ok(c) = resp.json::<ConfigResp>().await {
+                        content.set(c.config);
+                    }
+                }
+                _ => {}
             }
             loading.set(false);
         });
     });
 
-    let on_save = move |_| {
-        if busy() {
-            return;
-        }
-        busy.set(true);
-        let body = content();
-        spawn(async move {
-            let resp = Request::put(endpoint).json(&json!({ "config": body }));
-            let resp = match resp {
-                Ok(r) => r,
-                Err(e) => {
-                    busy.set(false);
-                    banner.set(Some((BannerKind::Err, e.to_string())));
-                    return;
-                }
-            };
-            match resp.send().await {
-                Ok(r) if r.status() == 401 => auth_ctx.signal_unauthorized(),
-                Ok(r) if r.ok() => {
-                    banner.set(Some((BannerKind::Ok, "Saved.".into())));
-                    tick.set(tick() + 1);
-                }
-                Ok(r) => {
-                    let status = r.status();
-                    let txt = r.text().await.unwrap_or_default();
-                    banner.set(Some((BannerKind::Err, format!("HTTP {status}: {txt}"))));
-                }
-                Err(e) => {
-                    banner.set(Some((BannerKind::Err, format!("Network: {e}"))));
-                }
-            }
-            busy.set(false);
-        });
-    };
-
     rsx! {
-        p { class: "preview-label", "{props.tab.description()}" }
-        if let Some((kind, msg)) = banner() {
-            div { class: "banner {kind.css()}", pre { "{msg}" } }
+        h4 { style: "margin: 1.4em 0 .4em", "system.toml" }
+        p { class: "preview-label",
+            "Read-only — current contents of /etc/bananas/system.toml. Edits via "
+            "Settings → General are written through the focused widgets above."
         }
         if loading() {
             div { class: "settings-loading",
-                Spinner { size: 24 }
+                Spinner { size: 20 }
                 span { "Loading…" }
             }
         } else {
-            textarea {
-                class: "settings-toml",
-                rows: "20",
-                spellcheck: false,
-                disabled: busy(),
-                value: "{content()}",
-                oninput: move |e| content.set(e.value()),
-            }
-            div { class: "settings-actions",
-                button {
-                    class: "ghost",
-                    r#type: "button",
-                    disabled: busy(),
-                    onclick: move |_| tick.set(tick() + 1),
-                    Icon { name: "rotate-cw" }
-                    "Reload"
-                }
-                button {
-                    class: "primary",
-                    r#type: "button",
-                    disabled: busy(),
-                    onclick: on_save,
-                    Icon { name: "check" }
-                    if busy() { "Saving…" } else { "Save" }
-                }
+            crate::components::TextareaWithCopy {
+                value: content(),
+                id: "system-config-toml",
             }
         }
     }
@@ -236,8 +150,24 @@ fn TimezoneCard() -> Element {
             })
             .unwrap_or_else(|| "UTC".to_string())
     });
+    let mut zones: Signal<Vec<String>> = use_signal(Vec::new);
     let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
     let mut busy = use_signal(|| false);
+
+    // Pull the OS's full IANA zone list once at mount so the datalist
+    // autocomplete is comprehensive (~400 entries vs the 14-name
+    // hand-curated subset that used to live here).
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(resp) = Request::get("/api/system/timezones").send().await {
+                if resp.ok() {
+                    if let Ok(list) = resp.json::<Vec<String>>().await {
+                        zones.set(list);
+                    }
+                }
+            }
+        });
+    });
 
     let apply = move |_| {
         if busy() {
@@ -278,7 +208,8 @@ fn TimezoneCard() -> Element {
         div { class: "settings-card",
             h3 { "Timezone" }
             p { class: "preview-label",
-                "IANA tzdata zone (e.g. \"Europe/Madrid\", \"America/New_York\"). Applied via timedatectl and persisted to system.toml."
+                "IANA tzdata zone (e.g. \"Europe/Madrid\", \"America/New_York\"). "
+                "Applied via timedatectl and persisted to system.toml."
             }
             if let Some((kind, msg)) = banner() {
                 div { class: "banner {kind.css()}", pre { "{msg}" } }
@@ -287,14 +218,14 @@ fn TimezoneCard() -> Element {
                 input {
                     r#type: "text",
                     class: "settings-tz-input",
-                    list: "common-tz",
+                    list: "all-tz",
                     placeholder: "Region/City",
                     value: "{tz()}",
                     oninput: move |e| tz.set(e.value()),
                     disabled: busy(),
                 }
-                datalist { id: "common-tz",
-                    for z in COMMON_TZ.iter() {
+                datalist { id: "all-tz",
+                    for z in zones.read().iter() {
                         option { value: "{z}" }
                     }
                 }
@@ -309,26 +240,6 @@ fn TimezoneCard() -> Element {
         }
     }
 }
-
-/// A short list of the most common IANA zones, surfaced as a datalist
-/// so the operator gets autocomplete in the input. Not exhaustive —
-/// anything under /usr/share/zoneinfo is accepted by the helper.
-const COMMON_TZ: &[&str] = &[
-    "UTC",
-    "Europe/Madrid",
-    "Europe/Berlin",
-    "Europe/London",
-    "Europe/Paris",
-    "America/New_York",
-    "America/Los_Angeles",
-    "America/Chicago",
-    "America/Toronto",
-    "America/Sao_Paulo",
-    "Asia/Tokyo",
-    "Asia/Shanghai",
-    "Asia/Singapore",
-    "Australia/Sydney",
-];
 
 #[derive(Clone, Copy, PartialEq)]
 enum BannerKind {

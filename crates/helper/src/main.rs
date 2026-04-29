@@ -220,6 +220,10 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::ListTimezones => match list_timezones().await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -1113,6 +1117,60 @@ async fn set_timezone(tz: &str) -> Result<String> {
         );
     }
     Ok(format!("timezone set to {tz}"))
+}
+
+async fn list_timezones() -> Result<String> {
+    // Walk /usr/share/zoneinfo and return every regular file path
+    // relative to that root. Skip top-level directories that aren't
+    // user-facing zones (Etc/ collides too much with friendly names,
+    // posix/ + right/ are duplicate trees with different leap-second
+    // handling, and SystemV/ is legacy POSIX-style aliases).
+    const ROOT: &str = "/usr/share/zoneinfo";
+    const SKIP: &[&str] = &["Etc", "posix", "right", "SystemV"];
+
+    let mut zones: Vec<String> = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from(ROOT)];
+    while let Some(dir) = stack.pop() {
+        let read = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            let rel = match path.strip_prefix(ROOT) {
+                Ok(r) => r.to_string_lossy().to_string(),
+                Err(_) => continue,
+            };
+            // Skip the curated drop-list at the top level.
+            if path
+                .parent()
+                .map(|p| p == std::path::Path::new(ROOT))
+                .unwrap_or(false)
+                && SKIP.iter().any(|s| rel == *s)
+            {
+                continue;
+            }
+            // Skip non-zone files at the root: localtime, posixrules,
+            // tzdata.zi, leapseconds, zone.tab/zone1970.tab/iso3166.tab,
+            // etc. — these aren't IANA names.
+            if !rel.contains('/')
+                && !path.is_dir()
+                && (rel.contains('.')
+                    || rel == "localtime"
+                    || rel == "posixrules"
+                    || rel == "leapseconds")
+            {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() {
+                zones.push(rel);
+            }
+        }
+    }
+    zones.sort();
+    Ok(serde_json::to_string(&zones).context("serializing timezone list")?)
 }
 
 async fn run_lsblk() -> Result<String> {

@@ -9,7 +9,11 @@
 //! the system stays on UTC and the operator can set it manually
 //! through Settings → General.
 
-use axum::{Json, extract::State, response::Response};
+use axum::{
+    Json,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use bananas_helper::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -108,6 +112,30 @@ pub async fn post_timezone(
             output
         )),
         Err(e) => err_500(format!("helper unreachable on persist: {e}")),
+    }
+}
+
+/// GET /api/system/timezones — return the helper's view of every IANA
+/// zone the OS knows about, as a flat JSON array. Backs the Settings →
+/// General timezone picker (datalist autocomplete).
+pub async fn get_timezones(State(state): State<AppState>) -> Response {
+    let cmd = Command::ListTimezones;
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => {
+            // Helper returns a JSON array string; pass it through as-is.
+            (
+                axum::http::StatusCode::OK,
+                [("content-type", "application/json")],
+                output,
+            )
+                .into_response()
+        }
+        Ok(HelperResponse { error, .. }) => {
+            err_500(error.unwrap_or_else(|| "helper rejected ListTimezones".into()))
+        }
+        Err(e) => err_500(format!("helper unreachable: {e}")),
     }
 }
 

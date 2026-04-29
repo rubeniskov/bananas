@@ -13,9 +13,7 @@
 
 use dioxus::prelude::*;
 
-use crate::{
-    AuthCtx, api, api::ApiError, icons::Icon, stats_config::StatsConfigModal, storage::DiskCard,
-};
+use crate::{AuthCtx, api, api::ApiError, icons::Icon, storage::DiskCard};
 
 const SPARKLINE_WINDOW: &str = "5m";
 
@@ -28,8 +26,6 @@ pub fn StatsPage() -> Element {
     let mut exports: Signal<Vec<api::ExportRow>> = use_signal(Vec::new);
     let mut errors: Signal<Vec<String>> = use_signal(Vec::new);
     let mut tick = use_signal(|| 0u32);
-    let mut config_open = use_signal(|| false);
-    let mut config_banner: Signal<Option<String>> = use_signal(|| None);
 
     use_effect(move || {
         let _ = tick();
@@ -96,13 +92,6 @@ pub fn StatsPage() -> Element {
             span { class: "spacer" }
             button {
                 class: "ghost",
-                "data-tip": "Edit /etc/bananas/stats.toml — sampling intervals, retention, network/device filters.",
-                onclick: move |_| config_open.set(true),
-                Icon { name: "settings" }
-                "Stats config"
-            }
-            button {
-                class: "ghost",
                 "data-tip": "Re-fetch storage + exports state. CPU/mem/network/disk poll every 2s automatically.",
                 onclick: move |_| {
                     errors.set(Vec::new());
@@ -111,25 +100,17 @@ pub fn StatsPage() -> Element {
                 Icon { name: "rotate-cw" }
                 "Refresh"
             }
-        }
-
-        if let Some(msg) = config_banner() {
-            div { class: "banner ok", pre { "{msg}" } }
+            a {
+                class: "ghost button-like",
+                href: "#settings",
+                "data-tip": "Open Settings → Stats to edit sampling intervals, retention, device filters.",
+                Icon { name: "settings" }
+                "Stats config"
+            }
         }
 
         for msg in errors.read().iter() {
             div { class: "banner err", pre { "{msg}" } }
-        }
-
-        if config_open() {
-            StatsConfigModal {
-                on_close: move |_| config_open.set(false),
-                on_saved: move |summary: String| {
-                    config_open.set(false);
-                    config_banner.set(Some(format!("Stats service restarted. {summary}")));
-                    tick.set(tick() + 1);
-                }
-            }
         }
 
         if let Some(s) = snapshot() {

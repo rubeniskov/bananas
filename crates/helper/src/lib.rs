@@ -156,6 +156,12 @@ pub enum Command {
     /// string can't be passed through. Used by the Settings → General
     /// tab and the first-boot geoip auto-detection path.
     SetTimezone { tz: String },
+    /// Walk /usr/share/zoneinfo and return every IANA tzdata name as a
+    /// JSON array. Backs the Settings → General timezone picker so the
+    /// operator gets autocomplete over the OS's actual zone list rather
+    /// than a hand-maintained subset. Skips the magic top-level files
+    /// (Etc/, posix/, right/) that aren't user-facing zones.
+    ListTimezones,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

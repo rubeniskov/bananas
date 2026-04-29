@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
             get(service_config::get_system).put(service_config::put_system),
         )
         .route("/system/timezone", post(system::post_timezone))
+        .route("/system/timezones", get(system::get_timezones))
         .route("/fstab", get(get_fstab).post(post_fstab))
         .route("/fstab/{idx}", delete(delete_fstab).put(put_fstab))
         .route("/users", get(users::list).post(users::create))
