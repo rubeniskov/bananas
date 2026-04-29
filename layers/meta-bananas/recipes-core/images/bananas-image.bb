@@ -171,3 +171,13 @@ IMAGE_INSTALL += " \
 IMAGE_INSTALL += " \
     bananas-modprobe \
 "
+
+# LCD dashboard (Slint app on /dev/fb0 via DRM/KMS). Pulls bananas-stats
+# in as RDEPENDS via the recipe; bananas-server is already in the image.
+# Mali-400 lima driver + the runtime libs the cross-rs build linked
+# against (fontconfig + drm + gbm + udev + xkbcommon + libinput) come
+# in as RDEPENDS of bananas-dashboard.
+IMAGE_INSTALL += " \
+    bananas-dashboard \
+    kernel-module-lima \
+"
