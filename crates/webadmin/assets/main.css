@@ -861,6 +861,11 @@ button {
   padding: 7px 14px;
   border: 1px solid var(--line);
   background: var(--bg);
+  /* User agents don't inherit color into <button> — without an explicit
+   * value, dark-mode buttons render black-on-near-black and disappear.
+   * Pin to the theme --text so unclassed buttons (Cancel, etc.) stay
+   * legible in both themes. */
+  color: var(--text);
   border-radius: 4px;
   cursor: pointer;
 }
