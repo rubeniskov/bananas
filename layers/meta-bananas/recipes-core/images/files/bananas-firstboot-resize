@@ -1,0 +1,53 @@
+#!/bin/sh
+# bananas-firstboot-resize — grow the rootfs partition + filesystem to fill
+# the SD card on the first boot from MMC.
+#
+# Skipped when the rootfs is NFS-mounted (the iterate-loop dev path) or when
+# the resize has already run (guard file). ext4 supports online growth, so
+# we don't need to remount anything.
+
+set -e
+
+guard=/var/lib/bananas/firstboot-resize.done
+if [ -e "$guard" ]; then
+    exit 0
+fi
+
+src=$(findmnt -n -o SOURCE /)
+case "$src" in
+    /dev/mmcblk*)
+        ;;
+    *)
+        # NFS / loop / overlay / unknown — log and skip. Don't write the
+        # guard either, in case the image is later re-flashed onto MMC.
+        echo "bananas-firstboot-resize: rootfs is on $src — not MMC, skipping" >&2
+        exit 0
+        ;;
+esac
+
+# /dev/mmcblk0p2  →  disk=/dev/mmcblk0  partno=2
+part_name="${src#/dev/}"
+disk_name=$(printf '%s' "$part_name" | sed 's/p[0-9]\+$//')
+partno=$(printf '%s' "$part_name" | sed 's/.*p\([0-9]\+\)$/\1/')
+disk="/dev/$disk_name"
+
+if [ -z "$disk_name" ] || [ -z "$partno" ] || [ "$disk_name" = "$part_name" ]; then
+    echo "bananas-firstboot-resize: could not parse $src as mmcblkXpN" >&2
+    exit 1
+fi
+
+echo "bananas-firstboot-resize: growing $src on $disk (part $partno)" >&2
+
+# parted resizepart on a mounted, in-use partition is allowed; the kernel
+# re-reads the partition table via partx -u afterwards. ---pretend-input-tty
+# silences the interactive "Yes/No" parted asks on overlapping operations.
+parted ---pretend-input-tty --script "$disk" resizepart "$partno" 100%
+partx -u "$disk"
+
+# Online ext4 grow.
+resize2fs "$src"
+
+mkdir -p "$(dirname "$guard")"
+touch "$guard"
+
+echo "bananas-firstboot-resize: done"

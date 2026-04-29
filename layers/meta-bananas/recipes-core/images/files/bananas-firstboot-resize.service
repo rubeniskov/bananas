@@ -1,0 +1,24 @@
+[Unit]
+Description=BanaNAS first-boot rootfs resize
+# The guard file is touched on first successful resize. After that the
+# unit is a no-op, but ConditionPathExists short-circuits it before
+# even invoking the script — the cheapest possible idle cost.
+ConditionPathExists=!/var/lib/bananas/firstboot-resize.done
+# Run as soon as / is writable. local-fs.target gives us a guaranteed
+# point at which the rootfs is mounted but the system is still single-user
+# enough that nothing important is racing us.
+After=local-fs.target
+Before=systemd-tmpfiles-setup.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/bananas-firstboot-resize
+# A failure here is non-fatal: if it can't grow the partition (e.g.
+# someone already grew it manually), the system should still boot. The
+# script itself logs a clear reason on stderr.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=local-fs.target

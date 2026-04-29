@@ -44,6 +44,26 @@ install_root_authkey() {
     chown -R root:root ${IMAGE_ROOTFS}${root_home}/.ssh
 }
 
+# First-boot rootfs grow — only fires on MMC boots; NFS rootfs (the
+# iterate-loop dev path) makes the script a no-op. The guard file is
+# created on success so the service short-circuits on every subsequent
+# boot via ConditionPathExists=.
+FIRSTBOOT_SCRIPT := "${THISDIR}/files/bananas-firstboot-resize"
+FIRSTBOOT_UNIT   := "${THISDIR}/files/bananas-firstboot-resize.service"
+
+ROOTFS_POSTPROCESS_COMMAND += "install_firstboot_resize;"
+
+install_firstboot_resize() {
+    install -d -m 0755 ${IMAGE_ROOTFS}/usr/sbin
+    install -m 0755 ${FIRSTBOOT_SCRIPT} ${IMAGE_ROOTFS}/usr/sbin/bananas-firstboot-resize
+    install -d -m 0755 ${IMAGE_ROOTFS}/lib/systemd/system
+    install -m 0644 ${FIRSTBOOT_UNIT} \
+        ${IMAGE_ROOTFS}/lib/systemd/system/bananas-firstboot-resize.service
+    install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/local-fs.target.wants
+    ln -sf /lib/systemd/system/bananas-firstboot-resize.service \
+        ${IMAGE_ROOTFS}/etc/systemd/system/local-fs.target.wants/bananas-firstboot-resize.service
+}
+
 # Bake fstab entries for the SATA storage volumes. nofail = don't drop to
 # rescue mode if the drive is missing; x-systemd.device-timeout=10 = give
 # the SATA controller 10 s to enumerate then fail-soft.
