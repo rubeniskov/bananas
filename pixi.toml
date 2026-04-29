@@ -66,6 +66,15 @@ depends-on = ["setup-fel"]
 [tasks.setup-dx]
 cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v dx >/dev/null || cargo install dioxus-cli --locked --version ^0.7'"
 
+# `setup-cross`: one-shot install of cross-rs into ~/.cargo/bin. cross
+# spins up a per-target Docker container preloaded with multiarch
+# system libs (e.g. fontconfig-dev:armhf for the dashboard's Slint
+# build), avoiding the per-crate sysroot dance that cargo-zigbuild
+# can't handle. Used by `build-dashboard-arm`. Cached after first
+# install — `cross --version` short-circuits.
+[tasks.setup-cross]
+cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v cross >/dev/null || cargo install cross --locked'"
+
 # `build-ui`: compile crates/ui to wasm via dioxus-cli (`dx build --release`).
 # Output lands in target/dx/bananas-ui/release/web/public/ (index.html, wasm/,
 # assets/, …). Staged into serve/ui/ AND packed into serve/bin/bananas-ui.tar.gz
@@ -111,6 +120,27 @@ cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/def
 [tasks.build-stats-arm]
 cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-stats --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-stats serve/bin/'"
 
+# `build-dashboard-arm`: cross-compile bananas-dashboard (the Slint
+# LCD app) for armv7-unknown-linux-gnueabihf via cross-rs. cross
+# spins up a Docker container preloaded with multiarch system libs
+# (configured in Cross.toml at the repo root: armhf fontconfig-dev,
+# libudev-dev, libdrm-dev, libgbm-dev for the linuxkms backend).
+# This is the missing piece bananas-stats / bananas-server didn't
+# need — Slint's font subsystem links yeslogic-fontconfig-sys at
+# build time, and cargo-zigbuild can't cross-link against fontconfig
+# without a sysroot.
+[tasks.build-dashboard-arm]
+# `stdbuf -oL` line-buffers stdout so each `Compiling ...` line flushes
+# as it happens. cross runs cargo inside a Docker `exec` with no TTY,
+# which otherwise causes cargo to block-buffer until the run completes —
+# making it look like the build hung for 15 minutes when it's actively
+# compiling Slint.
+#
+# Cargo's default progress bar is animated and looks ugly in a log file,
+# so we let `--verbose` print the per-crate "Compiling X" lines instead.
+cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/'"
+depends-on = ["setup-cross"]
+
 # --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
 # `serve-tftp`: stage kernel+dtb into ./serve/tftp/. Wrapped in `bash -c`
 # because deno_task_shell's builtin `cp` doesn't support `-L`. Also
@@ -124,15 +154,21 @@ cmd = "bash -c 'set -e; ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-b
 # `extract-rootfs`: unpack the rootfs tarball into ./serve/nfs/bananas/ as root via a throwaway alpine container.
 # `--userns=host` is required because the daemon has userns-remap enabled — without it, container UID 0 maps to host
 # UID 100000 and can't write to the bind-mounted ./serve/nfs/bananas (owned by real user 1000).
+#
+# We rely on the user's docker context being `default` (host's native dockerd
+# at /var/run/docker.sock) — Docker Desktop's VM context can't bind LAN UDP
+# ports for TFTP/NFS, so the iterate flow only works against the native
+# daemon. Switch contexts with `docker context use default` if `docker ps`
+# reports your TFTP/NFS containers missing.
 [tasks.extract-rootfs]
-cmd = "mkdir -p serve/nfs/bananas && DOCKER_CONTEXT=default docker run --rm --userns=host -v $PIXI_PROJECT_ROOT/build/tmp/deploy/images/bananapro:/build:ro -v $PIXI_PROJECT_ROOT/serve/nfs/bananas:/dst alpine sh -c 'rm -rf /dst/* /dst/.[!.]*; tar -xzf /build/bananas-image-bananapro.rootfs.tar.gz -C /dst'"
+cmd = "mkdir -p serve/nfs/bananas && docker run --rm --userns=host -v $PIXI_PROJECT_ROOT/build/tmp/deploy/images/bananapro:/build:ro -v $PIXI_PROJECT_ROOT/serve/nfs/bananas:/dst alpine sh -c 'rm -rf /dst/* /dst/.[!.]*; tar -xzf /build/bananas-image-bananapro.rootfs.tar.gz -C /dst'"
 
 # `serve`: republish artifacts and (re)start the TFTP+NFS containers.
 # Note: serve does *not* extract-rootfs anymore — that has to happen while the
 # board is offline (see `iterate`). Standalone `pixi run serve` only re-stages
 # TFTP and starts containers; rootfs extract is a separate explicit step.
 [tasks.serve]
-cmd = "DOCKER_CONTEXT=default docker compose up -d"
+cmd = "docker compose up -d"
 depends-on = ["serve-tftp"]
 
 # `reboot`: ask the running board to reboot so it picks up the new artifacts.

@@ -20,7 +20,7 @@ pixi run iterate    # build + serve + reboot, the standard dev loop
 
 ## Iteration loop (TFTP + NFS netboot, all in Docker)
 
-For fast development without re-flashing the SD, the board boots its kernel/DTB over TFTP and mounts its rootfs over NFS. Both servers run in containers managed by `compose.yml` against the **native** Docker daemon (`DOCKER_CONTEXT=default`); Docker Desktop's VM context cannot serve UDP/69 or the NFS port set to the LAN, so the tasks pin the context explicitly.
+For fast development without re-flashing the SD, the board boots its kernel/DTB over TFTP and mounts its rootfs over NFS. Both servers run in containers managed by `compose.yml` against the **native** Docker daemon (`unix:///var/run/docker.sock`); Docker Desktop's VM context cannot serve UDP/69 or the NFS port set to the LAN. Run `docker context use default` once on a fresh machine — every iterate task just calls `docker` with no context override and relies on that being the active context.
 
 The rootfs is extracted via a throwaway alpine container so the files inside `./serve/nfs/bananas/` retain their original (root-owned) ownership without needing host-side `sudo`.
 
