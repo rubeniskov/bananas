@@ -214,12 +214,24 @@ fn LiveTiles(props: LiveTilesProps) -> Element {
         .find(|t| t.sensor.starts_with("cpu") || t.sensor.contains("thermal"))
         .map(|t| t.celsius);
 
+    // CPU tile: clock as the prominent headline, "% busy" as the
+    // small secondary line. Falls back to "% busy" headline on dev
+    // hosts where cpufreq isn't available.
+    let (cpu_headline, cpu_sub) = match s.cpu.current_mhz {
+        Some(mhz) if mhz >= 1000 => (
+            format!("{:.2} GHz", mhz as f32 / 1000.0),
+            format!("{cpu_pct:.0}% busy"),
+        ),
+        Some(mhz) => (format!("{mhz} MHz"), format!("{cpu_pct:.0}% busy")),
+        None => (format!("{cpu_pct:.0}%"), "busy".to_string()),
+    };
     rsx! {
         div { class: "live-tiles",
             Gauge {
                 label: "CPU",
                 pct: cpu_pct,
-                detail: format!("{cpu_pct:.0}% busy"),
+                detail: cpu_sub,
+                headline: Some(cpu_headline),
                 temp_c: cpu_temp,
             }
             Gauge {
@@ -237,6 +249,11 @@ struct GaugeProps {
     label: &'static str,
     pct: f32,
     detail: String,
+    /// Override the prominent number (defaults to `{pct}%` when None).
+    /// CPU passes the clock here so the headline is "960 MHz" instead
+    /// of "55%"; Memory leaves it None and keeps the percentage.
+    #[props(default)]
+    headline: Option<String>,
     /// Optional °C badge rendered top-right of the tile. Used for the
     /// CPU card; Memory passes `None`. Color flips ok/warn/danger at
     /// 60 °C and 75 °C — matches the BPI's Mali-400 throttle point and
@@ -272,7 +289,11 @@ fn Gauge(props: GaugeProps) -> Element {
                 div { class: "gauge-fill {kind}", style: "width: {pct_clamped}%" }
             }
             div { class: "tile-detail",
-                span { class: "tile-pct {kind}", "{pct_clamped:.0}%" }
+                {
+                    let headline = props.headline.clone()
+                        .unwrap_or_else(|| format!("{pct_clamped:.0}%"));
+                    rsx! { span { class: "tile-pct {kind}", "{headline}" } }
+                }
                 span { class: "tile-sub", "{props.detail}" }
             }
         }

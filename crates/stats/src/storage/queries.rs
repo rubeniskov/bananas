@@ -155,7 +155,7 @@ pub fn latest_snapshot(db: &Database) -> Result<Snapshot> {
             .query_row(
                 "SELECT busy_pct FROM cpu_samples ORDER BY ts DESC LIMIT 1",
                 [],
-                |r| Ok(CpuStats { busy_pct: r.get::<_, f64>(0)? as f32 }),
+                |r| Ok(CpuStats { busy_pct: r.get::<_, f64>(0)? as f32, current_mhz: None }),
             )
             .ok()
             .unwrap_or_default();

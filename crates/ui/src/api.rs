@@ -530,6 +530,9 @@ pub struct TempReading {
 pub struct CpuStats {
     #[serde(default)]
     pub busy_pct: f32,
+    /// Current core 0 frequency in MHz, when cpufreq exposes it.
+    #[serde(default)]
+    pub current_mhz: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]

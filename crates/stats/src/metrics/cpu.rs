@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CpuStats {
     pub busy_pct: f32,
+    /// Current core 0 frequency in MHz, sampled from
+    /// `/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq`. None
+    /// when cpufreq isn't exposed (e.g. mock fallback, or CPU without
+    /// a cpufreq driver). On dual-core sun7i the governor scales
+    /// cores together, so cpu0 is representative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_mhz: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -42,7 +49,23 @@ impl Counters {
 
 pub fn sample(prev: &Counters) -> Result<(CpuStats, Counters)> {
     let raw = read_proc_stat()?;
-    Ok(compute(&raw, prev))
+    let (mut stats, counters) = compute(&raw, prev);
+    stats.current_mhz = read_current_mhz();
+    Ok((stats, counters))
+}
+
+#[cfg(target_os = "linux")]
+fn read_current_mhz() -> Option<u32> {
+    let raw =
+        std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq").ok()?;
+    // Sysfs reports kHz; round to MHz.
+    let khz: u64 = raw.trim().parse().ok()?;
+    Some(((khz + 500) / 1000) as u32)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_current_mhz() -> Option<u32> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -92,6 +115,7 @@ pub fn compute(text: &str, prev: &Counters) -> (CpuStats, Counters) {
     (
         CpuStats {
             busy_pct: pct.clamp(0.0, 100.0),
+            current_mhz: None,
         },
         cur,
     )
