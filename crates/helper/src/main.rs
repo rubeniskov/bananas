@@ -1127,14 +1127,11 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
         );
     }
 
-    // Map our provider key to rclone's `type` value.
+    // Provider keys are rclone backend names verbatim (see the catalog
+    // in `crates/server/src/cloud.rs::PROVIDERS`). Allowlist them so a
+    // forged cloud.toml can't slip an arbitrary backend through.
     let rclone_type = match account.provider.as_str() {
-        "google_drive" => "drive",
-        "dropbox" => "dropbox",
-        "onedrive" => "onedrive",
-        "s3" => "s3",
-        "webdav" => "webdav",
-        "ftp" => "ftp",
+        "drive" | "dropbox" | "onedrive" | "s3" | "webdav" | "ftp" => account.provider.as_str(),
         other => anyhow::bail!("unsupported provider {other:?} for rclone runtime"),
     };
 

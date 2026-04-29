@@ -40,8 +40,12 @@ use crate::AppState;
 /// list into the wasm bundle. Add new entries here as we gain
 /// confidence each provider works end-to-end with the (future)
 /// rclone wiring.
+// Provider keys MUST match rclone's actual backend names so the
+// "rclone authorize <key>" hint in the UI is copy-pasteable. rclone
+// calls Google Drive `drive`, not `google_drive` — getting that wrong
+// blew up the operator's first authorize attempt.
 const PROVIDERS: &[(&str, &str)] = &[
-    ("google_drive", "Google Drive"),
+    ("drive", "Google Drive"),
     ("dropbox", "Dropbox"),
     ("onedrive", "OneDrive"),
     ("s3", "Amazon S3 / S3-compatible"),
