@@ -13,6 +13,8 @@
 # served artifacts (kernel/dtb staged for tftp; rootfs lives in serve/nfs/bananas)
 /serve/tftp
 /serve/nfs/
+# host-cross-compiled bananas-server/helper binaries staged for the recipe
+/serve/bin/
 # local secrets / per-deployment config — see .env.example
 .env
 # rust workspace build output

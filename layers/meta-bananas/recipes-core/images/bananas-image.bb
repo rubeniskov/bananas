@@ -140,6 +140,7 @@ IMAGE_INSTALL += " \
     avahi-utils \
     usbutils \
     i2c-tools \
+    bananas-server \
 "
 
 # Optional CIFS/Samba (comment in if needed)

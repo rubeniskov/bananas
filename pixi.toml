@@ -21,6 +21,13 @@ cmd = "test -d vendor/sunxi-tools || git clone --depth 1 https://github.com/linu
 cmd = "./vendor/sunxi-tools/sunxi-fel"
 depends-on = ["setup-fel"]
 
+# `build-server-arm`: cross-compile bananas-server + bananas-helper for the
+# BPI's armv7-unknown-linux-gnueabihf target using cargo-zigbuild (zig as the
+# cross linker, no per-target gcc needed). Stages the stripped binaries in
+# serve/bin/ where the bananas-server.bb recipe picks them up.
+[tasks.build-server-arm]
+cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\" cargo zigbuild --release --workspace --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-server target/armv7-unknown-linux-gnueabihf/release/bananas-helper serve/bin/'"
+
 # --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
 # `serve-tftp`: stage kernel+dtb into ./serve/tftp/. Wrapped in `bash -c` because deno_task_shell's builtin `cp` doesn't support `-L`.
 [tasks.serve-tftp]
@@ -61,7 +68,7 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
 # now-correctly-staged servers. No buttons, no SD writes, no wedge.
 [tasks.iterate]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-server-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
 [dependencies]
 python = "==3.11"
@@ -86,6 +93,11 @@ pkg-config = "*"
 git = "*"
 zlib = "*"
 libfdt = "*"
+# Cross-link Rust crates to armv7 without a per-target gcc — `zig cc` doubles
+# as a cross linker. Used by the `build-server-arm` task via cargo-zigbuild.
+zig = ">=0.13"
+rust = ">=1.75"
+cargo-zigbuild = "*"
 
 [pypi-dependencies]
 kas = ">=5.2, <6"
