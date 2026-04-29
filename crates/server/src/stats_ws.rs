@@ -13,7 +13,7 @@
 //! `/api/stats/snapshot` — the WS upgrade is just a regular GET HTTP
 //! request that needs the `bananas_session` cookie.
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
     extract::{
@@ -35,10 +35,14 @@ use crate::AppState;
 const BROADCAST_CAPACITY: usize = 16;
 
 /// Once-per-app live ticker. Holds the broadcast Sender; subscribers
-/// clone their own Receiver. Wired into AppState at startup.
+/// clone their own Receiver. We broadcast `Arc<String>` (already-
+/// serialized JSON) instead of the raw `Snapshot` so N WebSocket
+/// clients don't each re-encode the same payload per tick — at
+/// 1 Hz × N clients that's measurable on the BPI's CPU. The Arc keeps
+/// the broadcast itself O(1) regardless of N.
 #[derive(Clone)]
 pub struct LiveBus {
-    tx: broadcast::Sender<Snapshot>,
+    tx: broadcast::Sender<Arc<String>>,
 }
 
 impl LiveBus {
@@ -75,14 +79,14 @@ impl LiveBus {
         });
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Snapshot> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<String>> {
         self.tx.subscribe()
     }
 }
 
 async fn try_subscribe(
     path: &std::path::Path,
-    tx: &broadcast::Sender<Snapshot>,
+    tx: &broadcast::Sender<Arc<String>>,
 ) -> std::io::Result<()> {
     let stream = UnixStream::connect(path).await?;
     let mut reader = BufReader::new(stream);
@@ -93,12 +97,18 @@ async fn try_subscribe(
         if n == 0 {
             return Ok(()); // EOF — peer closed
         }
+        // The line we read from bananas-stats is already a serialized
+        // Snapshot. We only need to validate it's a structurally-correct
+        // Snapshot (so a corrupt line doesn't reach browsers as opaque
+        // garbage), then forward the original string. Skipping
+        // re-serialization saves an alloc + memcpy per tick × N clients.
         match serde_json::from_str::<Snapshot>(line.trim()) {
-            Ok(snap) => {
+            Ok(_snap) => {
+                let payload = Arc::new(line.trim().to_string());
                 // broadcast::send returns Err only when there are no
                 // subscribers; ignore that — clients reconnecting later
                 // still get fresh data.
-                let _ = tx.send(snap);
+                let _ = tx.send(payload);
             }
             Err(e) => {
                 tracing::warn!(error = ?e, "bad snapshot line on live socket");
@@ -116,17 +126,11 @@ async fn handle(mut socket: WebSocket, bus: LiveBus) {
     let mut rx = bus.subscribe();
     loop {
         tokio::select! {
-            // Bus → client.
+            // Bus → client. The payload is already a JSON-encoded
+            // Snapshot string in an Arc — no re-encode needed.
             recv = rx.recv() => match recv {
-                Ok(snap) => {
-                    let payload = match serde_json::to_string(&snap) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::warn!(error=?e, "snapshot serialize failed");
-                            continue;
-                        }
-                    };
-                    if socket.send(Message::Text(payload.into())).await.is_err() {
+                Ok(payload) => {
+                    if socket.send(Message::Text(payload.as_str().to_string().into())).await.is_err() {
                         break; // client gone
                     }
                 }

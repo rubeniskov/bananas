@@ -99,16 +99,23 @@ jobs:
         with:
           targets: wasm32-unknown-unknown,armv7-unknown-linux-gnueabihf
 
-      - name: Cache cargo registry + target
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-release-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-release-cargo-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo target (release)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-release-
 
       # ─── Build all the artifacts the release will publish ─────────
       - name: build-webadmin

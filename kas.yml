@@ -69,8 +69,12 @@ local_conf_header:
     # the work dir lets the build task copy from
     # work/.../deploy-bananas-image-image-complete/ as a recovery step.
     RM_WORK_EXCLUDE += "bananas-image"
-    BB_NUMBER_THREADS ?= "8"
-    PARALLEL_MAKE ?= "-j8"
+    # Match the host's actual core count — hardcoded "8" was right
+    # on an 8-core dev box, but undersubscribed a 16-core workstation
+    # and oversubscribed a 4-core CI runner. `oe.utils.cpu_count()`
+    # is bitbake's own helper, no extra deps.
+    BB_NUMBER_THREADS ?= "${@oe.utils.cpu_count()}"
+    PARALLEL_MAKE ?= "-j ${@oe.utils.cpu_count()}"
 
     # Useful for local dev caching
     DL_DIR ?= "${TOPDIR}/downloads"

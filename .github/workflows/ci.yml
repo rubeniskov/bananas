@@ -46,16 +46,29 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo registry + target
+      # Split the cache: the cargo registry rarely changes between
+      # Cargo.lock bumps (it's just downloaded crate sources), but
+      # `target/` is invalidated by every code change. Sharing one key
+      # meant a Cargo.lock bump flushed the registry too — paying the
+      # crates.io fetch all over again. Two caches with different
+      # invalidation cadences keep the registry warm.
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo target (host)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-host-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-host-
 
       - name: Install prek
         uses: j178/prek-action@v1
@@ -97,16 +110,23 @@ jobs:
         with:
           targets: armv7-unknown-linux-gnueabihf
 
-      - name: Cache cargo registry + target
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cross-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cross-cargo-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo target (cross armv7)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-cross-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-cross-
 
       # pixi tasks already strip the conda-injected CFLAGS that would
       # leak `-march=haswell` into the rusqlite-bundled cross-compile.
@@ -142,16 +162,23 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo registry + target
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-wasm-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-wasm-cargo-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo target (wasm)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-wasm-
 
       - name: build-webadmin (dx build via pixi)
         run: pixi run build-webadmin
