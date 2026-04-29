@@ -140,11 +140,7 @@ pub fn StatsPage() -> Element {
             }
             LiveTiles { snap: s.clone() }
             NetworkSparklines { ifaces: series.read().interfaces.clone(), snap: s.clone() }
-            DiskSparklines {
-                disks: series.read().disks.clone(),
-                snap: s,
-                storage: storage(),
-            }
+            DiskSparklines { disks: series.read().disks.clone(), snap: s }
         } else {
             p { class: "preview-label", "Loading live stats…" }
         }
@@ -155,7 +151,13 @@ pub fn StatsPage() -> Element {
             Some(r) if r.disks.is_empty() => rsx! { p { class: "empty", "No disks detected." } },
             Some(r) => rsx! {
                 for disk in r.disks.iter() {
-                    DiskCard { key: "{disk.kname}", disk: disk.clone() }
+                    DiskCard {
+                        key: "{disk.kname}",
+                        disk: disk.clone(),
+                        temp_c: snapshot().as_ref().and_then(|s| s.temps.iter()
+                            .find(|t| t.sensor == disk.kname || t.sensor == disk.name)
+                            .map(|t| t.celsius)),
+                    }
                 }
             }
         }
@@ -374,7 +376,6 @@ fn NetSparkSvg(props: NetSparkSvgProps) -> Element {
 struct DiskSparklinesProps {
     disks: Vec<String>,
     snap: api::StatsSnapshot,
-    storage: Option<api::StorageReport>,
 }
 
 #[component]
@@ -390,11 +391,6 @@ fn DiskSparklines(props: DiskSparklinesProps) -> Element {
                     key: "{dev}",
                     device: dev.clone(),
                     current: props.snap.disks.iter().find(|d| &d.device == dev).cloned(),
-                    temp_c: props.snap.temps.iter()
-                        .find(|t| &t.sensor == dev)
-                        .map(|t| t.celsius),
-                    info: props.storage.as_ref()
-                        .and_then(|r| r.disks.iter().find(|d| &d.name == dev || &d.kname == dev).cloned()),
                 }
             }
         }
@@ -405,10 +401,6 @@ fn DiskSparklines(props: DiskSparklinesProps) -> Element {
 struct DiskSparkCardProps {
     device: String,
     current: Option<api::DiskIo>,
-    /// On-device drivetemp reading (matches sensor name to device name).
-    temp_c: Option<f32>,
-    /// /api/storage row for this disk — gives us SMART status + capacity.
-    info: Option<api::Disk>,
 }
 
 #[component]
@@ -427,58 +419,15 @@ fn DiskSparkCard(props: DiskSparkCardProps) -> Element {
         None => (0, 0, 0.0),
     };
 
-    // SMART status badge: green ✓ when `smart_status.passed` is true,
-    // red when present-and-false, neutral when smartctl wasn't run yet.
-    let (smart_label, smart_kind): (Option<&'static str>, &'static str) = match &props.info {
-        Some(d) if d.smart_error.is_some() => (Some("smart: err"), "warn"),
-        Some(d) => match d
-            .smart
-            .as_ref()
-            .and_then(|j| j.get("smart_status"))
-            .and_then(|s| s.get("passed"))
-            .and_then(|p| p.as_bool())
-        {
-            Some(true) => (Some("smart: ok"), "ok"),
-            Some(false) => (Some("smart: fail"), "danger"),
-            None => (None, ""),
-        },
-        None => (None, ""),
-    };
-
-    let capacity = props.info.as_ref().and_then(|d| d.size).map(format_bytes);
-
-    let temp_kind = props.temp_c.map(|c| {
-        if c >= 50.0 {
-            "danger"
-        } else if c >= 42.0 {
-            "warn"
-        } else {
-            "ok"
-        }
-    });
-
     rsx! {
         div { class: "spark-card",
             div { class: "spark-head",
-                div { class: "spark-head-left",
-                    code { class: "spark-name", "/dev/{props.device}" }
-                    if let Some(label) = smart_label {
-                        span { class: "spark-smart {smart_kind}", "{label}" }
-                    }
+                code { class: "spark-name", "/dev/{props.device}" }
+                div { class: "spark-now",
+                    span { class: "spark-rx", "R {format_rate(r)}" }
+                    span { class: "spark-tx", "W {format_rate(w)}" }
+                    span { class: "spark-util", title: "Utilization (% of time the device was busy)", "{util:.0}%" }
                 }
-                div { class: "spark-head-right",
-                    if let (Some(c), Some(kind)) = (props.temp_c, temp_kind) {
-                        span { class: "spark-temp {kind}", "{c:.0}°C" }
-                    }
-                    if let Some(cap) = capacity.as_ref() {
-                        span { class: "spark-cap muted", "{cap}" }
-                    }
-                }
-            }
-            div { class: "spark-now",
-                span { class: "spark-rx", "R {format_rate(r)}" }
-                span { class: "spark-tx", "W {format_rate(w)}" }
-                span { class: "spark-util", title: "Utilization (% of time the device was busy)", "{util:.0}%" }
             }
             match &*series.read_unchecked() {
                 None => rsx! { div { class: "spark-empty", "Loading history…" } },

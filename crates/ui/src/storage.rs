@@ -18,6 +18,11 @@ pub fn StoragePage() -> Element {
 #[derive(Props, Clone, PartialEq)]
 pub struct DiskCardProps {
     pub disk: api::Disk,
+    /// Live drivetemp reading (°C) plucked from the latest stats
+    /// snapshot. None when no temp sensor matches the device name —
+    /// the badge is then omitted entirely.
+    #[props(default)]
+    pub temp_c: Option<f32>,
 }
 
 #[component]
@@ -26,18 +31,33 @@ pub fn DiskCard(props: DiskCardProps) -> Element {
     let model = d.model.clone().unwrap_or_else(|| "Unknown model".into());
     let size = d.size.map(format_bytes).unwrap_or_else(|| "—".into());
     let smart = smart_summary(d);
+    // 50/42 °C thresholds match a typical drivetemp red/yellow band
+    // for a spinning HDD. NVMe/SATA SSDs run cooler so this rarely
+    // trips on solid state.
+    let temp_kind = props.temp_c.map(|c| {
+        if c >= 50.0 {
+            "danger"
+        } else if c >= 42.0 {
+            "warn"
+        } else {
+            "ok"
+        }
+    });
 
     rsx! {
         section { class: "disk-card",
             header { class: "disk-head",
-                div {
+                div { class: "disk-head-left",
                     div { class: "disk-name", code { "/dev/{d.kname}" } }
                     div { class: "disk-model", "{model}" }
-                }
-                div { class: "disk-meta",
-                    span { class: "disk-size", "{size}" }
                     SmartBadge { summary: smart }
                     if d.readonly { span { class: "badge warn", "read-only" } }
+                }
+                div { class: "disk-head-right",
+                    if let (Some(c), Some(kind)) = (props.temp_c, temp_kind) {
+                        span { class: "disk-temp {kind}", "{c:.0}°C" }
+                    }
+                    span { class: "disk-size", "{size}" }
                 }
             }
 

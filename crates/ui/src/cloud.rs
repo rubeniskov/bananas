@@ -496,13 +496,24 @@ fn RunRow(props: RunRowProps) -> Element {
             td { span { class: "{status_class}", "{j.status.label()}" } }
             td { code { "{started}" } }
             // Finished cell doubles as the live-progress slot while the
-            // job is still running — no finish time yet, so the circular
-            // bar + cancel button live there. After the run resolves,
-            // the cell flips back to the actual finish timestamp.
+            // job is still running — no finish time yet, so the
+            // circular bar lives there. After the run resolves, the
+            // cell flips back to the actual finish timestamp.
             td {
                 if is_running {
-                    div { class: "run-controls",
-                        CircularProgress { percent: progress }
+                    CircularProgress { percent: progress }
+                } else {
+                    code { "{finished}" }
+                }
+            }
+            // Label cell sits on the right and holds the cancel button
+            // (only while running) next to the label text — the
+            // operator's hand is already heading right when scanning a
+            // running row, so the cancel target is closest there.
+            td {
+                div { class: "label-cell",
+                    span { class: "muted label-text", "{label}" }
+                    if is_running {
                         button {
                             class: "btn-icon delete",
                             "data-tip": "Cancel this in-flight sync (SIGTERM to rclone).",
@@ -510,11 +521,8 @@ fn RunRow(props: RunRowProps) -> Element {
                             Icon { name: "x" }
                         }
                     }
-                } else {
-                    code { "{finished}" }
                 }
             }
-            td { span { class: "muted", "{label}" } }
         }
     }
 }
