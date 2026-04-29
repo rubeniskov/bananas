@@ -373,10 +373,16 @@ fn AccountRow(props: AccountRowProps) -> Element {
     } else {
         "no token"
     };
+    let pretty_provider = provider_pretty(&a.provider);
     rsx! {
         tr {
             td { code { "{a.name}" } }
-            td { code { "{a.provider}" } }
+            td {
+                div { class: "provider-cell",
+                    ProviderBadge { provider: a.provider.clone() }
+                    span { class: "provider-label", "{pretty_provider}" }
+                }
+            }
             td { span { class: "{token_class}", "{token_text}" } }
             td { class: "row-actions",
                 button {
@@ -1014,5 +1020,51 @@ fn SyncFormModal(props: SyncFormModalProps) -> Element {
                 on_close: move |_| show_browser.set(false)
             }
         }
+    }
+}
+
+/// Compact circular badge identifying the provider — colored disc with
+/// the provider's first letter. Picked over inline brand SVGs because
+/// keeping per-vendor logo paths up-to-date is its own tax, and a
+/// colored letter scans at table-row size just as well.
+#[derive(Props, Clone, PartialEq)]
+struct ProviderBadgeProps {
+    provider: String,
+}
+
+#[component]
+fn ProviderBadge(props: ProviderBadgeProps) -> Element {
+    let key = props.provider.as_str();
+    let (initial, color, fg) = match key {
+        "drive" => ("G", "#4285F4", "#fff"),
+        "dropbox" => ("D", "#0061FF", "#fff"),
+        "onedrive" => ("O", "#0078D4", "#fff"),
+        "s3" => ("S", "#FF9900", "#1f2937"),
+        "webdav" => ("W", "#5b6770", "#fff"),
+        "ftp" => ("F", "#1a7f37", "#fff"),
+        _ => ("?", "#9ca3af", "#fff"),
+    };
+    let style = format!("background:{color};color:{fg};",);
+    rsx! {
+        span {
+            class: "provider-badge",
+            style: "{style}",
+            "aria-label": "{key}",
+            "{initial}"
+        }
+    }
+}
+
+/// Human-readable label keyed off the rclone backend name, matching
+/// the dropdown labels in the Add-account modal.
+fn provider_pretty(key: &str) -> &'static str {
+    match key {
+        "drive" => "Google Drive",
+        "dropbox" => "Dropbox",
+        "onedrive" => "OneDrive",
+        "s3" => "Amazon S3",
+        "webdav" => "WebDAV",
+        "ftp" => "FTP / FTPS",
+        _ => "Unknown",
     }
 }

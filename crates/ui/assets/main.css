@@ -272,7 +272,20 @@ nav.app-nav label.button-like:hover {
   text-transform: uppercase;
   color: var(--text-soft);
   margin-bottom: 8px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
 }
+/* °C corner badge inside the CPU tile-label. Small, monospace, color
+ * keyed off temperature thresholds — matches the gauge-fill palette. */
+.tile-temp {
+  font: 600 10px/1 ui-monospace, monospace;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.tile-temp.ok { color: var(--ok); }
+.tile-temp.warn { color: var(--warn); }
+.tile-temp.danger { color: var(--danger); }
 .gauge-bar {
   height: 8px;
   background: #eee;
@@ -328,16 +341,42 @@ nav.app-nav label.button-like:hover {
   gap: 8px;
   margin-bottom: 6px;
 }
+.spark-head-left,
+.spark-head-right {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.spark-head-right {
+  flex-shrink: 0;
+}
 .spark-name {
   font: 13px ui-monospace, monospace;
   background: var(--bg-soft);
   padding: 2px 6px;
   border-radius: 3px;
 }
+.spark-smart,
+.spark-temp {
+  font: 600 10px/1.4 ui-monospace, monospace;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.spark-smart.ok    { color: var(--ok); }
+.spark-smart.warn  { color: var(--warn); }
+.spark-smart.danger { color: var(--danger); }
+.spark-temp.ok     { color: var(--ok); }
+.spark-temp.warn   { color: var(--warn); }
+.spark-temp.danger { color: var(--danger); }
+.spark-cap {
+  font: 11px ui-monospace, monospace;
+}
 .spark-now {
   display: flex;
   gap: 8px;
   font: 12px ui-monospace, monospace;
+  margin-bottom: 6px;
 }
 .spark-rx { color: #1a7f37; }
 .spark-tx { color: #0366d6; }
@@ -950,4 +989,24 @@ textarea {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* ───────── Cloud provider badge ───────── */
+.provider-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font: 700 11px/1 ui-monospace, monospace;
+  flex-shrink: 0;
+}
+.provider-label {
+  color: var(--text);
 }

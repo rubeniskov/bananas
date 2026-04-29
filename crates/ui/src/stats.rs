@@ -140,8 +140,11 @@ pub fn StatsPage() -> Element {
             }
             LiveTiles { snap: s.clone() }
             NetworkSparklines { ifaces: series.read().interfaces.clone(), snap: s.clone() }
-            DiskSparklines { disks: series.read().disks.clone(), snap: s.clone() }
-            TempTiles { snap: s }
+            DiskSparklines {
+                disks: series.read().disks.clone(),
+                snap: s,
+                storage: storage(),
+            }
         } else {
             p { class: "preview-label", "Loading live stats…" }
         }
@@ -194,17 +197,30 @@ fn LiveTiles(props: LiveTilesProps) -> Element {
     } else {
         (s.mem.used as f32 / s.mem.total as f32 * 100.0).clamp(0.0, 100.0)
     };
+    // Pluck the on-die thermal-zone reading. Drivetemp readings for
+    // disks aren't rendered as their own tiles anymore — the dedicated
+    // "Temperatures" section was redundant; CPU temp lives inline in
+    // the CPU card now (top-right corner badge), and disk temps can
+    // come back inside the per-disk sparkline tiles if/when needed.
+    let cpu_temp = s
+        .temps
+        .iter()
+        .find(|t| t.sensor.starts_with("cpu") || t.sensor.contains("thermal"))
+        .map(|t| t.celsius);
+
     rsx! {
         div { class: "live-tiles",
             Gauge {
                 label: "CPU",
                 pct: cpu_pct,
                 detail: format!("{cpu_pct:.0}% busy"),
+                temp_c: cpu_temp,
             }
             Gauge {
                 label: "Memory",
                 pct: mem_pct,
                 detail: format!("{} / {}", format_bytes(s.mem.used), format_bytes(s.mem.total)),
+                temp_c: None,
             }
         }
     }
@@ -215,6 +231,12 @@ struct GaugeProps {
     label: &'static str,
     pct: f32,
     detail: String,
+    /// Optional °C badge rendered top-right of the tile. Used for the
+    /// CPU card; Memory passes `None`. Color flips ok/warn/danger at
+    /// 60 °C and 75 °C — matches the BPI's Mali-400 throttle point and
+    /// a typical SoC warning band.
+    #[props(default)]
+    temp_c: Option<f32>,
 }
 
 #[component]
@@ -229,78 +251,23 @@ fn Gauge(props: GaugeProps) -> Element {
     let pct_clamped = props.pct.clamp(0.0, 100.0);
     rsx! {
         div { class: "tile gauge-tile",
-            div { class: "tile-label", "{props.label}" }
+            div { class: "tile-label",
+                "{props.label}"
+                if let Some(c) = props.temp_c {
+                    {
+                        let temp_kind = if c >= 75.0 { "danger" } else if c >= 60.0 { "warn" } else { "ok" };
+                        rsx! {
+                            span { class: "tile-temp {temp_kind}", "{c:.0}°C" }
+                        }
+                    }
+                }
+            }
             div { class: "gauge-bar",
                 div { class: "gauge-fill {kind}", style: "width: {pct_clamped}%" }
             }
             div { class: "tile-detail",
                 span { class: "tile-pct {kind}", "{pct_clamped:.0}%" }
                 span { class: "tile-sub", "{props.detail}" }
-            }
-        }
-    }
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct TempTilesProps {
-    snap: api::StatsSnapshot,
-}
-
-/// Per-sensor temperature card grid. Shows live °C for every sensor
-/// the kernel exposed (CPU thermal zone + drivetemp readings for each
-/// SATA/NVMe disk). The "tile-pct" color flips through ok/warn/danger
-/// at 60 °C and 75 °C — those thresholds match Mali-400's documented
-/// throttle point and a typical HDD warning band, respectively.
-#[component]
-fn TempTiles(props: TempTilesProps) -> Element {
-    if props.snap.temps.is_empty() {
-        return rsx! {};
-    }
-    rsx! {
-        h3 { class: "stats-subhead", "Temperatures" }
-        div { class: "live-tiles",
-            for t in props.snap.temps.iter() {
-                TempTile {
-                    key: "{t.sensor}",
-                    sensor: t.sensor.clone(),
-                    celsius: t.celsius,
-                }
-            }
-        }
-    }
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct TempTileProps {
-    sensor: String,
-    celsius: f32,
-}
-
-#[component]
-fn TempTile(props: TempTileProps) -> Element {
-    let kind = if props.celsius >= 75.0 {
-        "danger"
-    } else if props.celsius >= 60.0 {
-        "warn"
-    } else {
-        "ok"
-    };
-    // Map 30 °C -> 0% / 90 °C -> 100% so the bar reads at a glance.
-    let pct = (((props.celsius - 30.0) / 60.0) * 100.0).clamp(0.0, 100.0);
-    let pretty_label = if props.sensor.starts_with("cpu") || props.sensor.contains("thermal") {
-        "CPU".to_string()
-    } else {
-        format!("/dev/{}", props.sensor)
-    };
-    rsx! {
-        div { class: "tile gauge-tile",
-            div { class: "tile-label", "{pretty_label}" }
-            div { class: "gauge-bar",
-                div { class: "gauge-fill {kind}", style: "width: {pct}%" }
-            }
-            div { class: "tile-detail",
-                span { class: "tile-pct {kind}", "{props.celsius:.1}°C" }
-                span { class: "tile-sub", "{props.sensor}" }
             }
         }
     }
@@ -407,6 +374,7 @@ fn NetSparkSvg(props: NetSparkSvgProps) -> Element {
 struct DiskSparklinesProps {
     disks: Vec<String>,
     snap: api::StatsSnapshot,
+    storage: Option<api::StorageReport>,
 }
 
 #[component]
@@ -421,7 +389,12 @@ fn DiskSparklines(props: DiskSparklinesProps) -> Element {
                 DiskSparkCard {
                     key: "{dev}",
                     device: dev.clone(),
-                    current: props.snap.disks.iter().find(|d| &d.device == dev).cloned()
+                    current: props.snap.disks.iter().find(|d| &d.device == dev).cloned(),
+                    temp_c: props.snap.temps.iter()
+                        .find(|t| &t.sensor == dev)
+                        .map(|t| t.celsius),
+                    info: props.storage.as_ref()
+                        .and_then(|r| r.disks.iter().find(|d| &d.name == dev || &d.kname == dev).cloned()),
                 }
             }
         }
@@ -432,6 +405,10 @@ fn DiskSparklines(props: DiskSparklinesProps) -> Element {
 struct DiskSparkCardProps {
     device: String,
     current: Option<api::DiskIo>,
+    /// On-device drivetemp reading (matches sensor name to device name).
+    temp_c: Option<f32>,
+    /// /api/storage row for this disk — gives us SMART status + capacity.
+    info: Option<api::Disk>,
 }
 
 #[component]
@@ -450,15 +427,58 @@ fn DiskSparkCard(props: DiskSparkCardProps) -> Element {
         None => (0, 0, 0.0),
     };
 
+    // SMART status badge: green ✓ when `smart_status.passed` is true,
+    // red when present-and-false, neutral when smartctl wasn't run yet.
+    let (smart_label, smart_kind): (Option<&'static str>, &'static str) = match &props.info {
+        Some(d) if d.smart_error.is_some() => (Some("smart: err"), "warn"),
+        Some(d) => match d
+            .smart
+            .as_ref()
+            .and_then(|j| j.get("smart_status"))
+            .and_then(|s| s.get("passed"))
+            .and_then(|p| p.as_bool())
+        {
+            Some(true) => (Some("smart: ok"), "ok"),
+            Some(false) => (Some("smart: fail"), "danger"),
+            None => (None, ""),
+        },
+        None => (None, ""),
+    };
+
+    let capacity = props.info.as_ref().and_then(|d| d.size).map(format_bytes);
+
+    let temp_kind = props.temp_c.map(|c| {
+        if c >= 50.0 {
+            "danger"
+        } else if c >= 42.0 {
+            "warn"
+        } else {
+            "ok"
+        }
+    });
+
     rsx! {
         div { class: "spark-card",
             div { class: "spark-head",
-                code { class: "spark-name", "/dev/{props.device}" }
-                div { class: "spark-now",
-                    span { class: "spark-rx", "R {format_rate(r)}" }
-                    span { class: "spark-tx", "W {format_rate(w)}" }
-                    span { class: "spark-util", title: "Utilization (% of time the device was busy)", "{util:.0}%" }
+                div { class: "spark-head-left",
+                    code { class: "spark-name", "/dev/{props.device}" }
+                    if let Some(label) = smart_label {
+                        span { class: "spark-smart {smart_kind}", "{label}" }
+                    }
                 }
+                div { class: "spark-head-right",
+                    if let (Some(c), Some(kind)) = (props.temp_c, temp_kind) {
+                        span { class: "spark-temp {kind}", "{c:.0}°C" }
+                    }
+                    if let Some(cap) = capacity.as_ref() {
+                        span { class: "spark-cap muted", "{cap}" }
+                    }
+                }
+            }
+            div { class: "spark-now",
+                span { class: "spark-rx", "R {format_rate(r)}" }
+                span { class: "spark-tx", "W {format_rate(w)}" }
+                span { class: "spark-util", title: "Utilization (% of time the device was busy)", "{util:.0}%" }
             }
             match &*series.read_unchecked() {
                 None => rsx! { div { class: "spark-empty", "Loading history…" } },
