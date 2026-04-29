@@ -1623,13 +1623,17 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     Ok(combined)
 }
 
-/// rclone's `--stats-one-line` lines look like:
-///   "Transferred: 5.2 GiB / 12.3 GiB, 42%, 1.2 MiB/s, ETA 1h41m"
-/// We pluck the `42%` out. Best-effort — if the line shape changes in a
-/// future rclone release, we just lose progress (the run still works).
+/// rclone v1.68 `--stats-one-line --stats-log-level=NOTICE` lines look
+/// like (verified on the BPI's running binary):
+///   "2026/04/29 18:34:34 NOTICE:    85.434 MiB / 200 MiB, 43%, 36 MiB/s, ETA 3s"
+/// The earlier version of this parser gated on `line.contains("Transferred:")`,
+/// which v1.68's `--stats-one-line` no longer emits — that's why the
+/// progress file never appeared in production. Match instead on
+/// `"NOTICE:"` + the integer immediately preceding `%`, which is the
+/// only place rclone's status format puts a percent.
 fn parse_rclone_progress(line: &str) -> Option<u32> {
     let line = line.trim();
-    if !line.contains("Transferred:") {
+    if !line.contains("NOTICE:") {
         return None;
     }
     let pct_idx = line.find('%')?;
@@ -1639,6 +1643,9 @@ fn parse_rclone_progress(line: &str) -> Option<u32> {
         .rev()
         .take_while(|c| c.is_ascii_digit())
         .collect();
+    if digits.is_empty() {
+        return None;
+    }
     let digits: String = digits.chars().rev().collect();
     digits.parse().ok()
 }
