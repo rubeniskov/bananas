@@ -747,6 +747,14 @@ export component MainWindow inherits Window {
 
     in property <string> ts-text;
     in property <float> cpu-pct;
+    /// CPU on-die thermal-zone reading rendered next to the CPU
+    /// percent in the header bar (e.g. " / 30°C"). Empty string hides
+    /// the suffix entirely on dev hosts that don't ship a thermal
+    /// zone. The disk temps still show in the TEMP strip below.
+    in property <string> cpu-temp-text;
+    /// "ok" / "warn" / "danger" — colors the inline temp the same
+    /// way the strip below colors disk readings.
+    in property <string> cpu-temp-kind;
     in property <float> mem-pct;
 
     in property <[NetIfaceUi]> network;
@@ -809,14 +817,25 @@ export component MainWindow inherits Window {
                             height: 6px;
                         }
                     }
-                    Text {
-                        text: Math.round(root.cpu-pct * 100) + " %";
-                        color: Theme.text;
-                        font-size: 11px;
-                        font-weight: 700;
-                        width: 36px;
-                        horizontal-alignment: right;
-                        vertical-alignment: center;
+                    HorizontalLayout {
+                        spacing: 0px;
+                        Text {
+                            text: Math.round(root.cpu-pct * 100) + " %";
+                            color: Theme.text;
+                            font-size: 11px;
+                            font-weight: 700;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.cpu-temp-text;
+                            color: root.cpu-temp-kind == "danger" ? Theme.danger
+                                : root.cpu-temp-kind == "warn" ? Theme.warn
+                                : Theme.text-muted;
+                            font-size: 11px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
                     }
                 }
 

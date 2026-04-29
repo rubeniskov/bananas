@@ -247,27 +247,36 @@ fn apply_snapshot(
         .collect();
     w.set_partitions(ModelRc::new(VecModel::from(parts)));
 
+    // CPU temp now lives inline next to the CPU percent in the
+    // header bar (e.g. "50 % / 30°C"), so we pluck it out of the
+    // temps list before rendering the strip below — the strip keeps
+    // showing block-device drivetemp readings only.
+    let is_cpu = |sensor: &str| sensor.contains("cpu") || sensor.contains("thermal");
+    let temp_kind = |c: f32| -> &'static str {
+        if c >= 75.0 {
+            "danger"
+        } else if c >= 60.0 {
+            "warn"
+        } else {
+            "ok"
+        }
+    };
+    let cpu_temp = snap.temps.iter().find(|t| is_cpu(&t.sensor));
+    let (cpu_temp_text, cpu_temp_kind) = match cpu_temp {
+        Some(t) => (format!(" / {:.0}°C", t.celsius), temp_kind(t.celsius)),
+        None => (String::new(), "ok"),
+    };
+    w.set_cpu_temp_text(SharedString::from(cpu_temp_text));
+    w.set_cpu_temp_kind(SharedString::from(cpu_temp_kind));
+
     let temps: Vec<TempUi> = snap
         .temps
         .iter()
+        .filter(|t| !is_cpu(&t.sensor))
         .map(|t| {
-            let kind: &'static str = if t.celsius >= 75.0 {
-                "danger"
-            } else if t.celsius >= 60.0 {
-                "warn"
-            } else {
-                "ok"
-            };
-            // Friendly label: collapse `cpu_thermal` / `cpu0-thermal`
-            // / similar to "CPU"; everything else (block devices) keeps
-            // its raw sensor name.
-            let label = if t.sensor.contains("cpu") || t.sensor.contains("thermal") {
-                "CPU".to_string()
-            } else {
-                t.sensor.to_uppercase()
-            };
+            let kind = temp_kind(t.celsius);
             TempUi {
-                label: SharedString::from(label),
+                label: SharedString::from(t.sensor.to_uppercase()),
                 sensor: SharedString::from(t.sensor.clone()),
                 value: SharedString::from(format!("{:.1}", t.celsius)),
                 kind: SharedString::from(kind),
