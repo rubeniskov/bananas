@@ -1,5 +1,5 @@
 [package]
-name = "bananas-ui"
+name = "bananas-webadmin"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

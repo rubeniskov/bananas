@@ -63,7 +63,7 @@ cmd = "./vendor/sunxi-tools/sunxi-fel"
 depends-on = ["setup-fel"]
 
 # `setup-dx`: one-shot install of dioxus-cli into ~/.cargo/bin so `dx build`
-# works from `build-ui`. Cached after first install — `dx --version` short-circuits.
+# works from `build-webadmin`. Cached after first install — `dx --version` short-circuits.
 [tasks.setup-dx]
 cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v dx >/dev/null || cargo install dioxus-cli --locked --version ^0.7'"
 
@@ -130,9 +130,9 @@ printf "%s" "$RCLONE_VERSION" > "$DEST/.rclone-version"
 echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
 '"""
 
-# `build-ui`: compile crates/ui to wasm via dioxus-cli (`dx build --release`).
-# Output lands in target/dx/bananas-ui/release/web/public/ (index.html, wasm/,
-# assets/, …). Staged into serve/ui/ AND packed into serve/bin/bananas-ui.tar.gz
+# `build-webadmin`: compile crates/webadmin to wasm via dioxus-cli (`dx build --release`).
+# Output lands in target/dx/bananas-webadmin/release/web/public/ (index.html, wasm/,
+# assets/, …). Staged into serve/webadmin/ AND packed into serve/bin/bananas-webadmin.tar.gz
 # so the Yocto recipe sees the bundle as a tracked SRC_URI input — without the
 # tarball, do_install's cache key doesn't depend on the bundle's contents and
 # `bitbake` keeps shipping a stale UI on subsequent iterations even when the
@@ -143,15 +143,15 @@ echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
 # the host rustup toolchain, which has wasm32-unknown-unknown installed.
 # The pixi conda rust does not ship a wasm std and would error with
 # "Missing rust target wasm32-unknown-unknown".
-[tasks.build-ui]
-cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; rm -rf target/dx/bananas-ui/release/web/public && dx build --release --package bananas-ui --platform web && rm -rf serve/ui && mkdir -p serve/ui serve/bin && cp -r target/dx/bananas-ui/release/web/public/. serve/ui/ && tar -C serve/ui -czf serve/bin/bananas-ui.tar.gz .'"
+[tasks.build-webadmin]
+cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; rm -rf target/dx/bananas-webadmin/release/web/public && dx build --release --package bananas-webadmin --platform web && rm -rf serve/webadmin && mkdir -p serve/webadmin serve/bin && cp -r target/dx/bananas-webadmin/release/web/public/. serve/webadmin/ && tar -C serve/webadmin -czf serve/bin/bananas-webadmin.tar.gz .'"
 depends-on = ["setup-dx"]
 
 # `build-server-arm`: cross-compile bananas-server + bananas-helper for the
 # BPI's armv7-unknown-linux-gnueabihf target using cargo-zigbuild (zig as the
 # cross linker, no per-target gcc needed). Stages the stripped binaries in
-# serve/bin/ where the bananas-server.bb recipe picks them up. crates/ui is
-# wasm-only and excluded from the host workspace build via -p flags.
+# serve/bin/ where the bananas-server.bb recipe picks them up. crates/webadmin
+# is wasm-only and excluded from the host workspace build via -p flags.
 #
 # `env -u CFLAGS …` strips pixi's conda-env x86_64-host CFLAGS so cc-rs
 # doesn't try to feed `-march=haswell` into the armv7 cross-compile of
@@ -254,7 +254,7 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
 # now-correctly-staged servers. No buttons, no SD writes, no wedge.
 [tasks.iterate]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-ui && pixi run build-server-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin && pixi run build-server-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
 [dependencies]
 python = "==3.11"

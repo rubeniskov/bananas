@@ -15,7 +15,7 @@ StateDirectory=bananas
 StateDirectoryMode=0700
 Environment=BANANAS_HELPER_SOCKET=/run/bananas/helper.sock
 Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
-Environment=BANANAS_UI_DIR=/usr/share/bananas/ui
+Environment=BANANAS_WEBADMIN_DIR=/usr/share/bananas/webadmin
 Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
 Restart=on-failure
 RestartSec=2

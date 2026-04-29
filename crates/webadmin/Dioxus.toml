@@ -1,5 +1,5 @@
 [application]
-name = "bananas-ui"
+name = "bananas-webadmin"
 
 [web.app]
 base_path = "/"

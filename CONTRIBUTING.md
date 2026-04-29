@@ -29,7 +29,7 @@ The detailed setup (host apt packages, Docker context, U-Boot env for netboot, S
 The repo ships a [`.pre-commit-config.yaml`](.pre-commit-config.yaml) consumed by [prek](https://github.com/j178/prek), a Rust drop-in for `pre-commit`. After running `pixi run setup-prek` once:
 
 - **pre-commit** stage runs `cargo fmt --all -- --check` + the standard hygiene hooks (trailing whitespace, EOF newline, YAML / TOML lint, large-file guard). Cheap; runs on every `git commit`.
-- **pre-push** stage adds `cargo clippy --workspace`, `cargo test --workspace`, and `cargo check -p bananas-ui --target wasm32-unknown-unknown`. Slower; runs on `git push`.
+- **pre-push** stage adds `cargo clippy --workspace`, `cargo test --workspace`, and `cargo check -p bananas-webadmin --target wasm32-unknown-unknown`. Slower; runs on `git push`.
 
 CI re-runs the same hooks via `prek run --all-files --hook-stage pre-push`, so anything that's clean locally is clean on the runner. To skip a hook on a one-off basis use `git commit --no-verify` (or `SKIP=cargo-clippy git push` for a single hook), but PRs that fail the CI prek job get rejected before they reach merge.
 
@@ -39,12 +39,12 @@ CI re-runs the same hooks via `prek run --all-files --hook-stage pre-push`, so a
 
 | Path | What |
 |------|------|
-| `crates/` | Rust workspace — server, helper, UI (wasm), stats sampler, dashboard. |
+| `crates/` | Rust workspace — server, helper, web admin (wasm), stats sampler, dashboard. |
 | `layers/meta-bananas/` | Yocto layer with all BanaNAS-specific recipes (`recipes-bsp/`, `recipes-core/`, `recipes-kernel/`, `recipes-graphics/`). |
 | `kas.yml` | Layer composition (poky, meta-openembedded, meta-sunxi, meta-arm pinned to `scarthgap`) + `local_conf_header` overrides. |
-| `pixi.toml` | All build/run tasks (`build-ui`, `build-server-arm`, `build-stats-arm`, `build-dashboard-arm`, `setup-rclone-arm`, `iterate`, …). |
+| `pixi.toml` | All build/run tasks (`build-webadmin`, `build-server-arm`, `build-stats-arm`, `build-dashboard-arm`, `setup-rclone-arm`, `iterate`, …). |
 | `compose.yml` | TFTP + NFS containers for the netboot iterate loop. |
-| `serve/` | Build artifacts staged for Yocto recipes (`serve/bin/` = prebuilt arm binaries; `serve/ui/` = wasm SPA bundle). Gitignored. |
+| `serve/` | Build artifacts staged for Yocto recipes (`serve/bin/` = prebuilt arm binaries; `serve/webadmin/` = wasm SPA bundle). Gitignored. |
 | `assets/` | Source-of-truth artwork (the splash png lives here; recipe-side bbfile copies are derived). |
 | `docs/` | Hardware references + LCD config notes + screenshots. |
 | `memory/` | Decision logs / "why we deferred X" notes. Read these before reviving a deferred backlog item. |
@@ -55,11 +55,11 @@ CI re-runs the same hooks via `prek run --all-files --hook-stage pre-push`, so a
 
 ### Web UI only
 
-`crates/ui` is a Dioxus 0.7 wasm app. Edit Rust + CSS, then:
+`crates/webadmin` is a Dioxus 0.7 wasm app. Edit Rust + CSS, then:
 
 ```bash
-pixi run build-ui      # rebuilds the wasm bundle into serve/ui/
-pixi run iterate       # ships it (bake will be fast — only the SPA changes)
+pixi run build-webadmin  # rebuilds the wasm bundle into serve/webadmin/
+pixi run iterate         # ships it (bake will be fast — only the SPA changes)
 ```
 
 ### Server / helper / stats (Rust crates that run on the BPI)

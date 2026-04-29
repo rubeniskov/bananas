@@ -11,7 +11,7 @@
 # Artifacts shipped:
 #   - bananas-server-vX.Y.Z-armv7.tar.gz       (server + helper)
 #   - bananas-stats-vX.Y.Z-armv7.tar.gz        (sampler daemon)
-#   - bananas-ui-vX.Y.Z.tar.gz                 (wasm SPA)
+#   - bananas-webadmin-vX.Y.Z.tar.gz           (wasm SPA)
 #   - bananas-dashboard-vX.Y.Z-armv7.tar.gz    (Slint LCD app)
 #
 # The Yocto bake also runs here so every release ships an SD-card image
@@ -111,8 +111,8 @@ jobs:
             ${{ runner.os }}-release-cargo-
 
       # ─── Build all the artifacts the release will publish ─────────
-      - name: build-ui
-        run: pixi run build-ui
+      - name: build-webadmin
+        run: pixi run build-webadmin
 
       - name: build-server-arm
         run: pixi run build-server-arm
@@ -162,7 +162,7 @@ jobs:
           tar -C serve/bin -czf dist/bananas-server-armv7.tar.gz bananas-server bananas-helper
           tar -C serve/bin -czf dist/bananas-stats-armv7.tar.gz bananas-stats
           tar -C serve/bin -czf dist/bananas-dashboard-armv7.tar.gz bananas-dashboard
-          cp serve/bin/bananas-ui.tar.gz dist/bananas-ui.tar.gz
+          cp serve/bin/bananas-webadmin.tar.gz dist/bananas-webadmin.tar.gz
           # Wrap the .wic in tar.gz so every release asset uses the same
           # compression format. Yocto's stable symlink is *.rootfs.wic;
           # `-h` dereferences it so the tarball gets the actual data, and

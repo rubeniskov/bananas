@@ -153,10 +153,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-wasm-cargo-
 
-      - name: build-ui (dx build via pixi)
-        run: pixi run build-ui
+      - name: build-webadmin (dx build via pixi)
+        run: pixi run build-webadmin
 
       - name: Confirm bundle exists
         run: |
-          test -f serve/ui/index.html
-          test -f serve/bin/bananas-ui.tar.gz
+          test -f serve/webadmin/index.html
+          test -f serve/bin/bananas-webadmin.tar.gz

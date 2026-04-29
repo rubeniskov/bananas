@@ -52,7 +52,7 @@ Reproducibility, low idle power, no cloud lock-in, and "your own data, your own 
 - **SATA + USB storage** with `e2fsprogs-resize2fs`, `tune2fs`, `mke2fs`, `e2fsck`, `gptfdisk` for on-device partition surgery (within the 16 TiB pgoff_t cap on this 32-bit ARM SoC — see the GPT memo in [`docs/`](docs)).
 - **systemd** with key-only SSH, baked-in `authorized_keys`, optional root password (SHA-512 hash injected via `ROOT_PASSWORD_HASH`).
 
-### Web admin (`crates/server` + `crates/ui`)
+### Web admin (`crates/server` + `crates/webadmin`)
 
 - Single-page Dioxus 0.7 wasm UI served alongside a JSON `/api/*` from a Rust HTTP server.
 - Hash-based routing — every tab survives a full-page reload.
@@ -218,7 +218,7 @@ flowchart LR
 |-------|--------|---------|
 | `crates/helper` | armv7 host bin | Privileged ops (NFS exports rewrite, fstab edit, user mgmt, chown/chmod, smartctl, rclone). Listens on `/run/bananas/helper.sock`. |
 | `crates/server` | armv7 host bin | HTTP / WebSocket server, port 8080. JSON `/api/*` + bundled wasm SPA. Routes everything sensitive through the helper. |
-| `crates/ui` | wasm32 | Dioxus 0.7 SPA. Bundled into `/usr/share/bananas/ui/`. |
+| `crates/webadmin` | wasm32 | Dioxus 0.7 SPA. Bundled into `/usr/share/bananas/webadmin/`. |
 | `crates/stats` | armv7 host bin + lib | Sampler daemon. Writes SQLite, publishes live snapshots over `/run/bananas-stats/live.sock`. |
 | `crates/dashboard` | armv7 host bin | Slint app. Subscribes to the stats live socket; renders on `/dev/fb0`. |
 

@@ -2,11 +2,11 @@ SUMMARY = "BanaNAS web admin: bananas-server (HTTP UI) + bananas-helper (root)"
 DESCRIPTION = "Two prebuilt Rust binaries cross-compiled on the host with \
 cargo-zigbuild for armv7-unknown-linux-gnueabihf, plus the Dioxus Web UI \
 bundle (wasm/CSS/HTML). The unprivileged HTTP daemon listens on :8080, \
-serves the wasm SPA from /usr/share/bananas/ui/, and reaches a small \
+serves the wasm SPA from /usr/share/bananas/webadmin/, and reaches a small \
 root-owned helper over a Unix socket for tightly-scoped operations \
 (NFS exports rewrite, group ops). \
-Run `pixi run build-ui && pixi run build-server-arm` before `pixi run build` \
-to stage the binaries in serve/bin/ and the UI bundle in serve/ui/."
+Run `pixi run build-webadmin && pixi run build-server-arm` before `pixi run build` \
+to stage the binaries in serve/bin/ and the web-admin bundle in serve/webadmin/."
 
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
@@ -23,7 +23,7 @@ SRC_URI = "file://bananas-helper.service \
            file://bananas-server.service \
            file://bananas-server \
            file://bananas-helper \
-           file://bananas-ui.tar.gz \
+           file://bananas-webadmin.tar.gz \
            file://bananas-motd.sh"
 
 S = "${WORKDIR}"
@@ -67,17 +67,18 @@ do_install() {
     install -d ${D}${sysconfdir}/profile.d
     install -m 0644 ${WORKDIR}/bananas-motd.sh ${D}${sysconfdir}/profile.d/bananas-motd.sh
 
-    # UI bundle (wasm + CSS + HTML). do_unpack already extracted the tarball
-    # alongside the binaries in WORKDIR. bananas-server reads BANANAS_UI_DIR
-    # from its unit file (default /usr/share/bananas/ui). bbfatal if missing —
-    # forgetting `pixi run build-ui` before `build` would otherwise ship a
+    # Web-admin bundle (wasm + CSS + HTML). do_unpack already extracted the
+    # tarball alongside the binaries in WORKDIR. bananas-server reads
+    # BANANAS_WEBADMIN_DIR from its unit file (default
+    # /usr/share/bananas/webadmin). bbfatal if missing — forgetting
+    # `pixi run build-webadmin` before `build` would otherwise ship a
     # 404-only server.
     if [ ! -f "${WORKDIR}/index.html" ]; then
-        bbfatal "UI bundle missing — index.html not found in WORKDIR. Run 'pixi run build-ui' first."
+        bbfatal "web-admin bundle missing — index.html not found in WORKDIR. Run 'pixi run build-webadmin' first."
     fi
-    install -d ${D}${datadir}/bananas/ui
-    cp -r ${WORKDIR}/index.html ${WORKDIR}/assets ${D}${datadir}/bananas/ui/
-    chmod -R u=rwX,go=rX ${D}${datadir}/bananas/ui
+    install -d ${D}${datadir}/bananas/webadmin
+    cp -r ${WORKDIR}/index.html ${WORKDIR}/assets ${D}${datadir}/bananas/webadmin/
+    chmod -R u=rwX,go=rX ${D}${datadir}/bananas/webadmin
 
     # Persistent state dir — bananas-server.service has StateDirectory=bananas,
     # so systemd creates /var/lib/bananas (mode 0700, owned by the bananas
@@ -88,5 +89,5 @@ FILES:${PN} += "${bindir}/bananas-server \
                 ${bindir}/bananas-helper \
                 ${systemd_system_unitdir}/bananas-helper.service \
                 ${systemd_system_unitdir}/bananas-server.service \
-                ${datadir}/bananas/ui \
+                ${datadir}/bananas/webadmin \
                 ${sysconfdir}/profile.d/bananas-motd.sh"

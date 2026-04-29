@@ -7,9 +7,9 @@
 //!   GET    /api/browse?path=…  → directory listing for the path picker
 //!   GET    /api/healthz        → liveness
 //!
-//! Everything else is served by the Dioxus Web bundle in `BANANAS_UI_DIR`
-//! (defaults to /usr/share/bananas/ui), with SPA-style fallback to
-//! index.html so client-side routes resolve.
+//! Everything else is served by the Dioxus Web bundle in
+//! `BANANAS_WEBADMIN_DIR` (defaults to /usr/share/bananas/webadmin),
+//! with SPA-style fallback to index.html so client-side routes resolve.
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -101,9 +101,9 @@ async fn main() -> Result<()> {
         jobs,
     };
 
-    let ui_dir: PathBuf = std::env::var_os("BANANAS_UI_DIR")
+    let ui_dir: PathBuf = std::env::var_os("BANANAS_WEBADMIN_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/usr/share/bananas/ui".into());
+        .unwrap_or_else(|| "/usr/share/bananas/webadmin".into());
     let index_html_path = ui_dir.join("index.html");
 
     // Preload index.html. The SPA fallback handler returns this verbatim so

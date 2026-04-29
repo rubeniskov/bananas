@@ -74,7 +74,7 @@ Picks up source changes, rebuilds the affected pieces (UI / server / helper / st
 
 ## Iterate-loop ordering
 
-The explicit sequence in `pixi run iterate` is `build-ui → build-server-arm → build-stats-arm → build-dashboard-arm → setup-rclone-arm → build (Yocto) → serve-tftp → reboot → wait-board-down → extract-rootfs → serve`.
+The explicit sequence in `pixi run iterate` is `build-webadmin → build-server-arm → build-stats-arm → build-dashboard-arm → setup-rclone-arm → build (Yocto) → serve-tftp → reboot → wait-board-down → extract-rootfs → serve`.
 
 `wait-board-down` pings `$BPI_HOST` once a second until it stops answering (or 30 s timeout) — this guarantees `extract-rootfs` runs against an idle NFS share so the running BPI's libraries don't get swapped under it mid-shutdown. Earlier the order was `build → (serve-tftp + extract-rootfs) → reboot`, which deterministically wedged the board into "Running in chroot, ignoring request" mode every iteration; if you ever see that error, you're running an old `pixi.toml` and need to update.
 
@@ -98,13 +98,13 @@ The repo's a Cargo workspace at edition 2024. Five crates:
 |-------|--------|---------|
 | `crates/helper` | armv7 host bin | Privileged ops over `/run/bananas/helper.sock`. |
 | `crates/server` | armv7 host bin | HTTP / WebSocket server, port 8080. |
-| `crates/ui` | wasm32 | Dioxus 0.7 SPA. Built via `dx bundle --release --platform web`. |
+| `crates/webadmin` | wasm32 | Dioxus 0.7 SPA. Built via `dx bundle --release --platform web`. |
 | `crates/stats` | armv7 host bin + lib | Sampler daemon. |
 | `crates/dashboard` | armv7 host bin | Slint LCD app. |
 
-Cross-compile via `pixi run build-server-arm` etc. — uses `cargo-zigbuild` for the armv7 targets and runs only the host-side packages (`crates/ui` is wasm-only and excluded via `-p` flags).
+Cross-compile via `pixi run build-server-arm` etc. — uses `cargo-zigbuild` for the armv7 targets and runs only the host-side packages (`crates/webadmin` is wasm-only and excluded via `-p` flags).
 
-The `bananas-server.bb` recipe `bbfatal`s if `serve/ui/index.html` is missing, so forgetting `pixi run build-ui` fails loudly instead of shipping a 404-only image.
+The `bananas-server.bb` recipe `bbfatal`s if `serve/webadmin/index.html` is missing, so forgetting `pixi run build-webadmin` fails loudly instead of shipping a 404-only image.
 
 ## Where to look when bitbake explodes
 

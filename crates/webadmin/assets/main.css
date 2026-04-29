@@ -789,7 +789,7 @@ fieldset label {
 
 /* ────────────────────────────────────────────────────────────────────────
    Tooltips. The bubble is a singleton element appended to <body> by
-   crates/ui/src/tooltip.rs and positioned via JS so it can flip
+   crates/webadmin/src/tooltip.rs and positioned via JS so it can flip
    top↔bottom and clamp horizontally to stay inside the viewport on any
    side. Pseudo-elements were used originally but couldn't see the
    viewport — the bubble would clip silently when the anchor was near
