@@ -209,10 +209,17 @@ fn FstabRowView(props: FstabRowViewProps) -> Element {
             td { code { "{r.dump}" } }
             td { code { "{r.pass}" } }
             td { class: "row-actions",
-                // Protected (system) mounts get no actions at all — the
-                // server refuses edit/delete and we don't expose chmod
-                // on /, /proc, /sys, … through the UI either.
-                if !r.protected {
+                // Protected (system) mounts get no actions — the server
+                // refuses edit/delete and we don't expose chmod on /,
+                // /proc, /sys, … through the UI either. Show a muted
+                // "—" so the cell still has visible content and the
+                // table layout stays consistent across rows.
+                if r.protected {
+                    span { class: "row-actions-empty",
+                        "data-tip": "Protected system mount — managed by the OS. The UI cannot edit, delete, or chmod this entry.",
+                        "—"
+                    }
+                } else {
                     button {
                         class: "btn-icon edit",
                         "data-tip": "Edit this fstab entry",

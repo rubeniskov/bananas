@@ -1,0 +1,50 @@
+# BanaNAS stats sampler config. Mirrors the compiled-in defaults of
+# `bananas-stats::config::Config::default()` — edit values here, then
+# `systemctl restart bananas-stats.service` (or use the web admin's
+# "Stats config" gear to do both atomically).
+
+[sampling]
+# How often to sample /proc + /sys + statvfs, in milliseconds.
+interval_ms = 1000
+
+[storage]
+# WAL-mode SQLite path. `bananas` user owns this dir (StateDirectory=bananas
+# on the systemd unit).
+path = "/var/lib/bananas/stats.db"
+# Raw 1-second samples are kept this many hours before being aggregated /
+# decimated into the longer-window tables.
+raw_retention_hours = 24
+# Aggregated rows are kept this many days.
+agg_retention_days = 30
+# Disk flush cadence (ms). Lower = fewer lost rows on power loss, higher =
+# fewer fsyncs.
+flush_interval_ms = 5000
+# Hard ceiling on the SQLite file size, in MB. Comment out / leave unset
+# for "auto" — picks min(5% of free space, 100 MB) at first run, persists
+# the choice across restarts.
+# max_db_mb = 100
+
+[devices]
+# Block-device buses to include in disk-IO sampling. Add "nvme" if the
+# board ever ships with one.
+include_buses = ["sata", "usb"]
+# Exact device names to skip (e.g. ["sda1"] to drop a specific partition).
+exclude_names = []
+
+[network]
+# Interface-name allowlist. Glob `*` = match-all. `eth*` covers kernel-
+# classic naming, `en*` covers systemd predictable names. Wireless
+# (wlan*, wlp*), bridges (docker0, br-*), veth*, etc. are intentionally
+# absent so the dashboard isn't drowned in 0-Bps idle interfaces.
+include_patterns = ["eth*", "en*"]
+exclude_names = []
+
+[ui]
+# bananas-dashboard's render target — the BPI's 5" panel is 800x480.
+width = 800
+height = 480
+title = "bananas-dashboard"
+# "auto" picks dark in PM hours / light in AM. "dark" or "light" pin it.
+theme = "auto"
+# Number of historical points kept on the live sparklines.
+spark_window = 60

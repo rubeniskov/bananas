@@ -10,6 +10,7 @@ license.workspace = true
 dioxus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 gloo-net = { workspace = true, features = ["http", "websocket"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
 futures = "0.3"

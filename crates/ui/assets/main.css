@@ -477,6 +477,14 @@ button.btn-icon.warn   { background: var(--warn); }
 button.btn-icon.ok     { background: var(--ok); }
 button.btn-icon.perms  { background: var(--accent); }
 
+/* Placeholder for protected fstab rows where every action is locked. */
+.row-actions-empty {
+  color: #bbb;
+  font-size: 18px;
+  padding: 0 10px;
+  user-select: none;
+}
+
 /* Inline icons in regular text/ghost buttons — sized to text height,
    spaced from the label. */
 button .lucide,

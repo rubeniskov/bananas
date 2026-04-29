@@ -149,13 +149,32 @@ pub async fn get_config(State(state): State<AppState>) -> Response {
     let cmd = Command::ReadServiceConfig { name: "stats".into() };
     match bananas_helper::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse { ok: true, output, .. }) => {
-            Json(json!({ "config": output })).into_response()
+            // Empty output means /etc/bananas/stats.toml doesn't exist
+            // yet (the helper returns "" rather than an error). Fall
+            // back to serializing the daemon's compiled-in defaults so
+            // the UI's modal always has something concrete to show /
+            // edit, instead of a blank textarea that confuses operators
+            // on a fresh image.
+            let body = if output.trim().is_empty() {
+                default_config_toml()
+            } else {
+                output
+            };
+            Json(json!({ "config": body })).into_response()
         }
         Ok(HelperResponse { error, .. }) => err_500(
             error.unwrap_or_else(|| "helper rejected ReadServiceConfig".into()),
         ),
         Err(e) => err_500(format!("helper unreachable: {e}")),
     }
+}
+
+/// Render the bananas-stats default Config to TOML. Used when the
+/// on-disk file is missing / empty so the operator always sees a
+/// populated example in the editor.
+fn default_config_toml() -> String {
+    let cfg = bananas_stats::config::Config::default();
+    toml::to_string_pretty(&cfg).unwrap_or_else(|_| String::new())
 }
 
 #[derive(Debug, Deserialize)]

@@ -12,7 +12,8 @@ inherit systemd
 # Pull the prebuilt binary from serve/bin/ alongside the unit file.
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
 SRC_URI = "file://bananas-stats \
-           file://bananas-stats.service"
+           file://bananas-stats.service \
+           file://stats.toml"
 
 S = "${WORKDIR}"
 
@@ -34,8 +35,17 @@ do_install() {
     install -m 0755 ${WORKDIR}/bananas-stats ${D}${bindir}/bananas-stats
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/bananas-stats.service ${D}${systemd_system_unitdir}/
+    # Default config — operators can edit either by hand or via the web
+    # admin's "Stats config" modal (which round-trips through the
+    # WriteServiceConfig helper command and atomic-replaces this file).
+    install -d ${D}${sysconfdir}/bananas
+    install -m 0644 ${WORKDIR}/stats.toml ${D}${sysconfdir}/bananas/stats.toml
 }
 
 FILES:${PN} += "${bindir}/bananas-stats \
-                ${systemd_system_unitdir}/bananas-stats.service"
+                ${systemd_system_unitdir}/bananas-stats.service \
+                ${sysconfdir}/bananas/stats.toml"
+# Mark the config as a CONFFILE so package-management upgrades don't
+# silently overwrite operator edits.
+CONFFILES:${PN} += "${sysconfdir}/bananas/stats.toml"
 RDEPENDS:${PN} += "bananas-server"
