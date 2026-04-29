@@ -46,25 +46,23 @@ jobs:
     # bumping by semantic-release itself (the bot trailer marks them).
     if: "!contains(github.event.head_commit.message, 'chore(release):')"
     steps:
-      # Yocto needs ≈20 GB working space for build/{tmp,sstate-cache,downloads}
-      # plus pixi's conda cache (~5 GB). Default ubuntu-latest has ~14 GB free
-      # on /. We DON'T pass `build-mount-path` here on purpose: that mode
-      # creates a separate LVM volume only at the workspace, which leaves
-      # pixi's cache in /home/runner/.cache stranded on the still-small root
-      # filesystem (the cause of the prior "no space left on device" failure
-      # at `pixi install`). Without `build-mount-path`, the action frees ~25 GB
-      # in place on /, which both pixi and Yocto see.
+      # Yocto needs ≈20 GB working space + pixi's conda cache (~5 GB), and
+      # default ubuntu-latest only ships ~14 GB free on /. easimon's action
+      # was creating a loop-backed LVM that ATE the very root filesystem
+      # we needed (jumping / from 56→144 GB used, leaving 1 GB free for
+      # pixi's cache). jlumbroso's just deletes the unused .NET / Android /
+      # Haskell / CodeQL trees in place — about 25 GB freed on /, where
+      # both pixi and the bake actually live. No LVM, no symlinks.
       - name: Free disk space for the Yocto bake
-        uses: easimon/maximize-build-space@v10
+        uses: jlumbroso/free-disk-space@main
         with:
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
-          swap-size-mb: 1024
-          root-reserve-mb: 4096
-          temp-reserve-mb: 1024
+          tool-cache: false  # keep nodejs/python/go — we use them
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
 
       - uses: actions/checkout@v4
         with:
