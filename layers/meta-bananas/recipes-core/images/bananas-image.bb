@@ -67,6 +67,7 @@ expire_root_password() {
 # boot via ConditionPathExists=.
 FIRSTBOOT_SCRIPT := "${THISDIR}/files/bananas-firstboot-resize"
 FIRSTBOOT_UNIT   := "${THISDIR}/files/bananas-firstboot-resize.service"
+SWAP_SYSCTL      := "${THISDIR}/files/90-bananas-swap.conf"
 
 ROOTFS_POSTPROCESS_COMMAND += "install_firstboot_resize;"
 
@@ -83,6 +84,12 @@ install_firstboot_resize() {
     install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants
     ln -sf /lib/systemd/system/bananas-firstboot-resize.service \
         ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/bananas-firstboot-resize.service
+    # vm.swappiness=10 drop-in. The firstboot-resize script carves a
+    # RAM-sized swap partition (capped at 1 GiB) on the SD tail; this
+    # sysctl keeps it cold on the NAS workload so flash-wear stays low.
+    install -d -m 0755 ${IMAGE_ROOTFS}/etc/sysctl.d
+    install -m 0644 ${SWAP_SYSCTL} \
+        ${IMAGE_ROOTFS}/etc/sysctl.d/90-bananas-swap.conf
 }
 
 # Wire up nfs-server.service so the daemon is ready the moment the
@@ -130,6 +137,11 @@ IMAGE_INSTALL += " \
     gptfdisk \
     dosfstools \
     util-linux \
+    util-linux-blkid \
+    util-linux-mkswap \
+    util-linux-swaponoff \
+    util-linux-partx \
+    procps \
     rsync \
     curl \
     wget \
