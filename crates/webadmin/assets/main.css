@@ -169,7 +169,7 @@ nav.app-nav .user-menu-trigger[aria-expanded="true"] .user-menu-chevron {
 .user-menu-item .lucide { width: 16px; height: 16px; flex-shrink: 0; }
 .user-menu-item.danger { color: var(--danger); }
 .user-menu-item.danger:hover:not(:disabled) {
-  background: rgba(220, 38, 38, 0.08);
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg));
   color: var(--danger);
 }
 .user-menu-sep {
@@ -809,18 +809,30 @@ code {
 }
 
 .badges { display: flex; flex-wrap: wrap; gap: 4px; }
+/* Badges follow the same color-mix recipe as banners: tint the
+ * theme-aware --bg with the role color at 14%, keep the role color
+ * itself for the text. Reads cleanly in both light and dark. */
 .badge {
   font: 11px/1.4 ui-monospace, monospace;
-  background: #eef;
-  color: #225;
+  background: var(--accent-soft);
+  color: var(--accent);
   padding: 2px 6px;
   border-radius: 3px;
 }
-.badge.ro { background: #fee; color: #722; }
-.badge.rw { background: #efe; color: #272; }
-.badge.warn { background: #ffe; color: var(--warn); }
+.badge.ro {
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg));
+  color: var(--danger);
+}
+.badge.rw {
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg));
+  color: var(--ok);
+}
+.badge.warn {
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg));
+  color: var(--warn);
+}
 .badge.sys {
-  background: #f0f0f4;
+  background: var(--bg-soft);
   color: var(--text-soft);
   display: inline-flex;
   align-items: center;
@@ -836,7 +848,7 @@ td.source-cell {
   gap: 8px;
 }
 tr.row-protected td { color: var(--text-soft); background: var(--bg-soft); }
-tr.row-protected td code { color: #444; }
+tr.row-protected td code { color: var(--text-soft); }
 .protected-hint {
   display: inline-flex;
   align-items: center;
@@ -867,7 +879,10 @@ button.del {
   color: var(--danger);
   border-color: transparent;
 }
-button.del:hover { background: #fee; border-color: #fbb; }
+button.del:hover {
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg));
+  border-color: var(--danger);
+}
 button.ghost { border-color: transparent; color: var(--accent); }
 
 form.add {
@@ -1066,10 +1081,25 @@ textarea {
   padding: 10px 14px;
   margin-bottom: 1em;
   border-radius: 4px;
+  color: var(--text);
 }
-.banner.err { background: #ffeef0; border: 1px solid var(--danger); }
-.banner.ok  { background: #e7f8ed; border: 1px solid var(--ok); }
-.banner pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+/* Tinted backgrounds use color-mix on --bg so the same rule reads
+ * correctly in light AND dark — a pastel pink baked in here is
+ * unreadable on a near-black surface. The 12% mix is enough tint to
+ * be obvious, low enough to keep --text readable on top. */
+.banner.err {
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+  border: 1px solid var(--danger);
+}
+.banner.ok {
+  background: color-mix(in srgb, var(--ok) 12%, var(--bg));
+  border: 1px solid var(--ok);
+}
+.banner.warn {
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg));
+  border: 1px solid var(--warn);
+}
+.banner pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--text); }
 
 .preview-label { font-size: 12px; color: var(--text-soft); margin-bottom: 4px; }
 
