@@ -102,6 +102,14 @@ pub struct Ui {
     pub title: String,
     pub theme: String,
     pub spark_window: usize,
+    /// Minimum interval between UI repaints in milliseconds. The
+    /// sampler still ticks at `sampling.interval_ms` (so historical
+    /// data keeps its 1 Hz resolution), but the dashboard only pushes
+    /// the latest snapshot to Slint at this cadence. Default 2000 ms
+    /// — the BPI's Mali-400 + lima + femtovg stack is CPU-heavy
+    /// enough that a 1 Hz repaint kept one core saturated. The eye
+    /// can't read changes faster than ~2 s on a small LCD anyway.
+    pub refresh_ms: u64,
 }
 
 impl Default for Ui {
@@ -116,6 +124,7 @@ impl Default for Ui {
             // the theme. Press `t` at runtime to override either way.
             theme: "auto".into(),
             spark_window: 60,
+            refresh_ms: 2000,
         }
     }
 }

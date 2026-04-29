@@ -77,7 +77,31 @@ tracing-wasm = "0.2"
 console_error_panic_hook = "0.1"
 
 [profile.release]
-opt-level = "s"
-lto = true
+# Tuned for runtime speed — most of what we ship runs natively on the
+# BPI's Cortex-A7 (server, helper, stats, dashboard) where every cycle
+# matters. The wasm UI overrides this back to size optimisation below
+# so the bundle stays small over HTTP. Per-package bumps (slint,
+# femtovg, image rasterisation) keep the dashboard render-path hot.
+opt-level = 3
+lto = "fat"
 codegen-units = 1
+panic = "abort"
 strip = true
+debug = false
+incremental = false
+
+# Wasm: optimise for size since the bundle is shipped over HTTP and
+# `dx bundle --release` runs wasm-opt -Oz on top of cargo's output.
+[profile.release.package.bananas-ui]
+opt-level = "s"
+
+# Force the heavy render path inside the dashboard to opt-3 even when
+# a downstream consumer is opt="s" — Slint and femtovg's hot inner
+# loops (path tessellation, font rasterisation) are the bottleneck on
+# the BPI's Mali-400.
+[profile.release.package.slint]
+opt-level = 3
+[profile.release.package.i-slint-renderer-femtovg]
+opt-level = 3
+[profile.release.package.femtovg]
+opt-level = 3

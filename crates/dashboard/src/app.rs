@@ -142,6 +142,7 @@ pub fn launch(
 
     let weak = main.as_weak();
     let spark_window = cfg.spark_window;
+    let refresh = std::time::Duration::from_millis(cfg.refresh_ms.max(250));
 
     // Borrow the *current* tokio runtime — `main.rs` enters a multi-thread
     // runtime before calling us, so `Handle::current` works.
@@ -151,6 +152,14 @@ pub fn launch(
         let mut net_tx = History::new(spark_window);
         let mut disk_r = History::new(spark_window);
         let mut disk_w = History::new(spark_window);
+        // Track when we last pushed to Slint so we can skip
+        // repaints when snapshots arrive faster than the configured
+        // refresh rate. The sparkline history is still updated every
+        // tick so the Slint side gets the full window when it does
+        // repaint — no data loss from throttling, just fewer redraws.
+        let mut last_paint = std::time::Instant::now()
+            .checked_sub(refresh)
+            .unwrap_or_else(std::time::Instant::now);
 
         loop {
             if rx.changed().await.is_err() {
@@ -158,13 +167,6 @@ pub fn launch(
                 break;
             }
             let snap = rx.borrow_and_update().clone();
-            tracing::debug!(
-                ts = snap.ts_unix,
-                ifaces = snap.network.len(),
-                disks = snap.disks.len(),
-                parts = snap.parts.len(),
-                "ui pump tick"
-            );
 
             for n in &snap.network {
                 net_rx.push(&n.name, n.rx_bps);
@@ -174,6 +176,19 @@ pub fn launch(
                 disk_r.push(&d.device, d.read_bps);
                 disk_w.push(&d.device, d.write_bps);
             }
+
+            if last_paint.elapsed() < refresh {
+                continue;
+            }
+            last_paint = std::time::Instant::now();
+
+            tracing::debug!(
+                ts = snap.ts_unix,
+                ifaces = snap.network.len(),
+                disks = snap.disks.len(),
+                parts = snap.parts.len(),
+                "ui pump tick (paint)"
+            );
 
             let net_keys: Vec<String> = snap.network.iter().map(|n| n.name.clone()).collect();
             let disk_keys: Vec<String> = snap.disks.iter().map(|d| d.device.clone()).collect();
