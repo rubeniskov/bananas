@@ -1213,7 +1213,17 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
         }
         other => anyhow::bail!("unknown direction {other:?}"),
     }
-    cmd.args(["--stats=2s", "--stats-one-line"]);
+    // `--stats-log-level=NOTICE` is load-bearing: rclone defaults its
+    // overall log level to NOTICE, but the stats output level defaults
+    // to INFO — which is BELOW NOTICE and therefore silently dropped
+    // before it reaches stderr. Without this flag the helper sees no
+    // "Transferred: …%" lines at all and the UI's circular progress
+    // bar stays indeterminate forever.
+    cmd.args([
+        "--stats=2s",
+        "--stats-one-line",
+        "--stats-log-level=NOTICE",
+    ]);
 
     let _ = entry.schedule; // honored by an external timer, not here
 
