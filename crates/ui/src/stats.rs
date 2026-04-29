@@ -214,16 +214,16 @@ fn LiveTiles(props: LiveTilesProps) -> Element {
         .find(|t| t.sensor.starts_with("cpu") || t.sensor.contains("thermal"))
         .map(|t| t.celsius);
 
-    // CPU tile: clock as the prominent headline, "% busy" as the
-    // small secondary line. Falls back to "% busy" headline on dev
-    // hosts where cpufreq isn't available.
-    let (cpu_headline, cpu_sub) = match s.cpu.current_mhz {
-        Some(mhz) if mhz >= 1000 => (
-            format!("{:.2} GHz", mhz as f32 / 1000.0),
-            format!("{cpu_pct:.0}% busy"),
-        ),
-        Some(mhz) => (format!("{mhz} MHz"), format!("{cpu_pct:.0}% busy")),
-        None => (format!("{cpu_pct:.0}%"), "busy".to_string()),
+    // CPU tile: load% headline (the meaningful health signal), with
+    // current clock as small secondary text when cpufreq exposes it.
+    // Earlier this was reversed (MHz prominent, % small) but the
+    // governor on the BPI scales down to 144 MHz when idle, making
+    // the headline read "144 MHz" most of the time — useful info,
+    // but worse at-a-glance signal than load%.
+    let cpu_sub = match s.cpu.current_mhz {
+        Some(mhz) if mhz >= 1000 => format!("{:.2} GHz", mhz as f32 / 1000.0),
+        Some(mhz) => format!("{mhz} MHz"),
+        None => "load".to_string(),
     };
     rsx! {
         div { class: "live-tiles",
@@ -231,7 +231,6 @@ fn LiveTiles(props: LiveTilesProps) -> Element {
                 label: "CPU",
                 pct: cpu_pct,
                 detail: cpu_sub,
-                headline: Some(cpu_headline),
                 temp_c: cpu_temp,
             }
             Gauge {
