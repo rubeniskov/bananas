@@ -79,6 +79,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             chrpath cpio diffstat file rpcsvc-proto zstd
 
+      # Ubuntu 24.04 (the new ubuntu-latest as of 2025) ships with
+      # AppArmor restricting unprivileged user namespaces by default,
+      # which BitBake needs for `pseudo`'s fakeroot. Without this:
+      #   ERROR: User namespaces are not usable by BitBake, possibly due to AppArmor.
+      # See: https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890#unprivileged-user-namespace-restrictions
+      - name: Allow unprivileged user namespaces (BitBake requirement on Ubuntu 24.04)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Install pixi
         uses: prefix-dev/setup-pixi@v0.8.1
         with:
