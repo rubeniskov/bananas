@@ -191,6 +191,10 @@ jobs:
           node-version: 20
 
       - name: Install semantic-release + plugins
+        # conventional-changelog-conventionalcommits is a peer dep
+        # requested by both commit-analyzer's `preset: "conventionalcommits"`
+        # and release-notes-generator's `preset: "conventionalcommits"`.
+        # Without it, analyzeCommits fails with MODULE_NOT_FOUND.
         run: |
           npm install -g \
             semantic-release@22 \
@@ -198,7 +202,8 @@ jobs:
             @semantic-release/git@10 \
             @semantic-release/github@9 \
             @semantic-release/commit-analyzer@11 \
-            @semantic-release/release-notes-generator@12
+            @semantic-release/release-notes-generator@12 \
+            conventional-changelog-conventionalcommits@7
 
       - name: semantic-release
         env:
