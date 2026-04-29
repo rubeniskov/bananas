@@ -98,6 +98,14 @@ pub enum Command {
         #[serde(default)]
         recursive: bool,
     },
+    /// Read the on-disk TOML for a known service config (allowlisted by
+    /// `name` — see `service_config_path` in the helper). Reply.output
+    /// is the raw TOML text. Used by the UI's stats-config modal.
+    ReadServiceConfig { name: String },
+    /// Atomically replace the service's config file with `content`,
+    /// then `systemctl restart <unit>` so the new config takes effect.
+    /// `name` is allowlisted, same as ReadServiceConfig.
+    WriteServiceConfig { name: String, content: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

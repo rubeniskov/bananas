@@ -465,6 +465,7 @@ dependencies = [
  "serde_json",
  "sha-crypt",
  "tokio",
+ "toml 1.1.2+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
 ]

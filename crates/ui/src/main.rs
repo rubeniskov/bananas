@@ -9,6 +9,7 @@ use dioxus::prelude::*;
 
 mod api;
 mod browse;
+mod components;
 mod exports;
 mod icons;
 mod login;
@@ -16,6 +17,7 @@ mod mounts;
 mod nfs_help;
 mod permissions;
 mod stats;
+mod stats_config;
 mod storage;
 mod tooltip;
 mod users;

@@ -7,7 +7,7 @@
 use dioxus::prelude::*;
 use web_sys::window;
 
-use crate::{AuthCtx, api, api::ApiError, browse::Browser, icons::Icon, permissions::PermissionsModal};
+use crate::{AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon, permissions::PermissionsModal};
 
 #[derive(Clone, PartialEq)]
 enum FormMode {
@@ -25,6 +25,9 @@ pub fn MountsSection() -> Element {
     let mut form_mode: Signal<Option<FormMode>> = use_signal(|| None);
     // Mountpoint the per-row Permissions modal is editing. None = closed.
     let mut perms_for: Signal<Option<String>> = use_signal(|| None);
+    // Hide system mounts (/, /proc, /sys, …) from the table by default —
+    // they're never editable through the UI and just clutter the view.
+    let mut show_protected = use_signal(|| false);
 
     use_effect(move || {
         let _ = tick();
@@ -44,6 +47,15 @@ pub fn MountsSection() -> Element {
     rsx! {
         div { class: "section-header",
             h2 { "Mount points" }
+            label { class: "muted-toggle",
+                "data-tip": "Show /proc, /sys, /, etc. — read-only, included for visibility.",
+                input {
+                    r#type: "checkbox",
+                    checked: show_protected(),
+                    onchange: move |e| show_protected.set(e.checked())
+                }
+                " Show protected mounts"
+            }
             span { class: "spacer" }
             button {
                 class: "ghost",
@@ -68,46 +80,56 @@ pub fn MountsSection() -> Element {
             div { class: "banner {kind.css()}", pre { "{msg}" } }
         }
 
-        if rows.read().is_empty() {
-            p { class: "empty", "No fstab entries — click 'Add mount' to create one." }
-        } else {
-            table { class: "rows",
-                thead {
-                    tr {
-                        th { "Source" }
-                        th { "Mountpoint" }
-                        th { "Type" }
-                        th { "Options" }
-                        th { "Dump" }
-                        th { "Pass" }
-                        th {}
-                    }
-                }
-                tbody {
-                    for r in rows.read().iter() {
-                        FstabRowView {
-                            key: "{r.idx}",
-                            row: r.clone(),
-                            on_edit: {
-                                let row = r.clone();
-                                move |_| form_mode.set(Some(FormMode::Edit(row.clone())))
-                            },
-                            on_perms: {
-                                let mp = r.mountpoint.clone();
-                                move |_| perms_for.set(Some(mp.clone()))
-                            },
-                            on_delete: move |idx| {
-                                if !confirm("Remove this fstab entry? Existing mount will stay until reboot.") { return; }
-                                spawn(async move {
-                                    match api::delete_fstab(idx).await {
-                                        Ok(()) => {
-                                            banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
-                                            tick.set(tick() + 1);
-                                        }
-                                        Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                        Err(e) => banner.set(Some((BannerKind::Err, format!("Delete failed: {e}")))),
+        {
+            let visible: Vec<api::FstabRow> = rows
+                .read()
+                .iter()
+                .filter(|r| show_protected() || !r.protected)
+                .cloned()
+                .collect();
+            if visible.is_empty() {
+                rsx! { p { class: "empty", "No fstab entries — click 'Add mount' to create one." } }
+            } else {
+                rsx! {
+                    table { class: "rows",
+                        thead {
+                            tr {
+                                th { "Source" }
+                                th { "Mountpoint" }
+                                th { "Type" }
+                                th { "Options" }
+                                th { "Dump" }
+                                th { "Pass" }
+                                th {}
+                            }
+                        }
+                        tbody {
+                            for r in visible.iter() {
+                                FstabRowView {
+                                    key: "{r.idx}",
+                                    row: r.clone(),
+                                    on_edit: {
+                                        let row = r.clone();
+                                        move |_| form_mode.set(Some(FormMode::Edit(row.clone())))
+                                    },
+                                    on_perms: {
+                                        let mp = r.mountpoint.clone();
+                                        move |_| perms_for.set(Some(mp.clone()))
+                                    },
+                                    on_delete: move |idx| {
+                                        if !confirm("Remove this fstab entry? Existing mount will stay until reboot.") { return; }
+                                        spawn(async move {
+                                            match api::delete_fstab(idx).await {
+                                                Ok(()) => {
+                                                    banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
+                                                    tick.set(tick() + 1);
+                                                }
+                                                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                                                Err(e) => banner.set(Some((BannerKind::Err, format!("Delete failed: {e}")))),
+                                            }
+                                        });
                                     }
-                                });
+                                }
                             }
                         }
                     }
@@ -117,7 +139,7 @@ pub fn MountsSection() -> Element {
 
         h3 { "/etc/fstab preview" }
         p { class: "preview-label", "Read-only — column-aligned exactly as written to disk." }
-        textarea { readonly: true, disabled: true, "{preview()}" }
+        TextareaWithCopy { value: preview(), id: "fstab-preview" }
 
         if let Some(mode) = form_mode() {
             FstabFormModal {
@@ -187,14 +209,10 @@ fn FstabRowView(props: FstabRowViewProps) -> Element {
             td { code { "{r.dump}" } }
             td { code { "{r.pass}" } }
             td { class: "row-actions",
-                if r.protected {
-                    button {
-                        class: "btn-icon perms",
-                        "data-tip": "Edit owner / group / mode for this mountpoint. Fstab row itself is locked.",
-                        onclick: move |_| props.on_perms.call(()),
-                        Icon { name: "lock" }
-                    }
-                } else {
+                // Protected (system) mounts get no actions at all — the
+                // server refuses edit/delete and we don't expose chmod
+                // on /, /proc, /sys, … through the UI either.
+                if !r.protected {
                     button {
                         class: "btn-icon edit",
                         "data-tip": "Edit this fstab entry",

@@ -126,6 +126,7 @@ async fn main() -> Result<()> {
         .route("/stats/range", get(stats::range))
         .route("/stats/series", get(stats::series))
         .route("/stats/live", get(stats_ws::live))
+        .route("/stats/config", get(stats::get_config).put(stats::put_config))
         .route("/fstab", get(get_fstab).post(post_fstab))
         .route("/fstab/{idx}", delete(delete_fstab).put(put_fstab))
         .route("/users", get(users::list).post(users::create))

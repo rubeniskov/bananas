@@ -152,6 +152,16 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
                 Err(e) => Response::err(e.to_string(), String::new()),
             }
         }
+        Command::ReadServiceConfig { name } => match read_service_config(&name).await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::WriteServiceConfig { name, content } => {
+            match write_service_config(&name, &content).await {
+                Ok(out) => Response::ok(out),
+                Err(e) => Response::err(e.to_string(), String::new()),
+            }
+        }
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames
@@ -903,4 +913,71 @@ async fn exportfs_reload() -> Result<String> {
         anyhow::bail!("exportfs failed (status {}): {combined}", out.status);
     }
     Ok(combined)
+}
+
+/// Allowlist mapping a logical service name to (config-path, systemd-unit).
+/// Adding a new entry here is the only way to expose another file to the
+/// UI's edit-config modal — the path/unit are NEVER taken from the
+/// request, so a malicious server can't ask the helper to write
+/// /etc/passwd or restart sshd.
+fn service_config_target(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "stats" => Some(("/etc/bananas/stats.toml", "bananas-stats.service")),
+        _ => None,
+    }
+}
+
+async fn read_service_config(name: &str) -> Result<String> {
+    let (path, _unit) = service_config_target(name)
+        .ok_or_else(|| anyhow::anyhow!("unknown service config {name:?}"))?;
+    match tokio::fs::read_to_string(path).await {
+        Ok(s) => Ok(s),
+        // Missing file is not an error — return empty so the UI can show
+        // a fresh editor instead of a banner.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e).context(format!("reading {path}")),
+    }
+}
+
+async fn write_service_config(name: &str, content: &str) -> Result<String> {
+    let (path, unit) = service_config_target(name)
+        .ok_or_else(|| anyhow::anyhow!("unknown service config {name:?}"))?;
+    // Validate as TOML before touching the disk — invalid syntax would
+    // crash the service on next start.
+    toml::from_str::<toml::Value>(content)
+        .with_context(|| format!("invalid TOML for {name}"))?;
+    // Ensure parent dir exists (e.g. /etc/bananas/ on a fresh install).
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    // Atomic replace: write to a sibling temp file, fsync, rename.
+    let tmp = format!("{path}.tmp");
+    tokio::fs::write(&tmp, content)
+        .await
+        .with_context(|| format!("writing {tmp}"))?;
+    tokio::fs::rename(&tmp, path)
+        .await
+        .with_context(|| format!("renaming {tmp} -> {path}"))?;
+    let out = TokioCommand::new("systemctl")
+        .arg("restart")
+        .arg(unit)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .context("spawning systemctl restart")?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        anyhow::bail!(
+            "systemctl restart {unit} failed (status {}): {combined}",
+            out.status
+        );
+    }
+    Ok(format!("Saved {path}; restarted {unit}.\n{combined}"))
 }

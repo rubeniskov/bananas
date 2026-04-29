@@ -794,6 +794,17 @@ textarea {
   resize: vertical;
   box-sizing: border-box;
 }
+.textarea-wrap { position: relative; }
+.textarea-wrap button.textarea-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 12px;
+  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .banner {
   padding: 10px 14px;

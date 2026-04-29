@@ -7,7 +7,7 @@
 
 use dioxus::prelude::*;
 
-use crate::{AuthCtx, api, api::ApiError, browse::Browser, icons::Icon, nfs_help, permissions::PermissionsModal};
+use crate::{AuthCtx, api, api::ApiError, browse::Browser, components::TextareaWithCopy, icons::Icon, nfs_help, permissions::PermissionsModal};
 
 /// What the form modal is currently doing — None means closed; Some
 /// carries either an existing row (edit) or a placeholder for create.
@@ -113,7 +113,7 @@ pub fn ExportsPage() -> Element {
 
         h3 { "/etc/exports preview" }
         p { class: "preview-label", "Read-only — column-aligned exactly as written to disk." }
-        textarea { readonly: true, disabled: true, "{preview()}" }
+        TextareaWithCopy { value: preview(), id: "exports-preview" }
 
         if let Some(mode) = form_mode() {
             ExportFormModal {
