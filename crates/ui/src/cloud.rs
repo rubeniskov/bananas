@@ -33,7 +33,7 @@ pub fn CloudPage() -> Element {
     let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
     let mut tick = use_signal(|| 0u32);
     let mut runs_tick = use_signal(|| 0u32);
-    let mut add_account_open = use_signal(|| false);
+    let mut account_form: Signal<Option<AccountFormMode>> = use_signal(|| None);
     let mut sync_form: Signal<Option<SyncFormMode>> = use_signal(|| None);
 
     use_effect(move || {
@@ -102,7 +102,7 @@ pub fn CloudPage() -> Element {
             button {
                 class: "primary",
                 "data-tip": "Add a new cloud account. You'll need an rclone-authorize token for the chosen provider.",
-                onclick: move |_| add_account_open.set(true),
+                onclick: move |_| account_form.set(Some(AccountFormMode::Create)),
                 Icon { name: "plus" }
                 "Add account"
             }
@@ -124,6 +124,10 @@ pub fn CloudPage() -> Element {
                         AccountRow {
                             key: "{a.name}",
                             account: a.clone(),
+                            on_edit: {
+                                let entry = a.clone();
+                                move |_| account_form.set(Some(AccountFormMode::Edit(entry.clone())))
+                            },
                             on_delete: {
                                 let name = a.name.clone();
                                 move |_| {
@@ -286,13 +290,14 @@ pub fn CloudPage() -> Element {
             }
         }
 
-        if add_account_open() {
-            AddAccountModal {
+        if let Some(mode) = account_form() {
+            AccountFormModal {
+                mode: mode,
                 providers: providers.read().clone(),
-                on_close: move |_| add_account_open.set(false),
-                on_saved: move |_| {
-                    add_account_open.set(false);
-                    banner.set(Some((BannerKind::Ok, "Account added.".into())));
+                on_close: move |_| account_form.set(None),
+                on_saved: move |verb: &'static str| {
+                    account_form.set(None);
+                    banner.set(Some((BannerKind::Ok, format!("Account {verb}."))));
                     tick.set(tick() + 1);
                 },
                 on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
@@ -336,6 +341,7 @@ impl BannerKind {
 #[derive(Props, Clone, PartialEq)]
 struct AccountRowProps {
     account: api::CloudAccount,
+    on_edit: EventHandler<()>,
     on_delete: EventHandler<()>,
 }
 
@@ -358,6 +364,12 @@ fn AccountRow(props: AccountRowProps) -> Element {
             td { code { "{a.provider}" } }
             td { span { class: "{token_class}", "{token_text}" } }
             td { class: "row-actions",
+                button {
+                    class: "btn-icon edit",
+                    "data-tip": "Edit this account (rotate token, change provider).",
+                    onclick: move |_| props.on_edit.call(()),
+                    Icon { name: "pencil" }
+                }
                 button {
                     class: "btn-icon delete",
                     "data-tip": "Remove this account (and any sync entries pointing at it).",
@@ -500,55 +512,117 @@ fn format_unix_short(ts: i64) -> String {
 // contains both braces and escaped quotes that the macro can't handle.
 const TOKEN_PLACEHOLDER: &str = "{\"access_token\":\"…\",\"refresh_token\":\"…\",…}";
 
-// ---------------------------------------------------------------- Add Account modal
+// ---------------------------------------------------------------- Account form modal
+
+/// Drives the AccountFormModal. `Create` ⇒ all fields editable; `Edit`
+/// pre-fills name+provider, locks the name (it's the rclone remote
+/// identifier — renaming would orphan every sync entry pointing at it),
+/// and treats an empty token as "leave the existing token alone".
+#[derive(Clone, PartialEq)]
+enum AccountFormMode {
+    Create,
+    Edit(api::CloudAccount),
+}
 
 #[derive(Props, Clone, PartialEq)]
-struct AddAccountModalProps {
+struct AccountFormModalProps {
+    mode: AccountFormMode,
     providers: Vec<api::CloudProvider>,
     on_close: EventHandler<()>,
-    on_saved: EventHandler<()>,
+    on_saved: EventHandler<&'static str>,
     on_error: EventHandler<String>,
     on_unauthorized: EventHandler<()>,
 }
 
 #[component]
-fn AddAccountModal(props: AddAccountModalProps) -> Element {
-    let mut name = use_signal(String::new);
-    let initial_provider = props
-        .providers
-        .first()
-        .map(|p| p.key.clone())
-        .unwrap_or_default();
+fn AccountFormModal(props: AccountFormModalProps) -> Element {
+    let editing: Option<api::CloudAccount> = match &props.mode {
+        AccountFormMode::Edit(a) => Some(a.clone()),
+        AccountFormMode::Create => None,
+    };
+    let initial_provider: String = match &editing {
+        Some(a) => a.provider.clone(),
+        None => props
+            .providers
+            .first()
+            .map(|p| p.key.clone())
+            .unwrap_or_default(),
+    };
+    let initial_name: String = editing.as_ref().map(|a| a.name.clone()).unwrap_or_default();
+
+    let mut name = use_signal(|| initial_name.clone());
     let mut provider = use_signal(|| initial_provider);
     let mut token = use_signal(String::new);
     let mut busy = use_signal(|| false);
 
+    let is_edit = editing.is_some();
+    let title: &'static str = if is_edit {
+        "Edit cloud account"
+    } else {
+        "Add cloud account"
+    };
+    let submit_label: &'static str = if is_edit {
+        "Save changes"
+    } else {
+        "Add account"
+    };
+    let busy_label: &'static str = if is_edit { "Saving…" } else { "Adding…" };
+
+    let editing_for_submit = editing.clone();
     let mut submit = move |_| {
         if busy() {
             return;
         }
-        if name().trim().is_empty() {
-            props.on_error.call("Name is required.".into());
-            return;
-        }
-        busy.set(true);
-        let body = api::AddCloudAccount {
-            name: name(),
-            provider: provider(),
-            token: token(),
-        };
         let on_saved = props.on_saved.clone();
         let on_error = props.on_error.clone();
         let on_unauthorized = props.on_unauthorized.clone();
-        spawn(async move {
-            let r = api::add_cloud_account(&body).await;
-            busy.set(false);
-            match r {
-                Ok(()) => on_saved.call(()),
-                Err(ApiError::Unauthorized) => on_unauthorized.call(()),
-                Err(e) => on_error.call(e.to_string()),
+        match editing_for_submit.clone() {
+            None => {
+                if name().trim().is_empty() {
+                    props.on_error.call("Name is required.".into());
+                    return;
+                }
+                busy.set(true);
+                let body = api::AddCloudAccount {
+                    name: name(),
+                    provider: provider(),
+                    token: token(),
+                };
+                spawn(async move {
+                    let r = api::add_cloud_account(&body).await;
+                    busy.set(false);
+                    match r {
+                        Ok(()) => on_saved.call("added"),
+                        Err(ApiError::Unauthorized) => on_unauthorized.call(()),
+                        Err(e) => on_error.call(e.to_string()),
+                    }
+                });
             }
-        });
+            Some(a) => {
+                busy.set(true);
+                let body = api::UpdateCloudAccount {
+                    provider: provider(),
+                    token: token(),
+                };
+                let nm = a.name.clone();
+                spawn(async move {
+                    let r = api::update_cloud_account(&nm, &body).await;
+                    busy.set(false);
+                    match r {
+                        Ok(()) => on_saved.call("updated"),
+                        Err(ApiError::Unauthorized) => on_unauthorized.call(()),
+                        Err(e) => on_error.call(e.to_string()),
+                    }
+                });
+            }
+        }
+    };
+
+    let name_locked = is_edit;
+    let token_hint: &'static str = if is_edit {
+        "Paste a fresh rclone-authorize blob to rotate the credential, or leave empty to keep the current token."
+    } else {
+        "rclone opens an OAuth flow and prints a JSON blob — paste it here. Leave empty to add the account now and connect later."
     };
 
     rsx! {
@@ -559,7 +633,7 @@ fn AddAccountModal(props: AddAccountModalProps) -> Element {
                 onsubmit: move |e| { e.prevent_default(); submit(()); },
 
                 div { class: "modal-header",
-                    h3 { "Add cloud account" }
+                    h3 { "{title}" }
                     button { class: "ghost", r#type: "button",
                         onclick: move |_| props.on_close.call(()),
                         Icon { name: "x" }
@@ -572,15 +646,21 @@ fn AddAccountModal(props: AddAccountModalProps) -> Element {
                         id: "cloud-name",
                         r#type: "text",
                         autocomplete: "off",
-                        autofocus: true,
+                        autofocus: !name_locked,
                         required: true,
+                        readonly: name_locked,
+                        disabled: name_locked,
                         pattern: "[A-Za-z0-9_-]+",
                         title: "Lowercase / digits / underscore / hyphen, 1–32 chars.",
                         value: "{name()}",
                         oninput: move |e| name.set(e.value())
                     }
                     p { class: "preview-label",
-                        "Used as the rclone remote name. Pick something short like ‘personal’ or ‘work-drive’."
+                        if name_locked {
+                            "The name is the rclone remote identifier — changing it would orphan every sync entry. Delete and re-add to rename."
+                        } else {
+                            "Used as the rclone remote name. Pick something short like ‘personal’ or ‘work-drive’."
+                        }
                     }
 
                     label { r#for: "cloud-provider", "Provider" }
@@ -597,6 +677,7 @@ fn AddAccountModal(props: AddAccountModalProps) -> Element {
                     textarea {
                         id: "cloud-token",
                         spellcheck: false,
+                        autofocus: name_locked,
                         style: "min-height: 120px",
                         placeholder: TOKEN_PLACEHOLDER,
                         value: "{token()}",
@@ -605,7 +686,7 @@ fn AddAccountModal(props: AddAccountModalProps) -> Element {
                     p { class: "preview-label",
                         "On a machine with a browser, run: "
                         code { "rclone authorize \"{provider()}\"" }
-                        ". rclone opens an OAuth flow and prints a JSON blob — paste it here. Leave empty to add the account now and connect later."
+                        ". {token_hint}"
                     }
                 }
 
@@ -615,7 +696,7 @@ fn AddAccountModal(props: AddAccountModalProps) -> Element {
                         "Cancel"
                     }
                     button { class: "primary", r#type: "submit", disabled: busy(),
-                        if busy() { "Adding…" } else { "Add account" }
+                        if busy() { "{busy_label}" } else { "{submit_label}" }
                     }
                 }
             }

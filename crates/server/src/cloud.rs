@@ -228,6 +228,49 @@ pub async fn add_account(
     Json(json!({ "ok": true })).into_response()
 }
 
+/// Update the provider and/or token of an existing account. Renaming an
+/// account is intentionally NOT supported here — `name` is the rclone
+/// remote identifier, and renaming would orphan every sync entry that
+/// references it. Operators who want a different name delete + add.
+///
+/// Empty `token` keeps the existing token (the same redaction the GET
+/// path uses), so an operator who's only swapping provider does not have
+/// to re-paste their auth blob.
+#[derive(Debug, Deserialize)]
+pub struct UpdateAccountReq {
+    pub provider: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+pub async fn update_account(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    Json(req): Json<UpdateAccountReq>,
+) -> Response {
+    if !PROVIDERS.iter().any(|(k, _)| *k == req.provider) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("unknown provider {:?}", req.provider),
+        );
+    }
+    let mut cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let Some(account) = cfg.accounts.iter_mut().find(|a| a.name == name) else {
+        return err(StatusCode::NOT_FOUND, format!("account {name:?} not found"));
+    };
+    account.provider = req.provider;
+    if !req.token.is_empty() {
+        account.token = req.token;
+    }
+    if let Err(e) = save(&state, &cfg).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
 pub async fn delete_account(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,

@@ -156,7 +156,10 @@ async fn main() -> Result<()> {
             "/cloud/accounts",
             get(cloud::list_accounts).post(cloud::add_account),
         )
-        .route("/cloud/accounts/{name}", delete(cloud::delete_account))
+        .route(
+            "/cloud/accounts/{name}",
+            put(cloud::update_account).delete(cloud::delete_account),
+        )
         .route("/cloud/syncs", get(cloud::list_syncs).post(cloud::add_sync))
         .route(
             "/cloud/syncs/{idx}",

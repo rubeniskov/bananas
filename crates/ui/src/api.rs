@@ -1071,6 +1071,25 @@ pub async fn add_cloud_account(req: &AddCloudAccount) -> Result<(), ApiError> {
     helper_status(resp).await
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateCloudAccount {
+    pub provider: String,
+    /// Empty string = keep the existing token (the redacted GET path
+    /// can not surface the real value back, and re-pasting just to
+    /// change the provider would be annoying).
+    pub token: String,
+}
+
+pub async fn update_cloud_account(name: &str, req: &UpdateCloudAccount) -> Result<(), ApiError> {
+    let resp = Request::put(&format!("/api/cloud/accounts/{}", urlencode(name)))
+        .json(req)
+        .map_err(|e| ApiError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    helper_status(resp).await
+}
+
 pub async fn delete_cloud_account(name: &str) -> Result<(), ApiError> {
     let resp = Request::delete(&format!("/api/cloud/accounts/{}", urlencode(name)))
         .send()
