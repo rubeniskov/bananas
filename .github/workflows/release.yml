@@ -139,17 +139,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-yocto-
 
-      # bbfatal in `bananas-image.bb` requires both env vars at build
-      # time. They're embedded in /etc/exports + /etc/shadow respectively.
-      # ROOT_PASSWORD_HASH is a fixed placeholder hash; the image's
-      # `expire_root_password` postprocess sets shadow's lastchg=0 so the
-      # operator is forced to rotate it on first sign-in (PAM enforces it
-      # on console + the web UI's "set new password" form catches it
-      # before granting a session). NFS_EXPORT_NETWORK defaults to a
-      # broad home-LAN range; tighten via the Exports tab post-boot.
+      # NFS_EXPORT_NETWORK is required at build time (bbfatal in
+      # `install_nfs_exports` if empty); ROOT_PASSWORD_HASH is now
+      # optional — the image recipe defaults to the "bananas" placeholder
+      # hash with lastchg=0 so first sign-in forces rotation. We default
+      # NFS_EXPORT_NETWORK to a broad home-LAN range; tighten it via the
+      # Exports tab post-boot.
       - name: Bake Yocto image
         env:
-          ROOT_PASSWORD_HASH: '$6$bananas$bananas'
           NFS_EXPORT_NETWORK: '192.168.0.0/16'
         run: pixi run build
 

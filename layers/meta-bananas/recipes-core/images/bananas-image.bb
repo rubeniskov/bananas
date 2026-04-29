@@ -5,31 +5,35 @@ inherit core-image
 
 IMAGE_FEATURES += "ssh-server-openssh package-management splash"
 
-# Root password (SHA-512 hash). SSH keeps PermitRootLogin = prohibit-password
-# (OpenSSH default), so this password unlocks serial / LCD console only — SSH
-# stays key-only. ROOT_PASSWORD_HASH is required at build time (no default
-# here, no leaked example in the tree); kas.yml's `env:` block reads it from
-# the calling environment. Generate one with:
-#   openssl passwd -6 -salt $(openssl rand -hex 8)
+# Root password (SHA-512 hash) baked into /etc/shadow.
 #
-# Implementation note: extrausers/EXTRA_USERS_PARAMS is avoided here because
-# its eval pass strips '$' chars from SHA-512 hashes. We patch /etc/shadow
-# directly via sed in single-quoted shell, so the hash is bitbake-substituted
-# but never re-evaluated by the shell.
-ROOT_PASSWORD_HASH ??= ""
+# SSH keeps PermitRootLogin = prohibit-password (OpenSSH default), so this
+# password only unlocks the serial console + LCD getty + the web admin's
+# login form; SSH itself stays key-only.
+#
+# `ROOT_PASSWORD_HASH` is now OPTIONAL — when unset, we ship the default
+# placeholder below ("bananas"). The `expire_root_password` postprocess
+# zeroes the lastchg field, so PAM (console) and `bananas-helper`'s
+# `verify_shadow_password` (web UI) both flag the credential as expired
+# on first sign-in and force the operator to rotate it before granting a
+# session. Operators who want the build to embed a specific hash they
+# already trust can still set ROOT_PASSWORD_HASH in `.env`.
+#
+# Implementation note: extrausers/EXTRA_USERS_PARAMS is avoided here
+# because its eval pass strips '$' chars from SHA-512 hashes. We patch
+# /etc/shadow directly via sed in single-quoted shell, so the hash is
+# bitbake-substituted but never re-evaluated by the shell.
+ROOT_PASSWORD_HASH ??= "$6$bananas$wLIzzjPHUgftWxH6Mos.t/90VkyZZoZvOr/hKobl0Mx1plIx6.HBYIFvMpk9SjOCLQrXbRuW8udE70.wACVAi."
 
-# Force do_rootfs to invalidate when ROOT_PASSWORD_HASH changes. Without this,
-# kas-imported env vars (via the kas.yml `env:` block) don't always make it
-# into bitbake's task-signature hash, and a stale cached rootfs gets reused
-# when only .env changed.
+# Force do_rootfs to invalidate when either of these change. Without this,
+# kas-imported env vars (via kas.yml's `env:` block) don't always make it
+# into bitbake's task-signature hash, and a stale cached rootfs gets
+# reused when only .env changed.
 do_rootfs[vardeps] += "ROOT_PASSWORD_HASH NFS_EXPORT_NETWORK"
 
 ROOTFS_POSTPROCESS_COMMAND += "set_root_password;"
 
 set_root_password() {
-    if [ -z "${ROOT_PASSWORD_HASH}" ]; then
-        bbfatal "ROOT_PASSWORD_HASH is required (set it in .env or export before pixi run build)"
-    fi
     sed -i 's%^root:[^:]*:%root:${ROOT_PASSWORD_HASH}:%' ${IMAGE_ROOTFS}/etc/shadow
 }
 

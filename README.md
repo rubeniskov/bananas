@@ -189,10 +189,12 @@ This rebuilds everything, soft-reboots the BPI, and streams the new rootfs back 
 
 ### 5. Web admin
 
-Browse to `http://<bpi-host>:8080/` — sign in as `root` (or any user added to the `bananas-admin` group via the Users tab) with the SHA-512 hash you set via `ROOT_PASSWORD_HASH`.
+Browse to `http://<bpi-host>:8080/` — first sign-in is **root / bananas**, the placeholder password the image ships with. The login form will immediately bounce you into a "Set a new password to continue" screen (PAM does the same on the serial console); that's the rotation mechanism, and the placeholder credential stops working the moment you set a new one. After rotation, add normal admin users from the Users tab and demote root to emergency-use.
+
+If you'd rather have your own hash baked into the image (skipping the placeholder), set `ROOT_PASSWORD_HASH` in `.env`:
 
 ```bash
-# Generate a hash for ROOT_PASSWORD_HASH
+# Generate a hash for ROOT_PASSWORD_HASH (optional)
 openssl passwd -6 -salt $(openssl rand -hex 8)
 ```
 
