@@ -429,67 +429,91 @@ fn count_active_exports(content: &str) -> usize {
 }
 
 async fn ensure_nfs_server_running() -> String {
-    // `systemctl restart` is intentionally avoided here — it would
-    // briefly drop active clients even if the file's only change is a
-    // new row. `is-active` + start-if-not-running is enough; the actual
-    // export-table push happens in `exportfs -rv` afterwards.
+    // We start the bundle of NFS daemons that v3 (and macOS in
+    // particular) needs as a single peer-to-peer set. nfs-server is
+    // the obvious one; nfs-statd is the supplementary lock-state
+    // tracker — without it macOS refuses the mount with
+    // "RPC prog. not avail" before even opening a TCP connection. The
+    // helper used to start only nfs-server, leaving statd inactive
+    // and macOS clients stuck.
+    let mut log = String::new();
+    for unit in ["nfs-server.service", "nfs-statd.service"] {
+        log.push_str(&start_nfs_unit(unit).await);
+        log.push('\n');
+    }
+    log.trim_end().to_string()
+}
+
+/// Idempotent "start this unit unless it's already active". Clears any
+/// stuck `failed` state first so a previous boot's startup error
+/// doesn't permanently lock the unit out.
+async fn start_nfs_unit(unit: &str) -> String {
     let active = TokioCommand::new("systemctl")
-        .args(["is-active", "nfs-server.service"])
+        .args(["is-active", unit])
         .output()
         .await;
-    let already_active = matches!(active, Ok(o) if o.status.success());
-    if already_active {
-        return "nfs-server.service: active".to_string();
+    if matches!(active, Ok(o) if o.status.success()) {
+        return format!("{unit}: active");
     }
-    // Clear any stuck `failed` state (StartLimitBurst etc.) before we
-    // try to start. Best-effort — if the unit is already inactive
-    // rather than failed, this is a harmless no-op.
     let _ = TokioCommand::new("systemctl")
-        .args(["reset-failed", "nfs-server.service"])
+        .args(["reset-failed", unit])
         .output()
         .await;
     let out = TokioCommand::new("systemctl")
-        .args(["start", "nfs-server.service"])
+        .args(["start", unit])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .await;
     match out {
-        Ok(o) if o.status.success() => "nfs-server.service: started".to_string(),
+        Ok(o) if o.status.success() => format!("{unit}: started"),
         Ok(o) => format!(
-            "nfs-server.service: failed to start ({}): {}{}",
+            "{unit}: failed to start ({}): {}{}",
             o.status,
             String::from_utf8_lossy(&o.stdout),
             String::from_utf8_lossy(&o.stderr),
         ),
-        Err(e) => format!("nfs-server.service: spawn error: {e}"),
+        Err(e) => format!("{unit}: spawn error: {e}"),
     }
 }
 
 async fn ensure_nfs_server_stopped() -> String {
+    // Stop both nfs-server and nfs-statd when we drop to zero exports —
+    // statd staying up after the server stopped is harmless but adds
+    // noise to systemctl --failed and "still listening on a port" type
+    // diagnostics, so we tear down the whole pair.
+    let mut log = String::new();
+    for unit in ["nfs-server.service", "nfs-statd.service"] {
+        log.push_str(&stop_nfs_unit(unit).await);
+        log.push('\n');
+    }
+    log.trim_end().to_string()
+}
+
+async fn stop_nfs_unit(unit: &str) -> String {
     let active = TokioCommand::new("systemctl")
-        .args(["is-active", "nfs-server.service"])
+        .args(["is-active", unit])
         .output()
         .await;
     let already_inactive = matches!(active, Ok(o) if !o.status.success());
     if already_inactive {
-        return "nfs-server.service: inactive (no exports)".to_string();
+        return format!("{unit}: inactive");
     }
     let out = TokioCommand::new("systemctl")
-        .args(["stop", "nfs-server.service"])
+        .args(["stop", unit])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .await;
     match out {
-        Ok(o) if o.status.success() => "nfs-server.service: stopped (no exports)".to_string(),
+        Ok(o) if o.status.success() => format!("{unit}: stopped"),
         Ok(o) => format!(
-            "nfs-server.service: failed to stop ({}): {}{}",
+            "{unit}: failed to stop ({}): {}{}",
             o.status,
             String::from_utf8_lossy(&o.stdout),
             String::from_utf8_lossy(&o.stderr),
         ),
-        Err(e) => format!("nfs-server.service: spawn error: {e}"),
+        Err(e) => format!("{unit}: spawn error: {e}"),
     }
 }
 

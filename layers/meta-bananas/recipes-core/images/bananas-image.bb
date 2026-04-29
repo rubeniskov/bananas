@@ -104,6 +104,14 @@ install_nfs_server() {
     # drop-in even with an empty /etc/exports.
     install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/nfs-server.service.d
     cat > ${IMAGE_ROOTFS}/etc/systemd/system/nfs-server.service.d/override.conf <<EOF
+[Unit]
+# Pull nfs-statd in alongside nfs-server. macOS NFS clients refuse the
+# mount with "RPC prog. not avail" if the lock-state daemon (statd, RPC
+# program 100024) isn't registered with rpcbind, even when the client
+# passes nolocks. Wants= keeps it loose: statd-down does not block
+# nfs-server, but starting nfs-server starts statd as a side effect.
+Wants=nfs-statd.service
+
 [Service]
 Environment=NFSD_COUNT=8
 EOF
