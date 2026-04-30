@@ -301,18 +301,26 @@ jobs:
       # the SD-card image bake; we only need to be able to upgrade
       # bananas-* packages here.
       #
-      # opkg-utils (apt) provides opkg-make-index, used to regenerate
-      # the per-arch Packages.gz against the filtered set so opkg
-      # doesn't see references to packages we didn't actually ship.
-      - name: Install opkg-utils (for opkg-make-index)
-        run: sudo apt-get install -y --no-install-recommends opkg-utils
-
       # Whitelist of runtime IPKs we ship through this feed. Variants
       # (-dbg, -dev, -src, -staticdev, -doc, -locale-*) are excluded
       # — operators don't install them, they just inflate the feed.
+      #
+      # opkg-make-index is supplied by Yocto's host toolchain — the
+      # package_ipk class builds opkg-utils-native, which lands at
+      # build/tmp/sysroots-components/x86_64/opkg-utils-native/.
+      # apt's opkg-utils package isn't in Ubuntu 24.04's main repos,
+      # but Yocto's copy is exactly what we need (and version-matched
+      # to the same toolchain that produced the .ipk files).
       - name: Stage feed for gh-pages
         run: |
           set -e
+          OPKG_MAKE_INDEX=$(find build -path '*opkg-utils-native*' -name opkg-make-index -executable 2>/dev/null | head -1)
+          if [ -z "$OPKG_MAKE_INDEX" ]; then
+            echo "::error::opkg-make-index not found in build tree — opkg-utils-native may not have been built"
+            exit 1
+          fi
+          echo "Using $OPKG_MAKE_INDEX"
+
           mkdir -p feed-publish/feed/latest
           PKGS="bananas-server bananas-stats bananas-dashboard bananas-config bananas-webadmin bananas-feed-config bananas-modprobe bananas-rclone"
           for arch in all bananapro cortexa7t2hf-neon; do
@@ -330,7 +338,7 @@ jobs:
               continue
             fi
             # Regenerate the per-arch index against the filtered set.
-            ( cd "$dst" && opkg-make-index . > Packages 2>/dev/null && gzip -fk Packages )
+            ( cd "$dst" && "$OPKG_MAKE_INDEX" . > Packages 2>/dev/null && gzip -fk Packages )
           done
           # Tiny landing page so https://<owner>.github.io/<repo>/ has
           # something to render rather than a 404 — pure documentation,
