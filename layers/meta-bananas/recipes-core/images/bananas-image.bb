@@ -92,6 +92,22 @@ install_firstboot_resize() {
         ${IMAGE_ROOTFS}/etc/sysctl.d/90-bananas-swap.conf
 }
 
+# Wire up chronyd at boot. Yocto's systemctl preset run during rootfs
+# assembly marks the unit `enabled` per the upstream preset file but
+# does NOT write the `WantedBy=multi-user.target` symlink, so chrony
+# never actually starts at boot and the system sits on RTC drift.
+# Same enabled-but-no-symlink bug bites systemd-timesyncd; we don't
+# fix that here because chrony is what IMAGE_INSTALL pulls in (the two
+# are mutually-exclusive NTP impls — running both would conflict).
+# Mirrors the install_nfs_server pattern below.
+ROOTFS_POSTPROCESS_COMMAND += "install_chrony;"
+
+install_chrony() {
+    install -d -m 0755 ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants
+    ln -sf /lib/systemd/system/chronyd.service \
+        ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/chronyd.service
+}
+
 # Wire up nfs-server.service so the daemon is ready the moment the
 # operator adds an export through the web UI — but ship /etc/exports
 # empty. Same story for /etc/fstab: no default mount entries are
