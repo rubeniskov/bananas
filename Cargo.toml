@@ -58,6 +58,10 @@ base64 = "0.22"
 rand = "0.9"
 libc = "0.2"
 toml = "1"
+# In-place update plumbing: extract release tarballs in the helper, verify
+# their sha256 against the SHA256SUMS asset before swap-in.
+flate2 = "1.1"
+tar = "0.4"
 # Stats / dashboard deps
 rusqlite = { version = "0.39", features = ["bundled"] }
 time = { version = "0.3", features = ["serde", "macros", "formatting", "local-offset"] }

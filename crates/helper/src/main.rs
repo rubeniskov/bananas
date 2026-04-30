@@ -10,6 +10,8 @@ use std::{
 use anyhow::{Context, Result};
 use bananas_helper::{Command, Response};
 use serde_json::json;
+
+mod install;
 use tokio::{
     fs,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -226,6 +228,26 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Err(e) => Response::err(e.to_string(), String::new()),
         },
         Command::ListTimezones => match list_timezones().await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::InstallUpdate {
+            component,
+            tarball_path,
+            expected_version,
+            expected_sha256,
+        } => match install::install_update(
+            component,
+            &tarball_path,
+            &expected_version,
+            &expected_sha256,
+        )
+        .await
+        {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::ReadVersions => match install::read_versions() {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },

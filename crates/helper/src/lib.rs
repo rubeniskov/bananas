@@ -13,6 +13,32 @@ use tokio::{
     net::UnixStream,
 };
 
+/// One of the five binary / asset components shipped per release. Used
+/// by `InstallUpdate` to select the install target + the systemd unit
+/// to bounce afterwards. Snake-case wire form matches the GitHub asset
+/// names (`bananas-stats-armv7.tar.gz` → `stats`, etc).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Component {
+    Server,
+    Helper,
+    Stats,
+    Dashboard,
+    Webadmin,
+}
+
+impl Component {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Helper => "helper",
+            Self::Stats => "stats",
+            Self::Dashboard => "dashboard",
+            Self::Webadmin => "webadmin",
+        }
+    }
+}
+
 /// Commands the unprivileged HTTP frontend can ask the root helper to
 /// perform. New variants must be added carefully — each one is a privilege
 /// escalation path. Validate args inside the helper, never trust the
@@ -162,6 +188,32 @@ pub enum Command {
     /// than a hand-maintained subset. Skips the magic top-level files
     /// (Etc/, posix/, right/) that aren't user-facing zones.
     ListTimezones,
+    /// Verify, extract, and atomically swap a per-component release
+    /// tarball into place, then bounce the relevant systemd unit. The
+    /// helper requires `tarball_path` to live under the staging dir
+    /// (`/var/lib/bananas/updates/staging/`), computes the file's
+    /// SHA-256 itself, and bails on any mismatch with `expected_sha256`
+    /// before touching `/usr/bin` or `/usr/share/bananas`. For binary
+    /// components the extracted file's `--version` is also checked
+    /// against `expected_version`. On failure after the swap begins,
+    /// the previous binary is rolled back from `.bak`.
+    ///
+    /// Step 3 wires this for `Stats`, `Dashboard`, and `Webadmin`. The
+    /// `Server` and `Helper` variants reject with "unsupported" until
+    /// the self-update primitive lands (see PrepareHelperUpdate).
+    InstallUpdate {
+        component: Component,
+        tarball_path: String,
+        expected_version: String,
+        expected_sha256: String,
+    },
+    /// Read /etc/bananas/versions.toml and return the raw TOML in
+    /// `output`. Empty string when the file doesn't exist (fresh
+    /// install — every component's "installed version" is unknown
+    /// until the first InstallUpdate). Server uses this as the cache
+    /// for /api/version; falls back to running `<bin> --version`
+    /// when a row is missing.
+    ReadVersions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

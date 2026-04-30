@@ -461,9 +461,13 @@ name = "bananas-helper"
 version = "1.0.1"
 dependencies = [
  "anyhow",
+ "flate2",
  "serde",
  "serde_json",
  "sha-crypt",
+ "sha2",
+ "tar",
+ "tempfile",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
  "tracing",
