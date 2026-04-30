@@ -278,29 +278,45 @@ jobs:
           ls -la dist/
 
       # ─── opkg feed publishing ─────────────────────────────────────
-      # `bitbake package-index` regenerates the per-arch Packages /
-      # Packages.gz index files inside build/tmp/deploy/ipk/ — Yocto
-      # writes the indices alongside the .ipk files but they're not
-      # always refreshed automatically when only some packages change.
-      # Running it explicitly is cheap and guarantees the gh-pages
-      # mirror is internally consistent.
-      - name: Refresh opkg package index
-        run: |
-          eval "$(pixi shell-hook --shell bash)"
-          kas shell kas.yml -c 'bitbake package-index'
+      # Stage ONLY the bananas-* runtime packages for gh-pages. The
+      # deploy/ipk/ tree contains hundreds of base-OS packages
+      # (gcc-dbg @ 333 MB, openssl-ptest @ 193 MB, the entire
+      # toolchain's debug/dev/src variants) that we don't ship via
+      # this feed and that exceed GitHub's 100 MB file limit. The
+      # operators' system already has the right base packages from
+      # the SD-card image bake; we only need to be able to upgrade
+      # bananas-* packages here.
+      #
+      # opkg-utils (apt) provides opkg-make-index, used to regenerate
+      # the per-arch Packages.gz against the filtered set so opkg
+      # doesn't see references to packages we didn't actually ship.
+      - name: Install opkg-utils (for opkg-make-index)
+        run: sudo apt-get install -y --no-install-recommends opkg-utils
 
-      # Stage the IPK tree for gh-pages publication. Mirrors only the
-      # three arch directories we care about (all, bananapro,
-      # cortexa7t2hf-neon) — the deploy/ipk/ root may also contain
-      # work-shared subdirs that we don't want operators to see.
+      # Whitelist of runtime IPKs we ship through this feed. Variants
+      # (-dbg, -dev, -src, -staticdev, -doc, -locale-*) are excluded
+      # — operators don't install them, they just inflate the feed.
       - name: Stage feed for gh-pages
         run: |
           set -e
           mkdir -p feed-publish/feed/latest
+          PKGS="bananas-server bananas-stats bananas-dashboard bananas-config bananas-webadmin bananas-feed-config bananas-modprobe bananas-rclone"
           for arch in all bananapro cortexa7t2hf-neon; do
-            if [ -d "build/tmp/deploy/ipk/$arch" ]; then
-              cp -r "build/tmp/deploy/ipk/$arch" "feed-publish/feed/latest/$arch"
+            src="build/tmp/deploy/ipk/$arch"
+            [ -d "$src" ] || continue
+            dst="feed-publish/feed/latest/$arch"
+            mkdir -p "$dst"
+            for p in $PKGS; do
+              cp "$src/${p}"_*_*.ipk "$dst"/ 2>/dev/null || true
+            done
+            # Drop the dir if no IPKs landed (e.g. cortexa7t2hf-neon
+            # wouldn't carry the `all`-arch ones).
+            if ! ls "$dst"/*.ipk >/dev/null 2>&1; then
+              rmdir "$dst"
+              continue
             fi
+            # Regenerate the per-arch index against the filtered set.
+            ( cd "$dst" && opkg-make-index . > Packages 2>/dev/null && gzip -fk Packages )
           done
           # Tiny landing page so https://<owner>.github.io/<repo>/ has
           # something to render rather than a 404 — pure documentation,
@@ -316,7 +332,7 @@ jobs:
           there is nothing here for a browser to do.</p>
           <p>Repo: <a href="https://github.com/rubeniskov/bananas">rubeniskov/bananas</a></p>
           EOF
-          ls -R feed-publish/feed/latest | head -40
+          ls -R feed-publish/feed/latest
 
       # Push to the gh-pages branch. peaceiris/actions-gh-pages
       # creates the branch if it doesn't exist; first run requires
