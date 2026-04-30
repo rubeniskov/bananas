@@ -4,12 +4,12 @@
 use std::{io::Write, path::Path};
 
 use anyhow::{Context, Result, bail};
-use bananas_helper::Command as HelperCommand;
+use bananas_engine::Command as HelperCommand;
 use serde::Deserialize;
 
 const UNITS: &[&str] = &[
     "bananas-server.service",
-    "bananas-helper.service",
+    "bananas-engine.service",
     "bananas-stats.service",
     "bananas-dashboard.service",
 ];
@@ -27,7 +27,7 @@ pub async fn status(socket: &Path) -> Result<()> {
     let units = unit_states().await;
     for (component, unit) in &[
         ("server", Some("bananas-server.service")),
-        ("helper", Some("bananas-helper.service")),
+        ("helper", Some("bananas-engine.service")),
         ("stats", Some("bananas-stats.service")),
         ("dashboard", Some("bananas-dashboard.service")),
         ("webadmin", None),
@@ -44,7 +44,7 @@ pub async fn status(socket: &Path) -> Result<()> {
 pub async fn timezone(socket: &Path, zone: Option<&str>) -> Result<()> {
     match zone {
         Some(tz) => {
-            let resp = bananas_helper::call(socket, &HelperCommand::SetTimezone { tz: tz.into() })
+            let resp = bananas_engine::call(socket, &HelperCommand::SetTimezone { tz: tz.into() })
                 .await
                 .context("calling helper")?;
             if resp.ok {
@@ -57,7 +57,7 @@ pub async fn timezone(socket: &Path, zone: Option<&str>) -> Result<()> {
         None => {
             // No `GetTimezone` command yet — read /etc/bananas/system.toml
             // through ReadServiceConfig instead.
-            let resp = bananas_helper::call(
+            let resp = bananas_engine::call(
                 socket,
                 &HelperCommand::ReadServiceConfig {
                     name: "system".into(),
@@ -92,7 +92,7 @@ pub async fn reboot(socket: &Path, skip_confirm: bool) -> Result<()> {
             return Ok(());
         }
     }
-    let resp = bananas_helper::call(socket, &HelperCommand::RebootSystem)
+    let resp = bananas_engine::call(socket, &HelperCommand::RebootSystem)
         .await
         .context("calling helper")?;
     if resp.ok {
@@ -105,7 +105,7 @@ pub async fn reboot(socket: &Path, skip_confirm: bool) -> Result<()> {
 
 /// Refresh the opkg feed index and print upgradable bananas-* packages.
 pub async fn update_check(socket: &Path) -> Result<()> {
-    let update_resp = bananas_helper::call(socket, &HelperCommand::OpkgUpdate)
+    let update_resp = bananas_engine::call(socket, &HelperCommand::OpkgUpdate)
         .await
         .context("calling helper for opkg update")?;
     if !update_resp.ok {
@@ -156,7 +156,7 @@ pub async fn update_install(socket: &Path, packages: &[String]) -> Result<()> {
 
     println!("Upgrading: {}", resolved.join(", "));
     println!();
-    let resp = bananas_helper::call(
+    let resp = bananas_engine::call(
         socket,
         &HelperCommand::OpkgUpgrade {
             packages: resolved.clone(),
@@ -195,7 +195,7 @@ struct InstalledPackageRow {
 }
 
 async fn list_upgradable(socket: &Path) -> Result<Vec<UpgradablePackage>> {
-    let resp = bananas_helper::call(socket, &HelperCommand::OpkgListUpgradable)
+    let resp = bananas_engine::call(socket, &HelperCommand::OpkgListUpgradable)
         .await
         .context("calling helper for opkg list-upgradable")?;
     if !resp.ok {
@@ -225,7 +225,7 @@ fn hostname() -> String {
 /// rendering the same shape; "server" and "helper" both resolve to
 /// the bananas-server package.
 pub async fn read_versions(socket: &Path) -> Result<std::collections::HashMap<String, String>> {
-    let resp = bananas_helper::call(socket, &HelperCommand::OpkgListInstalled)
+    let resp = bananas_engine::call(socket, &HelperCommand::OpkgListInstalled)
         .await
         .context("calling helper for opkg list-installed")?;
     if !resp.ok {

@@ -31,7 +31,7 @@ use axum::{
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
 };
-use bananas_helper::{Command as HelperCommand, Response as HelperResponse};
+use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 
@@ -68,7 +68,7 @@ pub async fn get_version(State(state): State<AppState>) -> Json<InstalledVersion
 }
 
 async fn installed_packages(state: &AppState) -> Option<Vec<InstalledPackage>> {
-    let resp = bananas_helper::call(&state.helper_socket, &HelperCommand::OpkgListInstalled)
+    let resp = bananas_engine::call(&state.helper_socket, &HelperCommand::OpkgListInstalled)
         .await
         .ok()?;
     if !resp.ok {
@@ -105,7 +105,7 @@ pub async fn get_updates_check(
         error = Some(format!("opkg update: {e}"));
     }
 
-    let upgradable: Vec<UpgradablePackage> = match bananas_helper::call(
+    let upgradable: Vec<UpgradablePackage> = match bananas_engine::call(
         &state.helper_socket,
         &HelperCommand::OpkgListUpgradable,
     )
@@ -261,7 +261,7 @@ fn close_event(payload: &'static str) -> Result<Event, Infallible> {
 // ─── helpers ────────────────────────────────────────────────────────
 
 async fn run_helper_simple(state: &AppState, cmd: HelperCommand) -> anyhow::Result<String> {
-    let resp = bananas_helper::call(&state.helper_socket, &cmd).await?;
+    let resp = bananas_engine::call(&state.helper_socket, &cmd).await?;
     if !resp.ok {
         anyhow::bail!(resp.error.unwrap_or_else(|| "helper rejected".into()));
     }

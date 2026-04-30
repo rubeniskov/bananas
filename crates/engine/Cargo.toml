@@ -1,5 +1,5 @@
 [package]
-name = "bananas-helper"
+name = "bananas-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [[bin]]
-name = "bananas-helper"
+name = "bananas-engine"
 path = "src/main.rs"
 
 [dependencies]

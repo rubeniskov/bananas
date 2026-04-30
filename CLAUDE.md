@@ -59,11 +59,11 @@ The NFS export path `/nfsshare` is the path *inside* the container — not on th
 
 The repo's a Cargo workspace at edition 2024. Three crates:
 
-- **`crates/helper`** — root-privileged daemon. Listens on `/run/bananas/helper.sock` (newline-delimited JSON). Performs tightly-scoped privileged ops (rewrite `/etc/exports`, run `exportfs -rv`).
+- **`crates/engine`** — root-privileged daemon (`bananas-engine`). Listens on `/run/bananas/engine.sock` (newline-delimited JSON). Performs every privileged op: rewrite `/etc/exports`, write `/etc/fstab`, manage users/groups, write per-service TOMLs, run `smartctl`/`lsblk`, opkg upgrades, system reboot.
 - **`crates/server`** — unprivileged HTTP daemon (`bananas` user, port 8080). Pure JSON API at `/api/*` plus `tower-http::ServeDir` serving the wasm SPA from `BANANAS_WEBADMIN_DIR` (default `/usr/share/bananas/webadmin`). The fallback is `index.html` so the SPA owns its own routing.
 - **`crates/webadmin`** — Dioxus 0.7 Web app (wasm32). Compiled with `dx bundle --release --platform web` via the `pixi run build-webadmin` task. Output lands under `target/dx/bananas-webadmin/release/web/public/` and is staged into `serve/webadmin/` for the Yocto recipe to install at `/usr/share/bananas/webadmin/`.
 
-Cross-compile pipeline (`pixi run build-server-arm`) uses `cargo-zigbuild` for the armv7 binaries and runs **only** the `bananas-server` + `bananas-helper` packages (`-p`-pinned, since `bananas-webadmin` is wasm-only). The `pixi run build-webadmin` task is a separate step that the `iterate` loop chains in front. The `bananas-server.bb` recipe `bbfatal`s if `serve/webadmin/index.html` is missing, so forgetting `build-webadmin` fails loudly instead of shipping a 404-only image.
+Cross-compile pipeline (`pixi run build-server-arm`) uses `cargo-zigbuild` for the armv7 binaries and runs **only** the `bananas-server` + `bananas-engine` packages (`-p`-pinned, since `bananas-webadmin` is wasm-only). The `pixi run build-webadmin` task is a separate step that the `iterate` loop chains in front. The `bananas-server.bb` recipe `bbfatal`s if `serve/webadmin/index.html` is missing, so forgetting `build-webadmin` fails loudly instead of shipping a 404-only image.
 
 The `pixi` environment provides Python 3.11, `kas`, and the conda-side host tools (chrpath, cpio, patch, gcc, etc.). Bitbake additionally needs system-level packages that conda does not ship cleanly — install them via the host package manager as listed in `README.md` (`chrpath cpio diffstat hostname/inetutils rpcsvc-proto`).
 
@@ -117,7 +117,7 @@ When a Yocto build fails inside a *-native* recipe with a `-Werror` or const-qua
 
 ### SATA storage
 
-The image now ships an **empty `/etc/fstab`** and an **empty `/etc/exports`** — operators add disk mounts and NFS shares through the web admin's *Mount points* and *Exports* tabs, which route the edit through `bananas-helper`. No more hardcoded `LABEL=media` / `LABEL=services` defaults; nothing in `bananas-image.bb` post-processes those files at bake time. `nfs-server.service` is still pre-enabled with the `NFSD_COUNT=8` drop-in so adding the first export from the UI just works without a manual `systemctl enable`.
+The image now ships an **empty `/etc/fstab`** and an **empty `/etc/exports`** — operators add disk mounts and NFS shares through the web admin's *Mount points* and *Exports* tabs, which route the edit through `bananas-engine`. No more hardcoded `LABEL=media` / `LABEL=services` defaults; nothing in `bananas-image.bb` post-processes those files at bake time. `nfs-server.service` is still pre-enabled with the `NFSD_COUNT=8` drop-in so adding the first export from the UI just works without a manual `systemctl enable`.
 
 Recommended mount options to use when adding entries via the UI: `defaults,noatime,nofail,x-systemd.device-timeout=10`. `nofail` avoids dropping to rescue mode if the disk is missing; `device-timeout=10` lets a slow drive enumerate without hanging boot indefinitely.
 

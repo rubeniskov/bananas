@@ -5,7 +5,7 @@
 //! handlers so each new config name is one route, not duplicate code.
 
 use axum::{Json, extract::State, response::Response};
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -21,7 +21,7 @@ pub async fn read(
     default_toml: impl FnOnce() -> String,
 ) -> Response {
     let cmd = Command::ReadServiceConfig { name: name.into() };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => {
@@ -52,7 +52,7 @@ pub async fn write(state: &AppState, name: &'static str, content: String) -> Res
         name: name.into(),
         content,
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => axum::response::IntoResponse::into_response(Json(

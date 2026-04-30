@@ -187,7 +187,7 @@ flowchart LR
         subgraph Userspace["systemd-managed services"]
             direction TB
             Server["bananas-server<br/>(Rust + axum, port 8080)<br/>/api/* + wasm SPA + WS bus"]
-            Helper["bananas-helper<br/>(root, Unix socket RPC)"]
+            Helper["bananas-engine<br/>(root, Unix socket RPC)"]
             Stats["bananas-stats<br/>(sampler + SQLite WAL<br/>+ live socket)"]
             Dashboard["bananas-dashboard<br/>(Slint app, software<br/>renderer on KMS)"]
             Rclone["rclone<br/>(on-demand cloud sync)"]
@@ -216,7 +216,7 @@ flowchart LR
 
 | Crate | Target | Purpose |
 |-------|--------|---------|
-| `crates/helper` | armv7 host bin | Privileged ops (NFS exports rewrite, fstab edit, user mgmt, chown/chmod, smartctl, rclone). Listens on `/run/bananas/helper.sock`. |
+| `crates/engine` | armv7 host bin | Privileged ops (NFS exports rewrite, fstab edit, user mgmt, chown/chmod, smartctl, rclone). Listens on `/run/bananas/engine.sock`. |
 | `crates/server` | armv7 host bin | HTTP / WebSocket server, port 8080. JSON `/api/*` + bundled wasm SPA. Routes everything sensitive through the helper. |
 | `crates/webadmin` | wasm32 | Dioxus 0.7 SPA. Bundled into `/usr/share/bananas/webadmin/`. |
 | `crates/stats` | armv7 host bin + lib | Sampler daemon. Writes SQLite, publishes live snapshots over `/run/bananas-stats/live.sock`. |

@@ -1,6 +1,6 @@
 //! /api/users — list / create / delete / set-password.
 //!
-//! All four endpoints proxy to bananas-helper, which has root and is the
+//! All four endpoints proxy to bananas-engine, which has root and is the
 //! only thing on the system that can shell out to useradd/userdel/chpasswd.
 //! The server's job here is request decoding + status-code mapping.
 
@@ -10,7 +10,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -19,7 +19,7 @@ use crate::AppState;
 /// Pass-through helper. Calls the daemon, parses its `output` field as
 /// JSON, returns it. Maps helper failures to a 400 with the error string.
 async fn proxy(state: &AppState, cmd: Command) -> Response {
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => match serde_json::from_str::<Value>(&output) {

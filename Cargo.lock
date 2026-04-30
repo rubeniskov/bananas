@@ -498,7 +498,7 @@ name = "bananas-config"
 version = "1.4.0"
 dependencies = [
  "anyhow",
- "bananas-helper",
+ "bananas-engine",
  "clap",
  "crossterm",
  "ratatui",
@@ -527,7 +527,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bananas-helper"
+name = "bananas-engine"
 version = "1.4.0"
 dependencies = [
  "anyhow",
@@ -550,7 +550,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "axum",
- "bananas-helper",
+ "bananas-engine",
  "bananas-stats",
  "base64",
  "futures-util",

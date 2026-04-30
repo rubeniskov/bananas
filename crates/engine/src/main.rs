@@ -1,4 +1,4 @@
-//! bananas-helper daemon — root-privileged service that the unprivileged
+//! bananas-engine daemon — root-privileged service that the unprivileged
 //! HTTP frontend talks to over a Unix socket.
 
 use std::{
@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bananas_helper::{Command, Response};
+use bananas_engine::{Command, Response};
 use serde_json::json;
 
 mod opkg;
@@ -34,9 +34,9 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let socket_path: PathBuf = std::env::var_os("BANANAS_HELPER_SOCKET")
+    let socket_path: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/run/bananas-helper.sock".into());
+        .unwrap_or_else(|| "/run/bananas-engine.sock".into());
     let exports_path: PathBuf = std::env::var_os("BANANAS_EXPORTS_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/etc/exports".into());
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     tracing::info!(
         socket=%socket_path.display(),
         exports=%exports_path.display(),
-        "bananas-helper listening"
+        "bananas-engine listening"
     );
 
     loop {
@@ -1933,7 +1933,7 @@ fn parse_rclone_progress(line: &str) -> Option<u32> {
 
 /// Where to write the live progress percentage for a given sync index.
 /// `/run/bananas/sync-progress/<idx>.progress` is in tmpfs (cleared on
-/// reboot) and the bananas-helper systemd unit's RuntimeDirectory=
+/// reboot) and the bananas-engine systemd unit's RuntimeDirectory=
 /// declaration creates `/run/bananas` for us.
 fn sync_progress_path(idx: usize) -> std::path::PathBuf {
     std::path::PathBuf::from(format!("/run/bananas/sync-progress/{idx}.progress"))

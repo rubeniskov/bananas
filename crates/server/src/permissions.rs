@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -51,7 +51,7 @@ pub async fn put_perms(State(state): State<AppState>, Json(req): Json<SetPerms>)
 }
 
 async fn proxy(state: &AppState, cmd: Command) -> Response {
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => match serde_json::from_str::<Value>(&output) {

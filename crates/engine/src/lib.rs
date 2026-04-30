@@ -1,4 +1,4 @@
-//! Wire protocol + client for bananas-helper.
+//! Wire protocol + client for bananas-engine.
 //!
 //! Newline-delimited JSON over a Unix domain socket. One request per
 //! connection; the server writes a single Response line and closes.
@@ -181,7 +181,7 @@ pub enum Command {
     /// caller polls `OpkgUpgradeStatus` for log delta + completion.
     ///
     /// The detach is critical: opkg's postinst on `bananas-server.ipk`
-    /// runs `systemctl restart bananas-helper`, and systemd's default
+    /// runs `systemctl restart bananas-engine`, and systemd's default
     /// cgroup-kill semantics would otherwise tear down the opkg
     /// process mid-transaction (leaving the system half-upgraded).
     /// Inside its own transient unit, opkg rides through the helper

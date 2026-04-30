@@ -14,7 +14,7 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -41,7 +41,7 @@ pub async fn read_system_config(state: &AppState) -> Result<SystemConfig, String
     let cmd = Command::ReadServiceConfig {
         name: "system".into(),
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => {
@@ -77,7 +77,7 @@ pub async fn post_timezone(
         return err_400("timezone required".into());
     }
     let cmd = Command::SetTimezone { tz: tz.clone() };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => axum::response::IntoResponse::into_response(Json(
@@ -97,7 +97,7 @@ pub async fn post_timezone(
 /// General timezone picker (datalist autocomplete).
 pub async fn get_timezones(State(state): State<AppState>) -> Response {
     let cmd = Command::ListTimezones;
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => {
@@ -151,7 +151,7 @@ pub fn spawn_first_boot_geoip(state: crate::AppState) {
         // + bananas-dashboard restart in one shot, so a single call is
         // all this needs.
         let set_cmd = Command::SetTimezone { tz: tz.clone() };
-        match bananas_helper::call(&state.helper_socket, &set_cmd).await {
+        match bananas_engine::call(&state.helper_socket, &set_cmd).await {
             Ok(HelperResponse { ok: true, .. }) => {
                 tracing::info!(tz = %tz, "first-boot timezone set via geoip");
             }

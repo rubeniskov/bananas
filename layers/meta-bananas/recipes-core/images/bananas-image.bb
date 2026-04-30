@@ -13,7 +13,7 @@ IMAGE_FEATURES += "ssh-server-openssh package-management splash"
 #
 # `ROOT_PASSWORD_HASH` is now OPTIONAL — when unset, we ship the default
 # placeholder below ("bananas"). The `expire_root_password` postprocess
-# zeroes the lastchg field, so PAM (console) and `bananas-helper`'s
+# zeroes the lastchg field, so PAM (console) and `bananas-engine`'s
 # `verify_shadow_password` (web UI) both flag the credential as expired
 # on first sign-in and force the operator to rotate it before granting a
 # session. Operators who want the build to embed a specific hash they
@@ -52,7 +52,7 @@ install_root_authkey() {
 # third field (last password change, in days since epoch) to 0 — PAM
 # treats that as "must change at next login" for both serial console and
 # any password-using SSH session. The web UI checks the same field via
-# bananas-helper and surfaces a "set new password" form on the login
+# bananas-engine and surfaces a "set new password" form on the login
 # page until it's been rotated. After the first ChangePassword the
 # field is bumped to today's day count and the prompt stops appearing.
 ROOTFS_POSTPROCESS_COMMAND += "expire_root_password;"

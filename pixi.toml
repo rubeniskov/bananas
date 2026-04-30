@@ -167,7 +167,7 @@ tar -C serve/webadmin -czf serve/bin/bananas-webadmin.tar.gz .
 '"""
 depends-on = ["setup-dx"]
 
-# `build-server-arm`: cross-compile bananas-server + bananas-helper for the
+# `build-server-arm`: cross-compile bananas-server + bananas-engine for the
 # BPI's armv7-unknown-linux-gnueabihf target using cargo-zigbuild (zig as the
 # cross linker, no per-target gcc needed). Stages the stripped binaries in
 # serve/bin/ where the bananas-server.bb recipe picks them up. crates/webadmin
@@ -178,7 +178,7 @@ depends-on = ["setup-dx"]
 # rusqlite-bundled (pulled in transitively via bananas-stats). Without
 # this, libsqlite3-sys's build script dies with `unknown CPU: 'haswell'`.
 [tasks.build-server-arm]
-cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-server -p bananas-helper --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-server target/armv7-unknown-linux-gnueabihf/release/bananas-helper serve/bin/'"
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-server -p bananas-engine --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-server target/armv7-unknown-linux-gnueabihf/release/bananas-engine serve/bin/'"
 
 # `build-stats-arm`: cross-compile bananas-stats (the sampler daemon)
 # for armv7 via cargo-zigbuild. Pure-Rust deps + bundled rusqlite, so no

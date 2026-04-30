@@ -16,7 +16,7 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::Result;
-use bananas_helper::Command as HelperCommand;
+use bananas_engine::Command as HelperCommand;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -127,7 +127,7 @@ async fn refresh(socket: &Path, state: &mut AppState) {
 }
 
 async fn current_timezone(socket: &Path) -> Result<String> {
-    let resp = bananas_helper::call(
+    let resp = bananas_engine::call(
         socket,
         &HelperCommand::ReadServiceConfig {
             name: "system".into(),
@@ -156,7 +156,7 @@ async fn handle_tab_key(socket: &Path, state: &mut AppState, key: event::KeyEven
                     return;
                 }
                 state.tz_busy = true;
-                let resp = bananas_helper::call(
+                let resp = bananas_engine::call(
                     socket,
                     &HelperCommand::SetTimezone {
                         tz: state.tz_input.clone(),
@@ -190,7 +190,7 @@ async fn handle_tab_key(socket: &Path, state: &mut AppState, key: event::KeyEven
                     return;
                 }
                 state.reboot_busy = true;
-                let resp = bananas_helper::call(socket, &HelperCommand::RebootSystem).await;
+                let resp = bananas_engine::call(socket, &HelperCommand::RebootSystem).await;
                 state.reboot_busy = false;
                 match resp {
                     Ok(r) if r.ok => {
@@ -273,7 +273,7 @@ fn render_status(f: &mut ratatui::Frame, area: Rect, state: &AppState) {
 
     for (component, unit) in [
         ("server", Some("bananas-server.service")),
-        ("helper", Some("bananas-helper.service")),
+        ("helper", Some("bananas-engine.service")),
         ("stats", Some("bananas-stats.service")),
         ("dashboard", Some("bananas-dashboard.service")),
         ("webadmin", None),

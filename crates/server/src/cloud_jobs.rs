@@ -32,7 +32,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 
@@ -152,7 +152,7 @@ impl JobManager {
         let mgr = self.clone();
         tokio::spawn(async move {
             let cmd = Command::RunCloudSync { idx: sync_idx };
-            let res = bananas_helper::call(&helper_socket, &cmd).await;
+            let res = bananas_engine::call(&helper_socket, &cmd).await;
             let mut inner = mgr.inner.write().await;
             if let Some(state) = inner.jobs.get_mut(&id) {
                 state.finished_unix = Some(unix_now());
@@ -282,7 +282,7 @@ async fn scheduler_tick(
     let cmd = Command::ReadServiceConfig {
         name: "cloud".into(),
     };
-    let resp = bananas_helper::call(helper_socket, &cmd).await?;
+    let resp = bananas_engine::call(helper_socket, &cmd).await?;
     if !resp.ok {
         // No cloud.toml yet — nothing to schedule.
         return Ok(());

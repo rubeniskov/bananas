@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 
 use axum::http::StatusCode;
-use bananas_helper::{Command as HelperCommand, Response as HelperResponse};
+use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
 use serde_json::json;
 
 use super::{OperationKind, OperationManager, OperationStatus};
@@ -99,7 +99,7 @@ async fn run_import(
         })
         .collect();
     let exports_content = exports::serialize(&export_rows);
-    match bananas_helper::call(
+    match bananas_engine::call(
         &helper_socket,
         &HelperCommand::WriteExports {
             content: exports_content,
@@ -163,7 +163,7 @@ async fn run_import(
     let mut fstab_rows = protected_rows;
     fstab_rows.extend(bundle_rows);
     let fstab_content = format!("{}{}", header, fstab::serialize(&fstab_rows));
-    match bananas_helper::call(
+    match bananas_engine::call(
         &helper_socket,
         &HelperCommand::WriteFstab {
             content: fstab_content,
@@ -210,7 +210,7 @@ async fn run_import(
             admin: entry.admin,
             password_is_hash: true,
         };
-        match bananas_helper::call(&helper_socket, &cmd).await {
+        match bananas_engine::call(&helper_socket, &cmd).await {
             Ok(HelperResponse { ok: true, .. }) => {
                 summary.users_created += 1;
                 log!("  → {} created", entry.username);
@@ -251,7 +251,7 @@ async fn run_import(
             bundle.cloud.accounts.len(),
             bundle.cloud.syncs.len()
         );
-        match bananas_helper::call(
+        match bananas_engine::call(
             &helper_socket,
             &HelperCommand::WriteServiceConfig {
                 name: "cloud".into(),
@@ -340,7 +340,7 @@ async fn write_service_toml(
     name: &str,
     content: String,
 ) -> Result<(), String> {
-    match bananas_helper::call(
+    match bananas_engine::call(
         helper_socket,
         &HelperCommand::WriteServiceConfig {
             name: name.into(),

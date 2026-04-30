@@ -160,11 +160,11 @@ fn empty_snapshot() -> Response {
 /// Returns `{config: "..."}` so the UI can drop it straight into a
 /// textarea without parsing.
 pub async fn get_config(State(state): State<AppState>) -> Response {
-    use bananas_helper::{Command, Response as HelperResponse};
+    use bananas_engine::{Command, Response as HelperResponse};
     let cmd = Command::ReadServiceConfig {
         name: "stats".into(),
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => {
@@ -205,12 +205,12 @@ pub struct PutConfig {
 /// Returns `{ok, output}` mirroring the helper's response so the UI can
 /// surface systemctl's stdout in the success banner.
 pub async fn put_config(State(state): State<AppState>, Json(req): Json<PutConfig>) -> Response {
-    use bananas_helper::{Command, Response as HelperResponse};
+    use bananas_engine::{Command, Response as HelperResponse};
     let cmd = Command::WriteServiceConfig {
         name: "stats".into(),
         content: req.config,
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => Json(json!({ "ok": true, "output": output })).into_response(),

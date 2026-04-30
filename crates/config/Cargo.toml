@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 # Wire protocol + helper RPC client. The TUI runs as the bananas group,
 # same socket the server uses.
-bananas-helper.workspace = true
+bananas-engine.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

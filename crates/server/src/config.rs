@@ -14,7 +14,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -226,7 +226,7 @@ async fn legacy_import_config_inline(State(state): State<AppState>, body: String
         })
         .collect();
     let exports_content = exports::serialize(&export_rows);
-    match bananas_helper::call(
+    match bananas_engine::call(
         &state.helper_socket,
         &Command::WriteExports {
             content: exports_content,
@@ -293,7 +293,7 @@ async fn legacy_import_config_inline(State(state): State<AppState>, body: String
     let mut fstab_rows = protected_rows;
     fstab_rows.extend(bundle_rows);
     let fstab_content = format!("{}{}", header, fstab::serialize(&fstab_rows));
-    match bananas_helper::call(
+    match bananas_engine::call(
         &state.helper_socket,
         &Command::WriteFstab {
             content: fstab_content,
@@ -340,7 +340,7 @@ async fn legacy_import_config_inline(State(state): State<AppState>, body: String
             admin: entry.admin,
             password_is_hash: true,
         };
-        match bananas_helper::call(&state.helper_socket, &cmd).await {
+        match bananas_engine::call(&state.helper_socket, &cmd).await {
             Ok(HelperResponse { ok: true, .. }) => summary.users_created += 1,
             Ok(HelperResponse { error, .. }) => {
                 summary.users_skipped += 1;
@@ -373,7 +373,7 @@ async fn legacy_import_config_inline(State(state): State<AppState>, body: String
         }
     };
     if !cloud_toml.is_empty() {
-        match bananas_helper::call(
+        match bananas_engine::call(
             &state.helper_socket,
             &Command::WriteServiceConfig {
                 name: "cloud".into(),
@@ -436,7 +436,7 @@ async fn legacy_import_config_inline(State(state): State<AppState>, body: String
 }
 
 async fn write_service_toml(state: &AppState, name: &str, content: String) -> Result<(), String> {
-    match bananas_helper::call(
+    match bananas_engine::call(
         &state.helper_socket,
         &Command::WriteServiceConfig {
             name: name.into(),
@@ -487,7 +487,7 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
     // Users via the helper — ExportUsers includes shadow hashes so the
     // backup actually round-trips a working account. /api/users continues
     // to use ListUsers, which omits hashes.
-    let users = match bananas_helper::call(&state.helper_socket, &Command::ExportUsers).await {
+    let users = match bananas_engine::call(&state.helper_socket, &Command::ExportUsers).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => parse_users_payload(&output),
@@ -501,7 +501,7 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
     // the helper so the file's perms are respected (root-owned, the
     // server is unprivileged). Errors here are non-fatal because cloud
     // is optional and the absence of the file is a valid state.
-    let cloud = match bananas_helper::call(
+    let cloud = match bananas_engine::call(
         &state.helper_socket,
         &Command::ReadServiceConfig {
             name: "cloud".into(),
@@ -536,7 +536,7 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
 }
 
 async fn read_service_toml(state: &AppState, name: &str) -> String {
-    match bananas_helper::call(
+    match bananas_engine::call(
         &state.helper_socket,
         &Command::ReadServiceConfig {
             name: name.to_string(),

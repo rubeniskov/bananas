@@ -1,8 +1,8 @@
 [Unit]
 Description=BanaNAS web admin (NFS exports UI on :8080)
-After=network-online.target bananas-helper.service
+After=network-online.target bananas-engine.service
 Wants=network-online.target
-Requires=bananas-helper.service
+Requires=bananas-engine.service
 
 [Service]
 Type=simple
@@ -13,7 +13,7 @@ ExecStart=/usr/bin/bananas-server
 # mode 0700. Cheapest place to stash the persistent HMAC session key.
 StateDirectory=bananas
 StateDirectoryMode=0700
-Environment=BANANAS_HELPER_SOCKET=/run/bananas/helper.sock
+Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
 Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
 Environment=BANANAS_WEBADMIN_DIR=/usr/share/bananas/webadmin
 Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key

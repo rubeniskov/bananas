@@ -1,10 +1,10 @@
-SUMMARY = "BanaNAS web admin: bananas-server (HTTP UI) + bananas-helper (root)"
+SUMMARY = "BanaNAS web admin: bananas-server (HTTP UI) + bananas-engine (root)"
 DESCRIPTION = "Two prebuilt Rust binaries cross-compiled on the host with \
 cargo-zigbuild for armv7-unknown-linux-gnueabihf. The unprivileged HTTP daemon \
 listens on :8080, serves the wasm SPA from /usr/share/bananas/webadmin/ \
-(shipped by the sibling bananas-webadmin package), and reaches a small \
-root-owned helper over a Unix socket for tightly-scoped operations \
-(NFS exports rewrite, group ops). \
+(shipped by the sibling bananas-webadmin package), and reaches the privileged \
+bananas-engine over a Unix socket for everything that needs root (NFS exports, \
+fstab, users, service configs, opkg upgrades, smartctl, lsblk, reboot). \
 Run `pixi run build-server-arm` before `pixi run build` to stage the binaries \
 in serve/bin/."
 
@@ -24,10 +24,10 @@ inherit systemd useradd
 # now (RDEPENDS below) so SPA-only updates don't churn the bananas-server
 # IPK + restart the HTTP daemon.
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
-SRC_URI = "file://bananas-helper.service \
+SRC_URI = "file://bananas-engine.service \
            file://bananas-server.service \
            file://bananas-server \
-           file://bananas-helper \
+           file://bananas-engine \
            file://bananas-motd.sh"
 
 S = "${WORKDIR}"
@@ -42,7 +42,7 @@ COMPATIBLE_MACHINE = "(bananapro)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 
-SYSTEMD_SERVICE:${PN} = "bananas-helper.service bananas-server.service"
+SYSTEMD_SERVICE:${PN} = "bananas-engine.service bananas-server.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 # The HTTP daemon serves the SPA from /usr/share/bananas/webadmin/.
@@ -57,7 +57,7 @@ USERADD_PACKAGES = "${PN}"
 # `bananas-admin`: authorization gate for the web UI. Members can sign in;
 # everyone else (including freshly created users) gets a generic
 # "invalid credentials" 401. Root bypasses the check because it always
-# has access via SSH and the helper anyway.
+# has access via SSH and the engine anyway.
 GROUPADD_PARAM:${PN} = "-r bananas; -r bananas-admin"
 USERADD_PARAM:${PN} = "-r -g bananas -d /var/lib/bananas -s /sbin/nologin \
                        -c 'BanaNAS web admin' bananas"
@@ -68,10 +68,10 @@ do_configure[noexec] = "1"
 do_install() {
     install -d ${D}${bindir}
     install -m 0755 ${WORKDIR}/bananas-server ${D}${bindir}/bananas-server
-    install -m 0755 ${WORKDIR}/bananas-helper ${D}${bindir}/bananas-helper
+    install -m 0755 ${WORKDIR}/bananas-engine ${D}${bindir}/bananas-engine
 
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${WORKDIR}/bananas-helper.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${WORKDIR}/bananas-engine.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${WORKDIR}/bananas-server.service ${D}${systemd_system_unitdir}/
 
     # Cockpit-style SSH login banner: ASCII art + live web-console URL.
@@ -84,7 +84,7 @@ do_install() {
 }
 
 FILES:${PN} += "${bindir}/bananas-server \
-                ${bindir}/bananas-helper \
-                ${systemd_system_unitdir}/bananas-helper.service \
+                ${bindir}/bananas-engine \
+                ${systemd_system_unitdir}/bananas-engine.service \
                 ${systemd_system_unitdir}/bananas-server.service \
                 ${sysconfdir}/profile.d/bananas-motd.sh"

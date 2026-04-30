@@ -9,7 +9,7 @@
 //! 2. **Survive a server restart** — the JSON journal at
 //!    `BANANAS_OPERATIONS_JOURNAL` (default `/var/lib/bananas/operations.json`)
 //!    persists state across `systemctl restart bananas-server`. Ops
-//!    whose state lives off-server (opkg in `bananas-helper`'s log,
+//!    whose state lives off-server (opkg in `bananas-engine`'s log,
 //!    cloud sync's `.progress` file) can reinstate themselves cleanly;
 //!    in-process ops (config import) get marked `Failure` with an
 //!    `[interrupted]` note so the operator at least sees what happened.
@@ -95,7 +95,7 @@ pub struct OperationState {
     pub started_at: i64,
     pub finished_at: Option<i64>,
     /// Combined log buffer, capped at `MAX_OUTPUT_BYTES`. For ops with
-    /// off-server log files (opkg's `/var/lib/bananas-helper/opkg.log`,
+    /// off-server log files (opkg's `/var/lib/bananas-engine/opkg.log`,
     /// cloud sync's progress files), this carries the *summary tail*
     /// after completion; mid-flight log bytes are streamed via the
     /// per-kind SSE proxy.

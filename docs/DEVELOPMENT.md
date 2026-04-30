@@ -96,7 +96,7 @@ The repo's a Cargo workspace at edition 2024. Five crates:
 
 | Crate | Target | Purpose |
 |-------|--------|---------|
-| `crates/helper` | armv7 host bin | Privileged ops over `/run/bananas/helper.sock`. |
+| `crates/engine` | armv7 host bin | Privileged ops over `/run/bananas/engine.sock`. |
 | `crates/server` | armv7 host bin | HTTP / WebSocket server, port 8080. |
 | `crates/webadmin` | wasm32 | Dioxus 0.7 SPA. Built via `dx bundle --release --platform web`. |
 | `crates/stats` | armv7 host bin + lib | Sampler daemon. |

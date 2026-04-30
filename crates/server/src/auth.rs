@@ -1,6 +1,6 @@
 //! Login / logout / me endpoints + axum middleware that gates the rest of
 //! /api/* on a valid session cookie. The actual password check is delegated
-//! to bananas-helper, which has root and can read /etc/shadow.
+//! to bananas-engine, which has root and can read /etc/shadow.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -61,7 +61,7 @@ pub async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>)
         username: req.username.clone(),
         password: req.password,
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse { ok: true, .. }) => {
             let ttl = if req.remember {
                 TTL_REMEMBER_SECS
@@ -141,7 +141,7 @@ pub async fn change_password(
         old_password: req.old_password,
         new_password: req.new_password,
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse { ok: true, .. }) => {
             let ttl = if req.remember {
                 TTL_REMEMBER_SECS

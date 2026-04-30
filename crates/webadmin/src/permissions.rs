@@ -1,5 +1,5 @@
 //! Permissions editor modal — opened from the directory browser to
-//! chown/chmod a path through bananas-helper. Server-side allowlist
+//! chown/chmod a path through bananas-engine. Server-side allowlist
 //! restricts to /srv, /mnt, /media, /home, /opt, so an operator can't
 //! accidentally chmod /etc.
 

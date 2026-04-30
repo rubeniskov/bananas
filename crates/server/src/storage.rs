@@ -18,7 +18,7 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::task::JoinSet;
@@ -223,7 +223,7 @@ fn parse_partition(entry: &Value) -> Partition {
 /// back through the existing IPC channel — same shape as Smart.
 async fn run_lsblk(state: &AppState) -> anyhow::Result<Value> {
     use anyhow::Context;
-    let resp = bananas_helper::call(&state.helper_socket, &Command::Lsblk)
+    let resp = bananas_engine::call(&state.helper_socket, &Command::Lsblk)
         .await
         .context("calling helper Lsblk")?;
     if !resp.ok {
@@ -239,7 +239,7 @@ async fn fetch_smart(state: &AppState, device: &str) -> Result<Value, String> {
     let cmd = Command::Smart {
         device: device.to_string(),
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => serde_json::from_str(&output).map_err(|e| format!("smartctl JSON: {e}")),

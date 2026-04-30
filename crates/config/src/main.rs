@@ -13,7 +13,7 @@
 //!       bananas-config update check
 //!       bananas-config update install stats
 //!
-//! All privileged operations go through the `bananas-helper` Unix
+//! All privileged operations go through the `bananas-engine` Unix
 //! socket — no per-binary capabilities, no setuid. The user must be
 //! in the `bananas` group (the helper socket is `srw-rw---- root:bananas`).
 
@@ -27,9 +27,9 @@ mod tui;
 
 /// Default helper socket path; mirrors the server / helper convention.
 fn default_socket() -> PathBuf {
-    std::env::var_os("BANANAS_HELPER_SOCKET")
+    std::env::var_os("BANANAS_ENGINE_SOCKET")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/run/bananas/helper.sock"))
+        .unwrap_or_else(|| PathBuf::from("/run/bananas/engine.sock"))
 }
 
 #[derive(Debug, Parser)]

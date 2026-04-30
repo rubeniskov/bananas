@@ -65,7 +65,7 @@ pixi run iterate         # ships it (bake will be fast — only the SPA changes)
 ### Server / helper / stats (Rust crates that run on the BPI)
 
 ```bash
-pixi run build-server-arm     # bananas-server + bananas-helper via cargo-zigbuild
+pixi run build-server-arm     # bananas-server + bananas-engine via cargo-zigbuild
 pixi run build-stats-arm      # bananas-stats via cargo-zigbuild
 pixi run build-dashboard-arm  # bananas-dashboard via cross-rs (Slint needs system libs)
 pixi run iterate
@@ -95,7 +95,7 @@ The two-pass `pixi run build` (`bitbake -c rootfs -f bananas-image && bitbake ba
 - `rustfmt` defaults — `cargo fmt` from the workspace root.
 - `cargo clippy --all-targets --workspace` should be clean. Per-crate `#[allow(non_snake_case)]` is fine for Dioxus components since `#[component]` requires PascalCase.
 - Prefer `?` and explicit error types over `unwrap` outside of tests / smoke paths.
-- New helper commands need to be allowlisted, not path-driven — see `is_safe_perms_path` and `service_config_target` in `crates/helper/src/main.rs`.
+- New helper commands need to be allowlisted, not path-driven — see `is_safe_perms_path` and `service_config_target` in `crates/engine/src/main.rs`.
 
 ### Yocto recipes
 

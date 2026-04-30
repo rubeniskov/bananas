@@ -10,7 +10,7 @@
 //!
 //! Why the asynchronous shape for `upgrade`: opkg's own postinst on
 //! `bananas-server.ipk` runs `systemctl restart bananas-server
-//! bananas-helper`. systemd's default `KillMode=control-group` would
+//! bananas-engine`. systemd's default `KillMode=control-group` would
 //! tear down every PID in the helper's cgroup — including the opkg
 //! child the helper just spawned — leaving the system half-upgraded.
 //! Running opkg inside its own transient `.service` unit (via
@@ -64,9 +64,9 @@ pub struct UpgradeStatus {
 /// before each launch). `--collect` GCs it once finished.
 const OPKG_UNIT: &str = "bananas-opkg-upgrade.service";
 /// Log file. Written by the transient unit's StandardOutput=append:
-/// directive (which the unit runs as root, so /var/lib/bananas-helper
+/// directive (which the unit runs as root, so /var/lib/bananas-engine
 /// is fine). Helper's `upgrade_status` reads it back.
-const OPKG_LOG_DEFAULT: &str = "/var/lib/bananas-helper/opkg.log";
+const OPKG_LOG_DEFAULT: &str = "/var/lib/bananas-engine/opkg.log";
 /// Sentinel line appended after opkg exits so `upgrade_status` can
 /// distinguish "still running" from "done with exit code N".
 const OPKG_EXIT_MARKER_PREFIX: &str = "[bananas-opkg-exit=";

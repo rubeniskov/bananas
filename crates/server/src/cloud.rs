@@ -29,7 +29,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -120,7 +120,7 @@ async fn load(state: &AppState) -> Result<CloudConfig, String> {
     let cmd = Command::ReadServiceConfig {
         name: "cloud".into(),
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => {
@@ -159,7 +159,7 @@ async fn save(state: &AppState, cfg: &CloudConfig) -> Result<(), String> {
         name: "cloud".into(),
         content: body,
     };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse { ok: true, .. }) => Ok(()),
         Ok(HelperResponse { error, output, .. }) => Err(format!(
             "{}\n\n{}",
@@ -468,7 +468,7 @@ pub async fn cancel_sync(
     AxumPath(idx): AxumPath<usize>,
 ) -> Response {
     let cmd = Command::CancelCloudSync { idx };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => Json(json!({ "ok": true, "output": output })).into_response(),

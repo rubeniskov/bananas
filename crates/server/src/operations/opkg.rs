@@ -1,7 +1,7 @@
 //! `OperationKind::OpkgUpgrade` handler.
 //!
 //! Authoritative state lives on the helper side at
-//! `/var/lib/bananas-helper/opkg.log`; the server's role is to expose
+//! `/var/lib/bananas-engine/opkg.log`; the server's role is to expose
 //! that work to the webadmin via the unified OperationManager surface.
 //!
 //! Two entry points:
@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bananas_helper::{Command as HelperCommand, Response as HelperResponse};
+use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -30,7 +30,7 @@ const POLL: Duration = Duration::from_millis(500);
 const PACKAGE_PREFIX: &str = "bananas-";
 
 /// Helper status payload — mirrored locally to avoid pulling
-/// `bananas_helper::opkg` types into the server crate.
+/// `bananas_engine::opkg` types into the server crate.
 #[derive(Debug, Deserialize)]
 struct UpgradeStatus {
     state: String,
@@ -64,7 +64,7 @@ pub async fn start(
     let cmd = HelperCommand::OpkgUpgrade {
         packages: packages.clone(),
     };
-    match bananas_helper::call(&helper_socket, &cmd).await {
+    match bananas_engine::call(&helper_socket, &cmd).await {
         Ok(HelperResponse { ok: true, .. }) => {}
         Ok(HelperResponse { error, .. }) => {
             return Err((
@@ -97,7 +97,7 @@ pub async fn start(
 /// OpkgUpgrade in the journal.
 pub async fn reinstate(manager: &OperationManager, helper_socket: &PathBuf) {
     let cmd = HelperCommand::OpkgUpgradeStatus { since: 0 };
-    let status = match bananas_helper::call(helper_socket, &cmd).await {
+    let status = match bananas_engine::call(helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => match serde_json::from_str::<UpgradeStatus>(&output) {
@@ -168,7 +168,7 @@ fn spawn_watcher(manager: OperationManager, helper_socket: PathBuf, op_id: u64, 
 
         loop {
             let cmd = HelperCommand::OpkgUpgradeStatus { since };
-            let status = match bananas_helper::call(&helper_socket, &cmd).await {
+            let status = match bananas_engine::call(&helper_socket, &cmd).await {
                 Ok(HelperResponse {
                     ok: true, output, ..
                 }) => {

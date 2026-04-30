@@ -22,7 +22,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::{delete, get, post, put},
 };
-use bananas_helper::{Command, Response as HelperResponse};
+use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
@@ -92,9 +92,9 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "/run/bananas-stats/live.sock".into());
     live_bus.start_socket(live_socket_path);
 
-    let helper_socket: PathBuf = std::env::var_os("BANANAS_HELPER_SOCKET")
+    let helper_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/run/bananas/helper.sock".into());
+        .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
     let jobs = cloud_jobs::JobManager::new();
     cloud_jobs::spawn_scheduler(jobs.clone(), helper_socket.clone());
@@ -484,7 +484,7 @@ async fn put_export(
 async fn apply(state: &AppState, rows: &[Row]) -> axum::response::Response {
     let content = exports::serialize(rows);
     let cmd = Command::WriteExports { content };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => Json(json!({ "ok": true, "output": output })).into_response(),
@@ -511,7 +511,7 @@ async fn apply(state: &AppState, rows: &[Row]) -> axum::response::Response {
 /// back; the browser then sees the connection drop a beat later.
 async fn post_reboot(State(state): State<AppState>) -> impl IntoResponse {
     let cmd = Command::RebootSystem;
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => Json(json!({ "ok": true, "output": output })).into_response(),
@@ -545,7 +545,7 @@ async fn post_mkdir(State(state): State<AppState>, Json(req): Json<MkdirReq>) ->
         return api_err(StatusCode::BAD_REQUEST, "path required");
     }
     let cmd = Command::MakeDirectory { path };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => Json(json!({ "ok": true, "output": output })).into_response(),
@@ -838,7 +838,7 @@ async fn apply_fstab(state: &AppState, rows: &[fstab::Row]) -> axum::response::R
     let content = format!("{}{}", header, body);
 
     let cmd = Command::WriteFstab { content };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
         }) => Json(json!({ "ok": true, "output": output })).into_response(),

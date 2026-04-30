@@ -1,7 +1,7 @@
 SUMMARY = "BanaNAS operator console (TUI + CLI)"
 DESCRIPTION = "Standalone bananas-config binary for managing the BPI \
 without a browser: status table, timezone editor, reboot, and CLI \
-subcommands for in-place updates. Talks straight to the bananas-helper \
+subcommands for in-place updates. Talks straight to the bananas-engine \
 Unix socket — same trust boundary as the web admin."
 
 LICENSE = "MIT"
