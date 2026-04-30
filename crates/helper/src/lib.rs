@@ -175,12 +175,29 @@ pub enum Command {
     /// /api/version to learn the installed version of each package
     /// without per-binary --version shell-outs.
     OpkgListInstalled,
-    /// Run `opkg upgrade <packages...>`. The helper validates each
-    /// name against `[a-z][a-z0-9-]*` to keep argv clean. Reply.output
-    /// carries opkg's combined stdout+stderr; ok=true iff exit code
-    /// was 0. Postinst scripts in each .ipk handle systemctl
-    /// restart with --no-block where needed (server, helper).
+    /// Spawn `opkg upgrade <packages...>` as a transient systemd unit
+    /// (`bananas-opkg-upgrade.service`), detached from the helper's
+    /// own cgroup. Returns immediately once the unit is queued — the
+    /// caller polls `OpkgUpgradeStatus` for log delta + completion.
+    ///
+    /// The detach is critical: opkg's postinst on `bananas-server.ipk`
+    /// runs `systemctl restart bananas-helper`, and systemd's default
+    /// cgroup-kill semantics would otherwise tear down the opkg
+    /// process mid-transaction (leaving the system half-upgraded).
+    /// Inside its own transient unit, opkg rides through the helper
+    /// restart unaffected and finishes the install.
+    ///
+    /// Validates each name against `[a-z][a-z0-9-]*` before exec.
     OpkgUpgrade { packages: Vec<String> },
+    /// Read the upgrade log from byte offset `since` and report whether
+    /// the run is still active, finished cleanly, or failed. The server
+    /// SSE handler polls this on a 500 ms cadence and forwards each
+    /// delta to the webadmin so the user sees progress in real time
+    /// (and so it can resume after a server self-restart).
+    OpkgUpgradeStatus {
+        #[serde(default)]
+        since: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

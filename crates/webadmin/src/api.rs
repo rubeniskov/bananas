@@ -1336,14 +1336,12 @@ pub struct UpgradeRequest {
     pub packages: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct InstallAccepted {
-    pub id: String,
-    pub started_at: u64,
-}
-
-pub async fn post_install(req: &UpgradeRequest) -> Result<InstallAccepted, ApiError> {
+/// Kick off an `opkg upgrade <packages>` on the device. Returns when
+/// the helper has queued the transient unit; actual progress is
+/// streamed via the `/api/updates/status` SSE endpoint. Body is
+/// intentionally empty on success — the caller subscribes to SSE
+/// rather than reading any response value.
+pub async fn post_install(req: &UpgradeRequest) -> Result<(), ApiError> {
     let resp = Request::post("/api/updates/install")
         .json(req)
         .map_err(|e| ApiError::Other(e.to_string()))?
@@ -1358,9 +1356,7 @@ pub async fn post_install(req: &UpgradeRequest) -> Result<InstallAccepted, ApiEr
         let txt = resp.text().await.unwrap_or_default();
         return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
     }
-    resp.json::<InstallAccepted>()
-        .await
-        .map_err(|e| ApiError::Other(e.to_string()))
+    Ok(())
 }
 
 fn urlencode(s: &str) -> String {

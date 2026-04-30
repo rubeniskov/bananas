@@ -1,22 +1,23 @@
 //! opkg-backed update endpoints.
 //!
-//! Step 6 cleanup: the API shapes match the underlying opkg model
-//! directly. No more legacy "Component" enum, no more
-//! component-slug-to-package mapping, no more `asset_url` / `sha256`
-//! fields that were always None. Frontends (webadmin SPA, bananas-
-//! config CLI) consume `{ name, installed, candidate }` rows the
-//! same shape opkg itself uses.
+//! The server is a thin proxy onto `bananas-helper`'s opkg surface.
+//! It owns no install state of its own — that all lives behind the
+//! helper, on disk in `/var/lib/bananas-helper/opkg.log`. This is
+//! deliberate: the server gets restarted as part of the upgrade it
+//! initiated, so any in-process state would be lost. Polling the
+//! helper instead means the SSE stream resumes naturally after the
+//! restart.
 //!
 //!   GET  /api/version          — installed `bananas-*` packages
 //!   GET  /api/updates/check    — upgradable `bananas-*` packages
-//!   POST /api/updates/install  — `opkg upgrade <packages>`
+//!   POST /api/updates/install  — kick off `opkg upgrade <packages>`
 //!   GET  /api/updates/status   — SSE stream of the active install
 //!
 //! Filtering is on `bananas-*` prefix: opkg's view of the system
 //! includes ~1000 base-OS packages (libc, busybox, …) that the
 //! webadmin doesn't manage. Operators who want raw opkg can SSH in.
 
-use std::{convert::Infallible, sync::Arc, time::SystemTime};
+use std::{convert::Infallible, time::Duration};
 
 use axum::{
     Json,
@@ -27,7 +28,6 @@ use axum::{
 use bananas_helper::{Command as HelperCommand, Response as HelperResponse};
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
 use crate::AppState;
 
@@ -35,6 +35,11 @@ use crate::AppState;
 /// the API. Keeps the SPA's view focused on what BanaNAS itself
 /// ships and avoids surfacing every libc / busybox upgrade.
 const PACKAGE_PREFIX: &str = "bananas-";
+
+/// How often the SSE handler polls the helper for new log content
+/// while the upgrade is active. opkg writes maybe 1–3 lines per
+/// package step, so 500 ms is plenty smooth without being chatty.
+const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 // ─── /api/version ───────────────────────────────────────────────────
 
@@ -128,60 +133,14 @@ pub async fn get_updates_check(
 
 // ─── POST /api/updates/install + SSE stream ─────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Phase {
-    Install,
-    Done,
-    Error,
-}
-
+/// SSE event payload. Phase is one of `install` (mid-stream log line),
+/// `done` (final OK), `error` (final failure). The webadmin matches on
+/// these strings to decide when to close the modal.
 #[derive(Debug, Clone, Serialize)]
 pub struct LogLine {
     pub seq: u64,
-    pub phase: Phase,
+    pub phase: &'static str,
     pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ActiveInstall {
-    pub id: String,
-    pub packages: Vec<String>,
-    pub started_at: u64,
-    pub finished: bool,
-    pub ok: Option<bool>,
-    pub log: Vec<LogLine>,
-}
-
-#[derive(Clone)]
-pub struct InstallState {
-    inner: Arc<Mutex<Option<ActiveInstall>>>,
-    pub(crate) tx: tokio::sync::broadcast::Sender<LogLine>,
-}
-
-impl InstallState {
-    pub fn new() -> Self {
-        let (tx, _) = tokio::sync::broadcast::channel(256);
-        Self {
-            inner: Arc::new(Mutex::new(None)),
-            tx,
-        }
-    }
-
-    async fn push(&self, phase: Phase, text: impl Into<String>) {
-        let text = text.into();
-        let mut guard = self.inner.lock().await;
-        if let Some(a) = guard.as_mut() {
-            let seq = a.log.len() as u64;
-            let line = LogLine { seq, phase, text };
-            a.log.push(line.clone());
-            let _ = self.tx.send(line);
-            if matches!(phase, Phase::Done | Phase::Error) {
-                a.finished = true;
-                a.ok = Some(matches!(phase, Phase::Done));
-            }
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,16 +151,22 @@ pub struct UpgradeRequest {
     pub packages: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct InstallAccepted {
-    pub id: String,
-    pub started_at: u64,
+/// Helper status payload — mirrors `bananas_helper::opkg::UpgradeStatus`
+/// without dragging the helper crate's serde shape into the server
+/// surface. State strings come from the helper unchanged.
+#[derive(Debug, Deserialize)]
+struct UpgradeStatus {
+    state: String,
+    log: String,
+    log_offset: u64,
+    #[serde(default)]
+    exit_code: Option<i32>,
 }
 
 pub async fn post_updates_install(
     State(state): State<AppState>,
     Json(req): Json<UpgradeRequest>,
-) -> Result<(StatusCode, Json<InstallAccepted>), (StatusCode, String)> {
+) -> Result<StatusCode, (StatusCode, String)> {
     if req.packages.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "no packages specified".to_string()));
     }
@@ -214,133 +179,121 @@ pub async fn post_updates_install(
         }
     }
 
-    {
-        let guard = state.install.inner.lock().await;
-        if let Some(a) = guard.as_ref() {
-            if !a.finished {
-                return Err((
-                    StatusCode::CONFLICT,
-                    format!("install already in flight: {}", a.packages.join(", ")),
-                ));
-            }
-        }
-    }
-
-    let started_at = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let id = format!("opkg-{started_at}");
-    let active = ActiveInstall {
-        id: id.clone(),
-        packages: req.packages.clone(),
-        started_at,
-        finished: false,
-        ok: None,
-        log: Vec::new(),
-    };
-    {
-        let mut guard = state.install.inner.lock().await;
-        *guard = Some(active);
-    }
-
-    let task_state = state.clone();
-    let packages = req.packages.clone();
-    tokio::spawn(async move {
-        run_install(task_state, packages).await;
-    });
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(InstallAccepted { id, started_at }),
-    ))
-}
-
-async fn run_install(state: AppState, packages: Vec<String>) {
-    state
-        .install
-        .push(
-            Phase::Install,
-            format!("running opkg upgrade {}", packages.join(" ")),
-        )
-        .await;
-
     let cmd = HelperCommand::OpkgUpgrade {
-        packages: packages.clone(),
+        packages: req.packages.clone(),
     };
-    let resp = match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(r) => r,
-        Err(e) => {
-            state
-                .install
-                .push(Phase::Error, format!("helper unreachable: {e:#}"))
-                .await;
-            return;
-        }
-    };
-    if !resp.output.is_empty() {
-        state.install.push(Phase::Install, resp.output).await;
-    }
-    if resp.ok {
-        state
-            .install
-            .push(
-                Phase::Done,
-                format!("upgraded {} successfully", packages.join(", ")),
-            )
-            .await;
-    } else {
-        state
-            .install
-            .push(
-                Phase::Error,
-                resp.error
-                    .unwrap_or_else(|| "helper returned ok=false with no error".into()),
-            )
-            .await;
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse { ok: true, .. }) => Ok(StatusCode::ACCEPTED),
+        Ok(HelperResponse { error, .. }) => Err((
+            StatusCode::CONFLICT,
+            error.unwrap_or_else(|| "helper rejected upgrade".into()),
+        )),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}"))),
     }
 }
 
 pub async fn get_updates_status(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let mut rx = state.install.tx.subscribe();
-    let initial = {
-        let guard = state.install.inner.lock().await;
-        guard.clone()
-    };
-
     let stream = async_stream::stream! {
-        if let Some(active) = &initial {
-            for line in &active.log {
-                if let Ok(event) = Event::default().json_data(line) {
-                    yield Ok::<_, Infallible>(event);
+        let mut since: u64 = 0;
+        let mut seq: u64 = 0;
+        let socket = state.helper_socket.clone();
+
+        loop {
+            let cmd = HelperCommand::OpkgUpgradeStatus { since };
+            let status = match bananas_helper::call(&socket, &cmd).await {
+                Ok(HelperResponse { ok: true, output, .. }) => {
+                    match serde_json::from_str::<UpgradeStatus>(&output) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            yield emit(&mut seq, "error", format!("malformed helper status: {e}"));
+                            yield close_event("error");
+                            break;
+                        }
+                    }
                 }
+                Ok(HelperResponse { error, .. }) => {
+                    // Likely transient: helper is restarting too. Keep
+                    // polling — the webadmin's higher-level retry
+                    // bound covers the case where it never comes back.
+                    yield keepalive_comment();
+                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+                    let _ = error;
+                    continue;
+                }
+                Err(e) => {
+                    yield keepalive_comment();
+                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+                    tracing::debug!(?e, "helper unreachable during status poll, retrying");
+                    continue;
+                }
+            };
+
+            since = status.log_offset;
+
+            for line in status.log.lines() {
+                if line.is_empty() {
+                    continue;
+                }
+                if line.starts_with("[bananas-opkg-exit=") {
+                    // Sentinel from the wrapper script — don't surface to the UI.
+                    continue;
+                }
+                yield emit(&mut seq, "install", line.to_string());
             }
-            if active.finished {
-                let close = Event::default().event("close").data(
-                    if active.ok == Some(true) { "ok" } else { "error" }
-                );
-                yield Ok(close);
-                return;
-            }
-        }
-        while let Ok(line) = rx.recv().await {
-            let final_event = matches!(line.phase, Phase::Done | Phase::Error);
-            if let Ok(event) = Event::default().json_data(&line) {
-                yield Ok(event);
-            }
-            if final_event {
-                let close = Event::default().event("close").data(
-                    if matches!(line.phase, Phase::Done) { "ok" } else { "error" }
-                );
-                yield Ok(close);
-                break;
+
+            match status.state.as_str() {
+                "done" => {
+                    yield emit(&mut seq, "done", "Upgrade complete.".to_string());
+                    yield close_event("ok");
+                    break;
+                }
+                "failed" => {
+                    let detail = status
+                        .exit_code
+                        .map(|c| format!("opkg exited {c}"))
+                        .unwrap_or_else(|| "opkg failed".to_string());
+                    yield emit(&mut seq, "error", detail);
+                    yield close_event("error");
+                    break;
+                }
+                "idle" => {
+                    yield emit(&mut seq, "error", "no upgrade in progress".to_string());
+                    yield close_event("error");
+                    break;
+                }
+                _ => {
+                    // "active" — keep polling for new log content
+                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+                }
             }
         }
     };
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+fn emit(seq: &mut u64, phase: &'static str, text: String) -> Result<Event, Infallible> {
+    let line = LogLine {
+        seq: *seq,
+        phase,
+        text,
+    };
+    *seq += 1;
+    Ok(Event::default()
+        .json_data(&line)
+        .unwrap_or_else(|_| Event::default()))
+}
+
+fn close_event(payload: &'static str) -> Result<Event, Infallible> {
+    Ok(Event::default().event("close").data(payload))
+}
+
+fn keepalive_comment() -> Result<Event, Infallible> {
+    // SSE comment line — keeps the connection warm without delivering
+    // a message to onmessage. Fine for opaque retry windows.
+    Ok(Event::default().comment("retry"))
 }
 
 // ─── helpers ────────────────────────────────────────────────────────

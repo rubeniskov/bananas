@@ -253,6 +253,13 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
+        Command::OpkgUpgradeStatus { since } => match opkg::upgrade_status(since).await {
+            Ok(status) => match serde_json::to_string(&status) {
+                Ok(json) => Response::ok(json),
+                Err(e) => Response::err(format!("serializing upgrade-status: {e}"), String::new()),
+            },
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
         Command::Authenticate { username, password } => {
             // Generic failure message — same string for missing user, locked
             // account, and wrong password. Avoids confirming which usernames

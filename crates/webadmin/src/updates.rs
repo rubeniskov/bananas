@@ -190,7 +190,6 @@ fn InstallModal(props: InstallModalProps) -> Element {
     let mut started: Signal<bool> = use_signal(|| false);
 
     let packages = props.packages.clone();
-    let title_packages = packages.join(", ");
 
     use_effect(move || {
         if started() {
@@ -219,7 +218,7 @@ fn InstallModal(props: InstallModalProps) -> Element {
         div { class: "modal-overlay",
             div { class: "modal install-modal",
                 div { class: "modal-header",
-                    strong { "Upgrading {title_packages}" }
+                    strong { "Upgrading…" }
                     button {
                         class: "ghost",
                         r#type: "button",
@@ -287,9 +286,13 @@ fn InstallModal(props: InstallModalProps) -> Element {
 }
 
 /// Open an EventSource subscription against /api/updates/status and
-/// route incoming events into the log signals. ES is leaked
-/// intentionally — closed via the message handler when the helper
-/// sends the final phase=done|error event.
+/// route incoming events into the log signals. The browser handles
+/// reconnect automatically (~3 s default backoff); the server's SSE
+/// handler always re-streams the full log from byte offset 0 on
+/// reconnect, so we clear the log on each `open` to avoid duplicates
+/// after a server restart mid-upgrade. Only transitions to a terminal
+/// state (`finished = Some(_)`) when the helper signals done/error
+/// OR the EventSource transitions to CLOSED (permanent failure).
 fn open_event_source(
     mut log: Signal<Vec<LogLine>>,
     mut finished: Signal<Option<bool>>,
@@ -303,6 +306,21 @@ fn open_event_source(
             return;
         }
     };
+
+    // `open` fires on initial connect AND on every successful
+    // auto-reconnect. Clearing the log here keeps the modal in sync
+    // with the server's resumed stream (which starts again at
+    // since=0). Also clears any "reconnecting…" banner.
+    let mut log_open = log;
+    let mut error_open = error;
+    let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |_evt: web_sys::Event| {
+        log_open.set(Vec::new());
+        if error_open.peek().is_some() {
+            error_open.set(None);
+        }
+    });
+    es.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+    on_open.forget();
 
     let es_clone_msg = es.clone();
     let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |evt: MessageEvent| {
@@ -333,10 +351,24 @@ fn open_event_source(
         .ok();
     on_close.forget();
 
+    // EventSource readyState constants: 0=CONNECTING, 1=OPEN, 2=CLOSED.
+    // Browsers fire onerror for every transport hiccup and immediately
+    // start auto-reconnecting (state goes back to CONNECTING). We only
+    // surface a hard failure once the browser itself has given up
+    // (state=CLOSED) — typically only on a 4xx response or a closed
+    // server socket the browser refuses to retry.
+    let es_state = es.clone();
     let on_error = Closure::<dyn FnMut(web_sys::Event)>::new(move |_evt: web_sys::Event| {
-        if finished.peek().is_none() {
+        if finished.peek().is_some() {
+            return;
+        }
+        if es_state.ready_state() == EventSource::CLOSED {
             error.set(Some("connection lost".into()));
             finished.set(Some(false));
+        } else {
+            // Browser is reconnecting. Show a soft notice so the user
+            // knows the upgrade is still in flight; cleared by `open`.
+            error.set(Some("reconnecting…".into()));
         }
     });
     es.set_onerror(Some(on_error.as_ref().unchecked_ref()));

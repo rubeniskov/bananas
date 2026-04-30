@@ -55,7 +55,6 @@ pub struct AppState {
     pub live_bus: stats_ws::LiveBus,
     pub jobs: cloud_jobs::JobManager,
     pub storage_cache: storage::StorageCache,
-    pub install: updates::InstallState,
 }
 
 #[tokio::main]
@@ -110,7 +109,6 @@ async fn main() -> Result<()> {
         live_bus,
         jobs,
         storage_cache: storage::StorageCache::new(),
-        install: updates::InstallState::new(),
     };
 
     // First-boot geoip → timezone (best-effort, non-blocking, non-fatal).
@@ -120,21 +118,19 @@ async fn main() -> Result<()> {
     let ui_dir: PathBuf = std::env::var_os("BANANAS_WEBADMIN_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/usr/share/bananas/webadmin".into());
-    let index_html_path = ui_dir.join("index.html");
+    let index_html_path = Arc::new(ui_dir.join("index.html"));
 
-    // Preload index.html. The SPA fallback handler returns this verbatim so
-    // any client-side route resolves on full-page reload. ServeDir's
-    // `not_found_service` does not work cleanly for this: tower_http 0.6's
-    // ServeFile resolves against the request URI, not its configured path,
-    // so it 404s on deep routes.
-    let index_html = std::fs::read_to_string(&index_html_path).unwrap_or_else(|e| {
+    // Sanity-check at startup so we surface a missing file immediately
+    // (without the warning, the SPA would just 404 silently on the
+    // first page load). The actual read happens per request inside the
+    // fallback handler — see below.
+    if let Err(e) = std::fs::metadata(&*index_html_path) {
         tracing::warn!(
             path = %index_html_path.display(),
             error = %e,
-            "could not read UI index.html — SPA fallback will return an empty body"
+            "UI index.html is not readable at startup — SPA fallback will 500 until it appears"
         );
-        String::new()
-    });
+    }
 
     // Public endpoints (login + healthz) and auth-required endpoints share
     // the same /api router. The middleware below permits the public ones
@@ -234,13 +230,30 @@ async fn main() -> Result<()> {
                 ))
                 .service(assets),
         )
+        // Read index.html per request so a `bananas-webadmin` IPK
+        // upgrade is picked up without restarting bananas-server. The
+        // file is small (<1 KB after dx bundle) and the fallback is
+        // hit only on full-page loads / unmatched routes — never on
+        // hashed assets, which ServeDir handles directly. Still much
+        // cheaper than the cost of restarting the server.
         .fallback(get(move || {
-            let html = index_html.clone();
+            let path = index_html_path.clone();
             async move {
-                (
-                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                    Html(html),
-                )
+                match tokio::fs::read_to_string(&*path).await {
+                    Ok(html) => (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        Html(html),
+                    ),
+                    Err(e) => {
+                        tracing::warn!(path = %path.display(), error = %e, "SPA fallback read failed");
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                            Html(String::from("UI bundle missing on disk")),
+                        )
+                    }
+                }
             }
         }))
         .layer(TraceLayer::new_for_http());

@@ -1,24 +1,30 @@
-//! opkg shell-out + parser. Replaces the custom in-place update flow
-//! with thin wrappers around the package manager that's already on
-//! the image.
+//! opkg shell-out + parser. Wraps the package manager that ships with
+//! the image with two distinct call shapes:
 //!
-//! All four commands (`update`, `list-upgradable`, `list-installed`,
-//! `upgrade`) call out to `/usr/bin/opkg` (overridable via the
-//! `BANANAS_OPKG_BIN` env var for tests) and capture combined
-//! stdout+stderr. `list-*` parse opkg's `name - version[ - candidate]`
-//! output into structured JSON; the others return raw text.
+//! * Synchronous (`update`, `list-upgradable`, `list-installed`) — the
+//!   helper waits for the child, captures stdout+stderr, returns text.
+//! * Asynchronous (`upgrade`, `upgrade_status`) — the helper spawns
+//!   opkg as a transient systemd unit detached from its own cgroup,
+//!   then returns immediately. Status / log delta is queried via a
+//!   separate command.
+//!
+//! Why the asynchronous shape for `upgrade`: opkg's own postinst on
+//! `bananas-server.ipk` runs `systemctl restart bananas-server
+//! bananas-helper`. systemd's default `KillMode=control-group` would
+//! tear down every PID in the helper's cgroup — including the opkg
+//! child the helper just spawned — leaving the system half-upgraded.
+//! Running opkg inside its own transient `.service` unit (via
+//! `systemd-run`) means it lives in an independent cgroup and rides
+//! out helper's restart unaffected. Output goes to a log file the
+//! webadmin SSE handler tails through `OpkgUpgradeStatus` so the user
+//! still gets progress even after the server restarts.
 //!
 //! Package names supplied to `upgrade` are validated against
 //! `[a-z][a-z0-9-]*` before they ever reach argv. opkg itself would
 //! reject malformed names, but pre-validating keeps the helper's
 //! audit trail honest about what's being executed as root.
-//!
-//! Streaming progress (per-line SSE during a long upgrade) is *not*
-//! implemented here — opkg runs are <60s for our package set, and
-//! the existing helper IPC is single-shot. If progress UX becomes a
-//! priority the protocol can grow a streaming variant; for v1, the
-//! single-shot collect is the right shape.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
@@ -38,13 +44,54 @@ pub struct InstalledPackage {
     pub version: String,
 }
 
+/// Snapshot of the in-flight (or just-finished) opkg upgrade. Returned
+/// from `upgrade_status` and forwarded to the webadmin's SSE handler.
+#[derive(Debug, Serialize)]
+pub struct UpgradeStatus {
+    /// One of: `idle` (nothing has ever run), `active` (running), `done`
+    /// (finished with exit 0), `failed` (finished with non-zero).
+    pub state: String,
+    /// Log delta — bytes from `since` to current EOF. May be empty when
+    /// the caller is already caught up.
+    pub log: String,
+    /// Current log size in bytes. Pass back as `since` next call.
+    pub log_offset: u64,
+    /// Set once the exit marker is present in the log.
+    pub exit_code: Option<i32>,
+}
+
+/// Transient systemd unit name. Reused across runs (we `reset-failed`
+/// before each launch). `--collect` GCs it once finished.
+const OPKG_UNIT: &str = "bananas-opkg-upgrade.service";
+/// Log file. Written by the transient unit's StandardOutput=append:
+/// directive (which the unit runs as root, so /var/lib/bananas-helper
+/// is fine). Helper's `upgrade_status` reads it back.
+const OPKG_LOG_DEFAULT: &str = "/var/lib/bananas-helper/opkg.log";
+/// Sentinel line appended after opkg exits so `upgrade_status` can
+/// distinguish "still running" from "done with exit code N".
+const OPKG_EXIT_MARKER_PREFIX: &str = "[bananas-opkg-exit=";
+
 fn opkg_bin() -> String {
     std::env::var("BANANAS_OPKG_BIN").unwrap_or_else(|_| "/usr/bin/opkg".into())
 }
 
+fn systemd_run_bin() -> String {
+    std::env::var("BANANAS_SYSTEMD_RUN_BIN").unwrap_or_else(|_| "/usr/bin/systemd-run".into())
+}
+
+fn systemctl_bin() -> String {
+    std::env::var("BANANAS_SYSTEMCTL_BIN").unwrap_or_else(|_| "/usr/bin/systemctl".into())
+}
+
+fn opkg_log_path() -> PathBuf {
+    std::env::var("BANANAS_OPKG_LOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(OPKG_LOG_DEFAULT))
+}
+
 /// `opkg update` — refresh feed indices from /etc/opkg/customfeeds.conf.
 pub async fn update() -> Result<String> {
-    run(&["update"]).await
+    run_sync(&["update"]).await
 }
 
 /// `opkg list-upgradable` parsed into structured rows.
@@ -54,17 +101,21 @@ pub async fn update() -> Result<String> {
 /// (separated by " - "). Malformed lines are skipped silently — the
 /// helper response stays usable even if opkg ever changes its format.
 pub async fn list_upgradable() -> Result<Vec<UpgradablePackage>> {
-    let raw = run(&["list-upgradable"]).await?;
+    let raw = run_sync(&["list-upgradable"]).await?;
     Ok(parse_list_upgradable(&raw))
 }
 
 /// `opkg list-installed` parsed into `{name, version}` rows.
 pub async fn list_installed() -> Result<Vec<InstalledPackage>> {
-    let raw = run(&["list-installed"]).await?;
+    let raw = run_sync(&["list-installed"]).await?;
     Ok(parse_list_installed(&raw))
 }
 
-/// `opkg upgrade <packages...>`. Validates each name before exec.
+/// Spawn `opkg upgrade <packages...>` in a transient systemd unit. The
+/// helper returns immediately once the unit is queued — actual progress
+/// is observed via `upgrade_status`.
+///
+/// Refuses to start if a previous run is still active (no exit marker).
 pub async fn upgrade(packages: &[String]) -> Result<String> {
     if packages.is_empty() {
         bail!("opkg upgrade: no packages specified");
@@ -72,14 +123,124 @@ pub async fn upgrade(packages: &[String]) -> Result<String> {
     for p in packages {
         validate_package_name(p)?;
     }
-    let mut args: Vec<&str> = vec!["upgrade"];
-    args.extend(packages.iter().map(|s| s.as_str()));
-    run(&args).await
+
+    let prior = upgrade_status(0).await.ok();
+    if matches!(prior.as_ref().map(|s| s.state.as_str()), Some("active")) {
+        bail!("an opkg upgrade is already in flight");
+    }
+
+    // Failed unit names linger in systemd's bookkeeping; resetting lets
+    // us reuse the same unit name on the next launch.
+    let _ = TokioCommand::new(systemctl_bin())
+        .args(["reset-failed", OPKG_UNIT])
+        .output()
+        .await;
+
+    let log_path = opkg_log_path();
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).context("creating opkg log dir")?;
+    }
+    std::fs::write(&log_path, b"").context("truncating opkg log")?;
+
+    let opkg_bin = opkg_bin();
+    let pkgs_quoted: Vec<String> = packages.iter().map(|p| shell_quote(p)).collect();
+    // Print the exit marker after opkg exits so upgrade_status() can
+    // tell finished from in-flight without polling systemd. Newline-
+    // terminated; matched on a line-by-line basis.
+    let wrapped = format!(
+        "{} upgrade {}; rc=$?; printf '\\n[bananas-opkg-exit=%d]\\n' \"$rc\"",
+        opkg_bin,
+        pkgs_quoted.join(" ")
+    );
+
+    let log_arg = log_path.display().to_string();
+    let status = TokioCommand::new(systemd_run_bin())
+        .args([
+            "--unit",
+            OPKG_UNIT,
+            "--collect",
+            "--no-block",
+            "--quiet",
+            "--property=Type=oneshot",
+            &format!("--property=StandardOutput=append:{log_arg}"),
+            &format!("--property=StandardError=append:{log_arg}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            &wrapped,
+        ])
+        .status()
+        .await
+        .context("spawning systemd-run")?;
+
+    if !status.success() {
+        bail!("systemd-run exited with status {status}");
+    }
+
+    Ok(format!(
+        "started opkg upgrade in transient unit {OPKG_UNIT}"
+    ))
+}
+
+/// Read the upgrade log from byte offset `since` onward and report
+/// whether the run is still active, finished, or never started. Cheap
+/// (one read of a small file); safe to poll at SSE pace from the
+/// server side.
+pub async fn upgrade_status(since: u64) -> Result<UpgradeStatus> {
+    let log_path = opkg_log_path();
+    let buf = match tokio::fs::read(&log_path).await {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UpgradeStatus {
+                state: "idle".to_string(),
+                log: String::new(),
+                log_offset: 0,
+                exit_code: None,
+            });
+        }
+        Err(e) => return Err(anyhow::Error::new(e).context("reading opkg log")),
+    };
+
+    let total_len = buf.len() as u64;
+    let delta = if since >= total_len {
+        &[][..]
+    } else {
+        &buf[since as usize..]
+    };
+    let log = String::from_utf8_lossy(delta).into_owned();
+    let full = String::from_utf8_lossy(&buf);
+
+    let mut exit_code: Option<i32> = None;
+    for line in full.lines().rev() {
+        if let Some(rest) = line.strip_prefix(OPKG_EXIT_MARKER_PREFIX) {
+            if let Some(num_str) = rest.strip_suffix(']') {
+                if let Ok(n) = num_str.parse::<i32>() {
+                    exit_code = Some(n);
+                    break;
+                }
+            }
+        }
+    }
+
+    let state = match exit_code {
+        Some(0) => "done",
+        Some(_) => "failed",
+        None if total_len > 0 => "active",
+        None => "idle",
+    };
+
+    Ok(UpgradeStatus {
+        state: state.to_string(),
+        log,
+        log_offset: total_len,
+        exit_code,
+    })
 }
 
 /// Spawn opkg with the given args, capture combined stdout+stderr,
-/// fail on non-zero exit. Output goes back via Response::output.
-async fn run(args: &[&str]) -> Result<String> {
+/// fail on non-zero exit. Used by `update` / `list-*`. NOT used by
+/// `upgrade` — that one goes through systemd-run.
+async fn run_sync(args: &[&str]) -> Result<String> {
     let bin = opkg_bin();
     let out = TokioCommand::new(&bin)
         .args(args)
@@ -119,6 +280,14 @@ fn validate_package_name(name: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn shell_quote(s: &str) -> String {
+    // validate_package_name has already rejected anything outside
+    // [a-z][a-z0-9-]* so single-quoting is technically redundant. Kept
+    // as belt-and-braces in case the validator ever loosens.
+    let escaped = s.replace('\'', r"'\''");
+    format!("'{escaped}'")
 }
 
 fn parse_list_upgradable(raw: &str) -> Vec<UpgradablePackage> {
@@ -162,6 +331,28 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// Build a fake opkg shell script that prints `out` to stdout +
+    /// `err` to stderr and exits with `exit_code`. Returns the path
+    /// to the script in a tempdir (caller drops the dir to clean up).
+    fn fake_opkg(out: &str, err: &str, exit_code: i32) -> (tempfile::TempDir, std::path::PathBuf) {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("opkg");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s' '{}'\nprintf '%s' '{}' >&2\nexit {}\n",
+            out.replace('\'', "'\\''"),
+            err.replace('\'', "'\\''"),
+            exit_code
+        );
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(script.as_bytes()).unwrap();
+        drop(f);
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        (td, path)
+    }
+
     #[test]
     fn parses_list_upgradable() {
         let raw = "bananas-server - 1.0.0 - 1.1.0\n\
@@ -190,39 +381,16 @@ mod tests {
     #[test]
     fn rejects_bogus_package_names() {
         assert!(validate_package_name("").is_err());
-        assert!(validate_package_name("Bananas-Server").is_err()); // uppercase
+        assert!(validate_package_name("Bananas-Server").is_err());
         assert!(validate_package_name("../etc/passwd").is_err());
-        assert!(validate_package_name("1stpackage").is_err()); // starts with digit
-        assert!(validate_package_name("foo bar").is_err()); // space
-        assert!(validate_package_name("foo;rm -rf").is_err()); // shell chars
+        assert!(validate_package_name("1stpackage").is_err());
+        assert!(validate_package_name("foo bar").is_err());
+        assert!(validate_package_name("foo;rm -rf").is_err());
 
-        // happy path
         validate_package_name("bananas-server").unwrap();
         validate_package_name("a").unwrap();
         validate_package_name("a1").unwrap();
         validate_package_name("foo-bar-123").unwrap();
-    }
-
-    /// Build a fake opkg shell script that prints `out` to stdout +
-    /// `err` to stderr and exits with `exit_code`. Returns the path
-    /// to the script in a tempdir (caller drops the dir to clean up).
-    fn fake_opkg(out: &str, err: &str, exit_code: i32) -> (tempfile::TempDir, std::path::PathBuf) {
-        let td = tempfile::tempdir().unwrap();
-        let path = td.path().join("opkg");
-        let script = format!(
-            "#!/bin/sh\nprintf '%s' '{}'\nprintf '%s' '{}' >&2\nexit {}\n",
-            out.replace('\'', "'\\''"),
-            err.replace('\'', "'\\''"),
-            exit_code
-        );
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(script.as_bytes()).unwrap();
-        drop(f);
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).unwrap();
-        (td, path)
     }
 
     #[tokio::test]
@@ -243,45 +411,6 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(opkg_env)]
-    async fn upgrade_propagates_failure() {
-        let (_td, path) = fake_opkg("", "Cannot satisfy dependencies\n", 1);
-        unsafe {
-            std::env::set_var("BANANAS_OPKG_BIN", &path);
-        }
-        let result = upgrade(&["bananas-stats".to_string()]).await;
-        assert!(result.is_err());
-        let err = format!("{:#}", result.unwrap_err());
-        assert!(err.contains("Cannot satisfy"), "got: {err}");
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(opkg_env)]
-    async fn upgrade_rejects_invalid_package_name_before_exec() {
-        // No fake opkg installed — validation must short-circuit
-        // before any spawn attempt.
-        unsafe {
-            std::env::set_var("BANANAS_OPKG_BIN", "/nonexistent/opkg");
-        }
-        // Path-traversal: starts with `.`, fails the "must start with
-        // a lowercase letter" check.
-        let result = upgrade(&["../etc/passwd".to_string()]).await;
-        assert!(result.is_err());
-        let err = format!("{:#}", result.unwrap_err());
-        assert!(
-            err.contains("must start with a lowercase letter"),
-            "got: {err}"
-        );
-
-        // Embedded shell metachar: passes the leading-letter check,
-        // fails on the per-character validator.
-        let result = upgrade(&["foo;rm-rf".to_string()]).await;
-        assert!(result.is_err());
-        let err = format!("{:#}", result.unwrap_err());
-        assert!(err.contains("invalid character"), "got: {err}");
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(opkg_env)]
     async fn list_upgradable_parses_stdout() {
         let (_td, path) = fake_opkg(
             "bananas-stats - 1.0.0 - 1.1.0\nbananas-config - 1.0.0 - 1.1.0\n",
@@ -295,5 +424,86 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "bananas-stats");
         assert_eq!(rows[1].candidate, "1.1.0");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(opkg_log)]
+    async fn upgrade_status_idle_when_log_missing() {
+        let td = tempfile::tempdir().unwrap();
+        let log = td.path().join("nope.log");
+        unsafe {
+            std::env::set_var("BANANAS_OPKG_LOG", &log);
+        }
+        let s = upgrade_status(0).await.unwrap();
+        assert_eq!(s.state, "idle");
+        assert_eq!(s.log_offset, 0);
+        assert!(s.exit_code.is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(opkg_log)]
+    async fn upgrade_status_active_while_running() {
+        let td = tempfile::tempdir().unwrap();
+        let log = td.path().join("opkg.log");
+        std::fs::write(&log, b"Downloading bananas-server.ipk\n").unwrap();
+        unsafe {
+            std::env::set_var("BANANAS_OPKG_LOG", &log);
+        }
+        let s = upgrade_status(0).await.unwrap();
+        assert_eq!(s.state, "active");
+        assert!(s.exit_code.is_none());
+        assert!(s.log.contains("Downloading"));
+        assert!(s.log_offset > 0);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(opkg_log)]
+    async fn upgrade_status_done_when_exit_marker_zero() {
+        let td = tempfile::tempdir().unwrap();
+        let log = td.path().join("opkg.log");
+        std::fs::write(&log, b"Configuring bananas-stats.\n[bananas-opkg-exit=0]\n").unwrap();
+        unsafe {
+            std::env::set_var("BANANAS_OPKG_LOG", &log);
+        }
+        let s = upgrade_status(0).await.unwrap();
+        assert_eq!(s.state, "done");
+        assert_eq!(s.exit_code, Some(0));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(opkg_log)]
+    async fn upgrade_status_failed_when_exit_marker_nonzero() {
+        let td = tempfile::tempdir().unwrap();
+        let log = td.path().join("opkg.log");
+        std::fs::write(&log, b"Cannot satisfy dependency.\n[bananas-opkg-exit=1]\n").unwrap();
+        unsafe {
+            std::env::set_var("BANANAS_OPKG_LOG", &log);
+        }
+        let s = upgrade_status(0).await.unwrap();
+        assert_eq!(s.state, "failed");
+        assert_eq!(s.exit_code, Some(1));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(opkg_log)]
+    async fn upgrade_status_returns_delta_from_since() {
+        let td = tempfile::tempdir().unwrap();
+        let log = td.path().join("opkg.log");
+        let body = b"line one\nline two\nline three\n";
+        std::fs::write(&log, body).unwrap();
+        unsafe {
+            std::env::set_var("BANANAS_OPKG_LOG", &log);
+        }
+        let s1 = upgrade_status(0).await.unwrap();
+        assert_eq!(s1.log_offset, body.len() as u64);
+        assert_eq!(s1.log, "line one\nline two\nline three\n");
+
+        let s2 = upgrade_status(s1.log_offset).await.unwrap();
+        assert_eq!(s2.log, "");
+        assert_eq!(s2.log_offset, body.len() as u64);
+
+        let mid = "line one\n".len() as u64;
+        let s3 = upgrade_status(mid).await.unwrap();
+        assert_eq!(s3.log, "line two\nline three\n");
     }
 }
