@@ -12,8 +12,11 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 # opkg's metadata honest on inspection.
 require recipes-bsp/bananas-version.inc
 
-# Pure config — no per-machine variation, lands in feed/latest/all/.
-PACKAGE_ARCH = "all"
+# Pure config — no per-machine variation. `inherit allarch` is the
+# canonical way to declare this; setting PACKAGE_ARCH = "all" alone
+# breaks the image's rootfs-time manifest lookup (it searches
+# `allarch`, not `all`).
+inherit allarch
 
 SRC_URI = "file://customfeeds.conf"
 S = "${WORKDIR}"

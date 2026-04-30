@@ -18,11 +18,12 @@ SRC_URI = "file://bananas-webadmin.tar.gz"
 
 S = "${WORKDIR}"
 
-# Pure wasm + static assets — architecture-independent. Marking PN as
-# `all` lets the same .ipk install on any machine and sit in the
-# `feed/latest/all/` slice of the opkg feed (avoids duplicating it
-# under each machine arch).
-PACKAGE_ARCH = "all"
+# Pure wasm + static assets — architecture-independent. `inherit
+# allarch` is the canonical way to declare this; just setting
+# PACKAGE_ARCH = "all" produces an .ipk file but the rootfs-time
+# manifest lookup uses `allarch` as the search key, so the image
+# can't find the package and bails with "sstate manifest not found".
+inherit allarch
 
 do_compile[noexec] = "1"
 do_configure[noexec] = "1"

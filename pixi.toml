@@ -273,7 +273,12 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # power-cycle. 30 s timeout is conservative — proceeds anyway if the board
 # refuses to power down (e.g., already off).
 [tasks.wait-board-down]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; echo waiting for $host to power down...; for i in $(seq 1 30); do ping -c 1 -W 1 \"$host\" > /dev/null 2>&1 || { echo $host is down; exit 0; }; sleep 1; done; echo \"ERROR: $host did not go down within 30s — likely the ssh-reboot did not fire (board already wedged). Hard power-cycle the board, then re-run pixi run iterate.\" >&2; exit 1'"
+# 120s timeout: NFS-server's stop-job in systemd has DefaultTimeoutStopSec=
+# ~90s, and it's the long pole on shutdown when there are active client
+# mounts (the iterate host is one of those clients). 30s was too short
+# and routinely aborted iterate just before extract-rootfs would have
+# run, leaving the next iterate to swap libs under the running BPI.
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; echo waiting for $host to power down...; for i in $(seq 1 120); do ping -c 1 -W 1 \"$host\" > /dev/null 2>&1 || { echo $host is down; exit 0; }; sleep 1; done; echo \"ERROR: $host did not go down within 120s — likely the ssh-reboot did not fire (board already wedged). Hard power-cycle the board, then re-run pixi run iterate.\" >&2; exit 1'"
 
 # `iterate`: build → restage TFTP → reboot board → wait for it to drop off the
 # net → extract rootfs (now safe, NFS share is idle) → bring containers up.
