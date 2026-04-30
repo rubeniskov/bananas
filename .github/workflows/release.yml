@@ -254,32 +254,27 @@ jobs:
           du -h --max-depth=2 / 2>/dev/null | sort -hr | head -25 || true
           echo "::endgroup::"
 
-      # ─── Stage tarballs for semantic-release to upload ────────────
+      # ─── Stage the SD-card image for semantic-release to upload ──
+      # In-place updates flow through the opkg feed (gh-pages branch)
+      # now, so the only release-page asset is the full SD-card image
+      # for fresh-flash bootstrap. Per-component tarballs +
+      # SHA256SUMS are gone — opkg's Packages index has its own
+      # checksums and the gh-pages workflow below mirrors the IPKs.
       - name: Pack artifacts
         run: |
           set -e
           mkdir -p dist
-          tar -C serve/bin -czf dist/bananas-server-armv7.tar.gz bananas-server bananas-helper
-          tar -C serve/bin -czf dist/bananas-stats-armv7.tar.gz bananas-stats
-          tar -C serve/bin -czf dist/bananas-dashboard-armv7.tar.gz bananas-dashboard
-          tar -C serve/bin -czf dist/bananas-config-armv7.tar.gz bananas-config
-          cp serve/bin/bananas-webadmin.tar.gz dist/bananas-webadmin.tar.gz
-          # Wrap the .wic in tar.gz so every release asset uses the same
-          # compression format. Yocto's stable symlink is *.rootfs.wic;
-          # `-h` dereferences it so the tarball gets the actual data, and
-          # `--transform` strips the `.rootfs` infix so the extracted file
-          # has a clean dd-friendly name. Operator workflow on the
-          # receiving side:
+          # Wrap the .wic in tar.gz for download convenience. Yocto's
+          # stable symlink is *.rootfs.wic; `-h` dereferences it so the
+          # tarball carries the actual data, and `--transform` strips
+          # the `.rootfs` infix so the extracted file has a clean
+          # dd-friendly name. Operator workflow on the receiving side:
           #   tar -xzf bananas-image-armv7.tar.gz
           #   sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
           tar -czhf dist/bananas-image-armv7.tar.gz \
               --transform 's,^bananas-image-bananapro.rootfs.wic$,bananas-image-bananapro.wic,' \
               -C build/tmp/deploy/images/bananapro \
               bananas-image-bananapro.rootfs.wic
-          # SHA-256 checksums shipped as a sibling asset. The in-place
-          # update path (web UI / bananas-config) verifies the downloaded
-          # tarball against this file before letting the helper install it.
-          ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
           ls -la dist/
 
       # ─── opkg feed publishing ─────────────────────────────────────

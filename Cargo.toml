@@ -59,13 +59,7 @@ base64 = "0.22"
 rand = "0.9"
 libc = "0.2"
 toml = "1"
-# In-place update plumbing: extract release tarballs in the helper, verify
-# their sha256 against the SHA256SUMS asset before swap-in.
-flate2 = "1.1"
-tar = "0.4"
-# Server-side: fetch GitHub releases JSON + stream tarball downloads to
-# the staging dir. rustls-tls keeps us off OpenSSL on armv7.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# Server-side SSE streaming for the opkg upgrade progress endpoint.
 futures-util = { version = "0.3", default-features = false }
 async-stream = "0.3"
 # Stats / dashboard deps
