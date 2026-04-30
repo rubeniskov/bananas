@@ -2,6 +2,38 @@
 
 All notable changes to BanaNAS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and entries are derived from [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.3.0](https://github.com/rubeniskov/bananas/compare/v1.2.0...v1.3.0) (2026-04-30)
+
+
+### 🚀 Features
+
+* **config:** rewire bananas-config update + status to opkg ([cc6aec8](https://github.com/rubeniskov/bananas/commit/cc6aec810392865c12c49b054903063a98cd50c2))
+* **helper:** add opkg shell-out commands (additive, alongside InstallUpdate) ([ccf7b20](https://github.com/rubeniskov/bananas/commit/ccf7b20b34c7aadfd35f485d10ec949b164c782b))
+* **server:** repoint /api/updates/* + /api/version at the helper opkg cmds ([924d900](https://github.com/rubeniskov/bananas/commit/924d9002d790e9c08c39f7ece89e4b6d5636e35e))
+* **webadmin:** rewrite Updates page as opkg-package table ([e17f9e1](https://github.com/rubeniskov/bananas/commit/e17f9e10d356929cd35c06d3254209c0ee3ce3ae))
+* **yocto:** publish opkg feed to gh-pages + ship customfeeds.conf ([79b4ff3](https://github.com/rubeniskov/bananas/commit/79b4ff3890a340321ddf5e655a2c07f830c885ee))
+* **yocto:** split webadmin SPA into its own bananas-webadmin IPK ([964cb0f](https://github.com/rubeniskov/bananas/commit/964cb0f2c5342f072cedeae3703f5f12596a827d))
+* **yocto:** unify recipe PV via assets/version.txt + bananas-version.inc ([d8ba28a](https://github.com/rubeniskov/bananas/commit/d8ba28a111ba53be8e895c72bbdc1408e8b4efe8))
+
+
+### 🐛 Bug Fixes
+
+* **helper:** ensure /var/lib/bananas/updates dirs at startup ([26c8c46](https://github.com/rubeniskov/bananas/commit/26c8c466f4dd3e88f333d3e976a4b75faacb5ea6))
+* **release:** drop --offline from bump-cargo-version cargo update ([03c3e5e](https://github.com/rubeniskov/bananas/commit/03c3e5ee741a5697c9f043ee5d20dbfb408fba9b))
+* **release:** filter opkg feed to bananas-* runtime IPKs only ([855b74f](https://github.com/rubeniskov/bananas/commit/855b74fac36b1574dc47e0b35aab247382df44a2))
+* **release:** resolve opkg-make-index to absolute path before cd loop ([02f4f26](https://github.com/rubeniskov/bananas/commit/02f4f26f710c7d6887a2089478d9b8ab592d3e27))
+* **release:** use Yocto's opkg-make-index instead of apt's missing pkg ([8c73f27](https://github.com/rubeniskov/bananas/commit/8c73f2793bde29f887784a670735caab715129fb))
+* **yocto:** allarch class + SPDX disable + iterate timeout ([4404a52](https://github.com/rubeniskov/bananas/commit/4404a52874629a843a06619d2c86c241b2177993))
+
+
+### ⚡ Performance
+
+* **ci:** cache ~/.cargo/bin so dx isn't reinstalled every release ([64c1f17](https://github.com/rubeniskov/bananas/commit/64c1f176273e619f342a439f031bc4cb7e588a2a))
+* **ci:** drop the Free disk space step + add post-bake disk check ([1046687](https://github.com/rubeniskov/bananas/commit/1046687832d66be28f66cf5d8045b0a86d151d6d))
+* **ci:** hash Cargo.toml (not Cargo.lock) for cargo cache keys ([cb61afb](https://github.com/rubeniskov/bananas/commit/cb61afbb869ce48244c77c4abe063d8d716d4628))
+* **ci:** use Swatinem/rust-cache for stable Rust caching across releases ([eb1f398](https://github.com/rubeniskov/bananas/commit/eb1f39805a592bf319f7d2b28c6df8e7b96fc576))
+* **webadmin:** drop wasm-opt to -O2 to halve CI build-webadmin time ([6f650a9](https://github.com/rubeniskov/bananas/commit/6f650a9fa63b9f772faf1101e84811c9782b6fed))
+
 ## [1.2.0](https://github.com/rubeniskov/bananas/compare/v1.1.1...v1.2.0) (2026-04-30)
 
 
