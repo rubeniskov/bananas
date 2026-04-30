@@ -479,6 +479,7 @@ name = "bananas-server"
 version = "1.0.1"
 dependencies = [
  "anyhow",
+ "async-stream",
  "axum",
  "bananas-helper",
  "bananas-stats",

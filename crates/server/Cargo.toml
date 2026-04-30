@@ -26,3 +26,4 @@ toml.workspace = true
 bananas-helper.workspace = true
 reqwest.workspace = true
 futures-util.workspace = true
+async-stream.workspace = true

@@ -16,15 +16,23 @@
 
 use std::{
     collections::HashMap,
+    convert::Infallible,
+    path::PathBuf,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Context, Result};
-use axum::{Json, extract::State, http::StatusCode};
-use bananas_helper::Component;
-use serde::Serialize;
-use tokio::sync::Mutex;
+use axum::{
+    Json,
+    extract::State,
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+};
+use bananas_helper::{Command as HelperCommand, Component};
+use futures_util::stream::{Stream, StreamExt};
+use serde::{Deserialize, Serialize};
+use tokio::{io::AsyncWriteExt, sync::Mutex};
 
 use crate::AppState;
 
@@ -60,7 +68,7 @@ pub struct ReleaseSnapshot {
 #[derive(Clone)]
 pub struct UpdatesCache {
     inner: Arc<Mutex<Option<(Instant, ReleaseSnapshot)>>>,
-    client: reqwest::Client,
+    pub(crate) client: reqwest::Client,
 }
 
 impl UpdatesCache {
@@ -273,6 +281,411 @@ async fn build_check(state: &AppState) -> Result<UpdatesCheckResponse> {
 /// surface), reconstruct the canonical URL from `tag_name`.
 fn fallback_asset_url(c: Component, version: &str) -> String {
     format!("{RELEASE_BASE}/download/v{version}/{}", asset_name(c))
+}
+
+// ─── Install + SSE ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    /// Downloading the tarball from GitHub to staging.
+    Download,
+    /// SHA-256 (server-side double-check) before handing off to helper.
+    /// The helper re-verifies anyway — this catches gross corruption
+    /// faster and surfaces it in the SSE stream.
+    Verify,
+    /// Helper is doing the swap + restart.
+    Install,
+    /// Final ok=true line — install succeeded.
+    Done,
+    /// Final ok=false line — install failed.
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LogLine {
+    pub seq: u64,
+    pub phase: Phase,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveInstall {
+    pub id: String,
+    pub component: String,
+    pub version: String,
+    pub started_at: u64,
+    pub finished: bool,
+    pub ok: Option<bool>,
+    pub log: Vec<LogLine>,
+}
+
+#[derive(Clone)]
+pub struct InstallState {
+    inner: Arc<Mutex<Option<ActiveInstall>>>,
+    pub(crate) tx: tokio::sync::broadcast::Sender<LogLine>,
+}
+
+impl InstallState {
+    pub fn new() -> Self {
+        let (tx, _) = tokio::sync::broadcast::channel(256);
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+            tx,
+        }
+    }
+
+    async fn push(&self, phase: Phase, text: impl Into<String>) {
+        let text = text.into();
+        let mut guard = self.inner.lock().await;
+        if let Some(a) = guard.as_mut() {
+            let seq = a.log.len() as u64;
+            let line = LogLine {
+                seq,
+                phase,
+                text: text.clone(),
+            };
+            a.log.push(line.clone());
+            // broadcast errors silently if no subscribers — that's fine.
+            let _ = self.tx.send(line);
+            if matches!(phase, Phase::Done | Phase::Error) {
+                a.finished = true;
+                a.ok = Some(matches!(phase, Phase::Done));
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstallRequest {
+    pub component: Component,
+    pub version: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstallAccepted {
+    pub id: String,
+    pub started_at: u64,
+}
+
+pub async fn post_updates_install(
+    State(state): State<AppState>,
+    Json(req): Json<InstallRequest>,
+) -> Result<(StatusCode, Json<InstallAccepted>), (StatusCode, String)> {
+    // Server + Helper self-update mechanics differ (process can't
+    // restart itself the same way as a sibling unit). Step 7+8 lift
+    // this; until then, fail fast with a clear message instead of
+    // making the operator wait for the helper's "not yet supported"
+    // round-trip.
+    if matches!(req.component, Component::Server | Component::Helper) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "in-place install for `{}` is not yet supported (deferred to v2)",
+                req.component.as_str()
+            ),
+        ));
+    }
+
+    // Fail fast if another install is already in flight. Sequential
+    // installs only — there's no benefit to two at once and the helper
+    // would queue them anyway.
+    {
+        let guard = state.install.inner.lock().await;
+        if let Some(a) = guard.as_ref() {
+            if !a.finished {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!(
+                        "install already in flight: {} {}",
+                        a.component, a.version
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Look up asset url + sha256 from the updates cache (or refresh
+    // if stale). Reject if either is missing for this component.
+    let snap = state.updates.snapshot().await;
+    if let Some(err) = snap.error.as_ref() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("github fetch failed: {err}"),
+        ));
+    }
+    if snap.version != req.version {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "requested {} but latest release is {}",
+                req.version, snap.version
+            ),
+        ));
+    }
+    let asset = asset_name(req.component);
+    let asset_url = match snap.assets.get(asset).cloned() {
+        Some(u) => u,
+        None => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                format!("asset {asset} missing from release v{}", snap.version),
+            ));
+        }
+    };
+    let sha256 = match snap.shas.get(asset).cloned() {
+        Some(s) => s,
+        None => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                format!(
+                    "SHA256SUMS missing entry for {asset} in release v{}",
+                    snap.version
+                ),
+            ));
+        }
+    };
+
+    // Bookkeeping for the SSE stream.
+    let started_at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let id = format!("{}-{}", req.component.as_str(), started_at);
+    let active = ActiveInstall {
+        id: id.clone(),
+        component: req.component.as_str().to_string(),
+        version: req.version.clone(),
+        started_at,
+        finished: false,
+        ok: None,
+        log: Vec::new(),
+    };
+    {
+        let mut guard = state.install.inner.lock().await;
+        *guard = Some(active);
+    }
+
+    // Off we go.
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        run_install(task_state, req.component, &req.version, &asset_url, &sha256).await;
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(InstallAccepted { id, started_at }),
+    ))
+}
+
+async fn run_install(
+    state: AppState,
+    component: Component,
+    version: &str,
+    asset_url: &str,
+    expected_sha256: &str,
+) {
+    let staging_dir: PathBuf = std::env::var_os("BANANAS_UPDATES_STAGING_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/bananas/updates/staging"));
+    if let Err(e) = tokio::fs::create_dir_all(&staging_dir).await {
+        state
+            .install
+            .push(
+                Phase::Error,
+                format!("creating staging dir {}: {e}", staging_dir.display()),
+            )
+            .await;
+        return;
+    }
+    let asset_filename = asset_url.rsplit('/').next().unwrap_or("download.tar.gz");
+    let tarball_path = staging_dir.join(asset_filename);
+
+    state
+        .install
+        .push(
+            Phase::Download,
+            format!("downloading {asset_url} → {}", tarball_path.display()),
+        )
+        .await;
+
+    if let Err(e) = download(&state.updates.client, asset_url, &tarball_path).await {
+        state
+            .install
+            .push(Phase::Error, format!("download failed: {e:#}"))
+            .await;
+        return;
+    }
+
+    state
+        .install
+        .push(
+            Phase::Verify,
+            format!("verifying sha256 ({expected_sha256})"),
+        )
+        .await;
+
+    if let Err(e) = verify_local_sha(&tarball_path, expected_sha256).await {
+        state
+            .install
+            .push(Phase::Error, format!("sha256 mismatch: {e:#}"))
+            .await;
+        return;
+    }
+
+    state
+        .install
+        .push(
+            Phase::Install,
+            format!(
+                "handing off to helper: install {} {} from {}",
+                component.as_str(),
+                version,
+                tarball_path.display()
+            ),
+        )
+        .await;
+
+    let cmd = HelperCommand::InstallUpdate {
+        component,
+        tarball_path: tarball_path.to_string_lossy().to_string(),
+        expected_version: version.to_string(),
+        expected_sha256: expected_sha256.to_string(),
+    };
+    let resp = match bananas_helper::call(&state.helper_socket, &cmd).await {
+        Ok(r) => r,
+        Err(e) => {
+            state
+                .install
+                .push(Phase::Error, format!("helper unreachable: {e:#}"))
+                .await;
+            return;
+        }
+    };
+    // Whatever the helper said, surface it verbatim.
+    if !resp.output.is_empty() {
+        state.install.push(Phase::Install, resp.output).await;
+    }
+    if resp.ok {
+        state.versions.invalidate().await;
+        state
+            .install
+            .push(
+                Phase::Done,
+                format!("installed {} {} successfully", component.as_str(), version),
+            )
+            .await;
+    } else {
+        state
+            .install
+            .push(
+                Phase::Error,
+                resp.error
+                    .unwrap_or_else(|| "helper returned ok=false with no error".into()),
+            )
+            .await;
+    }
+}
+
+async fn download(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<()> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("non-2xx for {url}"))?;
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .with_context(|| format!("creating {}", dest.display()))?;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("reading download chunk")?;
+        file.write_all(&chunk).await.context("writing chunk")?;
+    }
+    file.flush().await.context("flushing tarball")?;
+    Ok(())
+}
+
+async fn verify_local_sha(path: &std::path::Path, expected: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .with_context(|| format!("opening {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .with_context(|| format!("reading {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(anyhow::anyhow!(
+            "expected {expected}, got {actual} for {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+pub async fn get_updates_status(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    // Subscribe BEFORE reading the snapshot so we don't drop lines that
+    // arrive in the gap between the two reads.
+    let mut rx = state.install.tx.subscribe();
+    let initial = {
+        let guard = state.install.inner.lock().await;
+        guard.clone()
+    };
+
+    let stream = async_stream::stream! {
+        // Replay any history from the current install (if any) so a
+        // freshly-connected client sees the full log.
+        if let Some(active) = &initial {
+            for line in &active.log {
+                if let Ok(event) = Event::default().json_data(line) {
+                    yield Ok::<_, Infallible>(event);
+                }
+            }
+            // If we're already finished by the time the client connects,
+            // emit the close event from the initial snapshot and bail.
+            if active.finished {
+                let close = Event::default().event("close").data(
+                    if active.ok == Some(true) { "ok" } else { "error" }
+                );
+                yield Ok(close);
+                return;
+            }
+        }
+        // Forward new lines as they arrive. Stop when we see Done/Error.
+        while let Ok(line) = rx.recv().await {
+            let final_event = matches!(line.phase, Phase::Done | Phase::Error);
+            if let Ok(event) = Event::default().json_data(&line) {
+                yield Ok(event);
+            }
+            if final_event {
+                let close = Event::default().event("close").data(
+                    if matches!(line.phase, Phase::Done) { "ok" } else { "error" }
+                );
+                yield Ok(close);
+                break;
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// Naive semver-less-than comparison sufficient for our X.Y.Z tags.

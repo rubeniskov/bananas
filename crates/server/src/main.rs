@@ -58,6 +58,7 @@ pub struct AppState {
     pub storage_cache: storage::StorageCache,
     pub versions: version::VersionCache,
     pub updates: updates::UpdatesCache,
+    pub install: updates::InstallState,
 }
 
 #[tokio::main]
@@ -114,6 +115,7 @@ async fn main() -> Result<()> {
         storage_cache: storage::StorageCache::new(),
         versions: version::VersionCache::new(),
         updates: updates::UpdatesCache::new(),
+        install: updates::InstallState::new(),
     };
 
     // First-boot geoip → timezone (best-effort, non-blocking, non-fatal).
@@ -200,6 +202,8 @@ async fn main() -> Result<()> {
         .route("/mkdir", post(post_mkdir))
         .route("/version", get(updates::get_version))
         .route("/updates/check", get(updates::get_updates_check))
+        .route("/updates/install", post(updates::post_updates_install))
+        .route("/updates/status", get(updates::get_updates_status))
         .route("/cloud/runs", get(cloud::list_runs))
         .route("/cloud/runs/{job_id}", get(cloud::get_run))
         .route(

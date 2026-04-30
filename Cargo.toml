@@ -66,6 +66,7 @@ tar = "0.4"
 # the staging dir. rustls-tls keeps us off OpenSSL on armv7.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 futures-util = { version = "0.3", default-features = false }
+async-stream = "0.3"
 # Stats / dashboard deps
 rusqlite = { version = "0.39", features = ["bundled"] }
 time = { version = "0.3", features = ["serde", "macros", "formatting", "local-offset"] }
