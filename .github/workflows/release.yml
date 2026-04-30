@@ -217,4 +217,14 @@ jobs:
       - name: semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: semantic-release
+        # Pull commits that landed during the (~25-min) Yocto bake so
+        # semantic-release isn't tripped by "local branch is behind
+        # remote, no release will be published". A sibling run's
+        # `chore(release): X.Y.Z [skip ci]` commit is the typical
+        # offender. The artifacts staged in dist/ are from this run's
+        # checkout, but the release tag covers every commit since the
+        # last tag — same shape semantic-release expects on a quiet
+        # branch.
+        run: |
+          git pull --rebase origin main
+          semantic-release
