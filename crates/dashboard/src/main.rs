@@ -25,6 +25,11 @@ use tokio::net::UnixStream;
 use tokio::sync::watch;
 
 fn main() -> Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Static INFO level — matches the helper. Skip env-filter (and its
     // regex dep) to keep the binary small. journalctl already lets you
     // jump levels via --priority; we don't need RUST_LOG semantics.

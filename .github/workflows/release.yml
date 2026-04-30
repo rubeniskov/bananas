@@ -182,6 +182,10 @@ jobs:
               --transform 's,^bananas-image-bananapro.rootfs.wic$,bananas-image-bananapro.wic,' \
               -C build/tmp/deploy/images/bananapro \
               bananas-image-bananapro.rootfs.wic
+          # SHA-256 checksums shipped as a sibling asset. The in-place
+          # update path (web UI / bananas-config) verifies the downloaded
+          # tarball against this file before letting the helper install it.
+          ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
           ls -la dist/
 
       # ─── Run semantic-release ─────────────────────────────────────
@@ -199,6 +203,7 @@ jobs:
           npm install -g \
             semantic-release@22 \
             @semantic-release/changelog@6 \
+            @semantic-release/exec@6 \
             @semantic-release/git@10 \
             @semantic-release/github@9 \
             @semantic-release/commit-analyzer@11 \

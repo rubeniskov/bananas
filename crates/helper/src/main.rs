@@ -19,6 +19,11 @@ use tokio::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Static INFO level — the helper logs only on errors and admin
     // RPCs. Skip env-filter (and its `regex` dep) to keep the binary
     // small. RUST_LOG=… is intentionally ignored here; if you ever

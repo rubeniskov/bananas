@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-dashboard"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bananas-stats",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-helper"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-server"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-stats"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "nix 0.31.2",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-webadmin"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "console_error_panic_hook",
  "dioxus",
