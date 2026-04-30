@@ -62,6 +62,10 @@ toml = "1"
 # their sha256 against the SHA256SUMS asset before swap-in.
 flate2 = "1.1"
 tar = "0.4"
+# Server-side: fetch GitHub releases JSON + stream tarball downloads to
+# the staging dir. rustls-tls keeps us off OpenSSL on armv7.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+futures-util = { version = "0.3", default-features = false }
 # Stats / dashboard deps
 rusqlite = { version = "0.39", features = ["bundled"] }
 time = { version = "0.3", features = ["serde", "macros", "formatting", "local-offset"] }

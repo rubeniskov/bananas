@@ -41,7 +41,9 @@ mod stats;
 mod stats_ws;
 mod storage;
 mod system;
+mod updates;
 mod users;
+mod version;
 use exports::{Opts, Row, Squash};
 use session::SessionKey;
 
@@ -54,6 +56,8 @@ pub struct AppState {
     pub live_bus: stats_ws::LiveBus,
     pub jobs: cloud_jobs::JobManager,
     pub storage_cache: storage::StorageCache,
+    pub versions: version::VersionCache,
+    pub updates: updates::UpdatesCache,
 }
 
 #[tokio::main]
@@ -108,6 +112,8 @@ async fn main() -> Result<()> {
         live_bus,
         jobs,
         storage_cache: storage::StorageCache::new(),
+        versions: version::VersionCache::new(),
+        updates: updates::UpdatesCache::new(),
     };
 
     // First-boot geoip → timezone (best-effort, non-blocking, non-fatal).
@@ -192,6 +198,8 @@ async fn main() -> Result<()> {
         .route("/cloud/syncs/{idx}/cancel", post(cloud::cancel_sync))
         .route("/system/reboot", post(post_reboot))
         .route("/mkdir", post(post_mkdir))
+        .route("/version", get(updates::get_version))
+        .route("/updates/check", get(updates::get_updates_check))
         .route("/cloud/runs", get(cloud::list_runs))
         .route("/cloud/runs/{job_id}", get(cloud::get_run))
         .route(
