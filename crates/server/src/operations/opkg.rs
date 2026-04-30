@@ -156,6 +156,16 @@ fn spawn_watcher(manager: OperationManager, helper_socket: PathBuf, op_id: u64, 
         let mut consecutive_fail: u32 = 0;
         const MAX_CONSEC_FAIL: u32 = 240; // ~2 min at 500 ms
 
+        // Tolerate transient `idle` for ~5 s after spawn — the helper
+        // seeds the log file before invoking `systemd-run --no-block`,
+        // but if systemd-run is slow to acknowledge (or the seed write
+        // races the watcher's very first poll on a slow disk), state
+        // can still briefly read as idle. Only fail after the
+        // tolerance budget is exhausted; a real desync stays idle
+        // indefinitely.
+        let mut idle_polls: u32 = 0;
+        const MAX_IDLE_POLLS: u32 = 20; // ~10 s at 500 ms
+
         loop {
             let cmd = HelperCommand::OpkgUpgradeStatus { since };
             let status = match bananas_helper::call(&helper_socket, &cmd).await {
@@ -229,20 +239,31 @@ fn spawn_watcher(manager: OperationManager, helper_socket: PathBuf, op_id: u64, 
                     return;
                 }
                 "idle" => {
-                    // Helper says nothing has ever run, but we have a
-                    // Running op? That's a server-helper desync. Fail
-                    // loudly so the UI shows it.
-                    manager
-                        .finish(
-                            op_id,
-                            OperationStatus::Failure,
-                            Some("helper reports no upgrade in progress".into()),
-                        )
-                        .await;
-                    return;
+                    idle_polls += 1;
+                    if idle_polls >= MAX_IDLE_POLLS {
+                        // Sustained idle: real server-helper desync,
+                        // not just a startup race. Fail loudly so the
+                        // UI shows it.
+                        manager
+                            .finish(
+                                op_id,
+                                OperationStatus::Failure,
+                                Some(format!(
+                                    "helper reports no upgrade in progress after {} polls",
+                                    idle_polls
+                                )),
+                            )
+                            .await;
+                        return;
+                    }
+                    tokio::time::sleep(POLL).await;
                 }
                 _ => {
-                    // "active" — keep polling.
+                    // "active" — keep polling. Reset the idle budget
+                    // because we're no longer in the startup-race
+                    // window: any later transition back to idle would
+                    // be a real desync.
+                    idle_polls = 0;
                     tokio::time::sleep(POLL).await;
                 }
             }

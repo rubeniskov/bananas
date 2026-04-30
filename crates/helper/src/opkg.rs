@@ -140,7 +140,25 @@ pub async fn upgrade(packages: &[String]) -> Result<String> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).context("creating opkg log dir")?;
     }
-    std::fs::write(&log_path, b"").context("truncating opkg log")?;
+    // Seed the log with a marker line BEFORE spawning systemd-run.
+    // Without this there's a window between truncate and systemd-run's
+    // child producing its first byte where `upgrade_status()` returns
+    // state="idle" (no exit marker, zero bytes). The server-side
+    // watcher polls every 500 ms and treats sustained idle as a
+    // helper-side desync — it would abort the op with "helper reports
+    // no upgrade in progress" before opkg even gets to its first
+    // download. The seed line keeps the file non-empty from the
+    // moment the helper acks, so state is `active` for the watcher's
+    // very first poll.
+    let initial = format!(
+        "Starting opkg upgrade {}\n",
+        packages
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    std::fs::write(&log_path, initial.as_bytes()).context("seeding opkg log")?;
 
     let opkg_bin = opkg_bin();
     let pkgs_quoted: Vec<String> = packages.iter().map(|p| shell_quote(p)).collect();
