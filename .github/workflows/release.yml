@@ -131,6 +131,9 @@ jobs:
       - name: build-dashboard-arm
         run: pixi run build-dashboard-arm
 
+      - name: build-config-arm
+        run: pixi run build-config-arm
+
       # Download the upstream rclone armv7 prebuilt into serve/bin/. The
       # bananas-rclone.bb recipe pulls from there; without this step the
       # bake fails with "Unable to get checksum for bananas-rclone
@@ -169,6 +172,7 @@ jobs:
           tar -C serve/bin -czf dist/bananas-server-armv7.tar.gz bananas-server bananas-helper
           tar -C serve/bin -czf dist/bananas-stats-armv7.tar.gz bananas-stats
           tar -C serve/bin -czf dist/bananas-dashboard-armv7.tar.gz bananas-dashboard
+          tar -C serve/bin -czf dist/bananas-config-armv7.tar.gz bananas-config
           cp serve/bin/bananas-webadmin.tar.gz dist/bananas-webadmin.tar.gz
           # Wrap the .wic in tar.gz so every release asset uses the same
           # compression format. Yocto's stable symlink is *.rootfs.wic;

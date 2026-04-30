@@ -1,0 +1,35 @@
+[package]
+name = "bananas-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bananas-config"
+path = "src/main.rs"
+
+[dependencies]
+# Wire protocol + helper RPC client. The TUI runs as the bananas group,
+# same socket the server uses.
+bananas-helper.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+toml.workspace = true
+sha2.workspace = true
+# CLI parsing for the non-TUI subcommand mode (status / update / tz /
+# reboot) so the binary is scriptable over SSH.
+clap = { version = "4", features = ["derive"] }
+# TUI primitives + crossterm backend (pure-Rust, works on any tty).
+# 0.30 is the latest as of 2026-04 — earlier 0.29 pins unicode-width=0.2.0
+# which conflicts with slint's transitive 0.2.2 requirement.
+ratatui = "0.30"
+crossterm = "0.29"
+# GitHub fetch for the `update check` / `update install` CLI paths.
+reqwest.workspace = true
+futures-util.workspace = true

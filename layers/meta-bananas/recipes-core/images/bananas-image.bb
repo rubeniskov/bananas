@@ -163,6 +163,7 @@ IMAGE_INSTALL += " \
     i2c-tools \
     bananas-server \
     bananas-stats \
+    bananas-config \
 "
 # bananas-dashboard (Slint LCD UI) and the Mali GPU userspace stack
 # (mesa lima + libegl + libgles2 + libgbm + libdrm + fontconfig + fonts)

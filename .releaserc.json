@@ -59,6 +59,7 @@
           { "path": "dist/bananas-server-armv7.tar.gz", "label": "bananas-server + helper (armv7)" },
           { "path": "dist/bananas-stats-armv7.tar.gz", "label": "bananas-stats (armv7)" },
           { "path": "dist/bananas-dashboard-armv7.tar.gz", "label": "bananas-dashboard (armv7)" },
+          { "path": "dist/bananas-config-armv7.tar.gz", "label": "bananas-config (TUI/CLI, armv7)" },
           { "path": "dist/bananas-webadmin.tar.gz", "label": "bananas-webadmin (wasm SPA)" },
           { "path": "dist/SHA256SUMS", "label": "SHA-256 checksums" }
         ]

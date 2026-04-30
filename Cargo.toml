@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/server", "crates/helper", "crates/webadmin", "crates/stats", "crates/dashboard"]
+members = ["crates/server", "crates/helper", "crates/webadmin", "crates/stats", "crates/dashboard", "crates/config"]
 exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
 resolver = "3"
 
@@ -23,6 +23,7 @@ bananas-server = { path = "crates/server" }
 bananas-webadmin = { path = "crates/webadmin" }
 bananas-stats = { path = "crates/stats" }
 bananas-dashboard = { path = "crates/dashboard" }
+bananas-config = { path = "crates/config" }
 
 # Workspace-wide tokio feature subset. "full" pulls in fs, io, mio, net,
 # parking_lot, process, rt, rt-multi-thread, signal, sync, time, macros,

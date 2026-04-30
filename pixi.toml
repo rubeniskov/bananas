@@ -195,6 +195,12 @@ cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/def
 [tasks.build-stats-arm]
 cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-stats --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-stats serve/bin/'"
 
+# `build-config-arm`: cross-compile bananas-config (the operator TUI +
+# CLI) via the same cargo-zigbuild path as the server / stats. Pure-
+# Rust deps (ratatui + crossterm + reqwest+rustls), no sysroot needed.
+[tasks.build-config-arm]
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-config --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-config serve/bin/'"
+
 # `build-dashboard-arm`: cross-compile bananas-dashboard (the Slint
 # LCD app) for armv7-unknown-linux-gnueabihf via cross-rs. cross
 # spins up a Docker container preloaded with multiarch system libs
@@ -274,7 +280,7 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
 # now-correctly-staged servers. No buttons, no SD writes, no wedge.
 [tasks.iterate]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin && pixi run build-server-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin && pixi run build-server-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
 [dependencies]
 python = "==3.11"
