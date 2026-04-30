@@ -64,9 +64,10 @@ pub struct PutTimezone {
 }
 
 /// POST /api/system/timezone — apply the timezone via timedatectl AND
-/// persist to system.toml so it survives reboots. Two-step: helper
-/// SetTimezone first (validates the IANA name); on success, write
-/// the new system.toml.
+/// persist to system.toml AND bounce bananas-dashboard so the LCD
+/// picks up the new local offset. The helper owns the whole sequence
+/// so every caller (web UI, bananas-config CLI / TUI) gets identical
+/// behaviour without duplicating the persist + restart steps.
 pub async fn post_timezone(
     State(state): State<AppState>,
     Json(req): Json<PutTimezone>,
@@ -75,43 +76,19 @@ pub async fn post_timezone(
     if tz.is_empty() {
         return err_400("timezone required".into());
     }
-
-    // Step 1: apply now. Helper validates against /usr/share/zoneinfo.
-    let set_cmd = Command::SetTimezone { tz: tz.clone() };
-    let set_output = match bananas_helper::call(&state.helper_socket, &set_cmd).await {
+    let cmd = Command::SetTimezone { tz: tz.clone() };
+    match bananas_helper::call(&state.helper_socket, &cmd).await {
         Ok(HelperResponse {
             ok: true, output, ..
-        }) => output,
-        Ok(HelperResponse { error, output, .. }) => {
-            return err_400(format!(
-                "{}\n\n{}",
-                error.unwrap_or_else(|| "helper rejected SetTimezone".into()),
-                output
-            ));
-        }
-        Err(e) => return err_500(format!("helper unreachable: {e}")),
-    };
-
-    // Step 2: persist. Read existing system.toml so we don't clobber
-    // future fields someone added by hand.
-    let mut cfg = read_system_config(&state).await.unwrap_or_default();
-    cfg.system.timezone = Some(tz.clone());
-    let serialized =
-        toml::to_string_pretty(&cfg).unwrap_or_else(|_| format!("[system]\ntimezone = \"{tz}\"\n"));
-    let write_cmd = Command::WriteServiceConfig {
-        name: "system".into(),
-        content: serialized,
-    };
-    match bananas_helper::call(&state.helper_socket, &write_cmd).await {
-        Ok(HelperResponse { ok: true, .. }) => axum::response::IntoResponse::into_response(Json(
-            json!({ "ok": true, "tz": tz, "output": set_output }),
+        }) => axum::response::IntoResponse::into_response(Json(
+            json!({ "ok": true, "tz": tz, "output": output }),
         )),
         Ok(HelperResponse { error, output, .. }) => err_400(format!(
-            "timezone applied, but system.toml write failed: {}\n\n{}",
-            error.unwrap_or_else(|| "helper rejected WriteServiceConfig".into()),
+            "{}\n\n{}",
+            error.unwrap_or_else(|| "helper rejected SetTimezone".into()),
             output
         )),
-        Err(e) => err_500(format!("helper unreachable on persist: {e}")),
+        Err(e) => err_500(format!("helper unreachable: {e}")),
     }
 }
 
@@ -170,8 +147,9 @@ pub fn spawn_first_boot_geoip(state: crate::AppState) {
             }
         };
 
-        // Apply via helper, then persist by faking the same flow
-        // post_timezone uses (without an HTTP request).
+        // Helper SetTimezone now does timedatectl + system.toml persist
+        // + bananas-dashboard restart in one shot, so a single call is
+        // all this needs.
         let set_cmd = Command::SetTimezone { tz: tz.clone() };
         match bananas_helper::call(&state.helper_socket, &set_cmd).await {
             Ok(HelperResponse { ok: true, .. }) => {
@@ -182,24 +160,10 @@ pub fn spawn_first_boot_geoip(state: crate::AppState) {
                     tz = %tz, error = ?error,
                     "helper rejected geoip-derived timezone"
                 );
-                return;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "helper unreachable for geoip apply");
-                return;
             }
-        }
-
-        let mut cfg = read_system_config(&state).await.unwrap_or_default();
-        cfg.system.timezone = Some(tz.clone());
-        let serialized = toml::to_string_pretty(&cfg)
-            .unwrap_or_else(|_| format!("[system]\ntimezone = \"{tz}\"\n"));
-        let write_cmd = Command::WriteServiceConfig {
-            name: "system".into(),
-            content: serialized,
-        };
-        if let Err(e) = bananas_helper::call(&state.helper_socket, &write_cmd).await {
-            tracing::warn!(error = %e, "could not persist geoip-derived timezone to system.toml");
         }
     });
 }

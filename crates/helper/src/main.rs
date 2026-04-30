@@ -1143,7 +1143,77 @@ async fn set_timezone(tz: &str) -> Result<String> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(format!("timezone set to {tz}"))
+    let mut log = format!("timedatectl set-timezone {tz}\n");
+
+    // Persist to /etc/bananas/system.toml so the web UI's General tab
+    // and the TUI's Status tab show the same value the kernel is
+    // actually using. Helper owns this — the previous split (server
+    // did a follow-up WriteServiceConfig, CLI/TUI didn't) led to
+    // /etc/localtime and system.toml drifting on the CLI path.
+    match persist_timezone_to_system_toml(tz).await {
+        Ok(persisted) => log.push_str(&persisted),
+        Err(e) => log.push_str(&format!("WARN persisting system.toml: {e}\n")),
+    }
+
+    // Bounce bananas-dashboard so the LCD picks up the new local
+    // offset (the Slint app reads time::UtcOffset::current_local_offset
+    // once at startup). Best-effort — a missing unit on a fresh image
+    // shouldn't make the timezone change fail.
+    match TokioCommand::new("systemctl")
+        .args(["restart", "bananas-dashboard.service"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => log.push_str("restarted bananas-dashboard.service\n"),
+        Ok(o) => log.push_str(&format!(
+            "WARN restart bananas-dashboard.service status {}: {}\n",
+            o.status,
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => log.push_str(&format!(
+            "WARN spawning systemctl restart bananas-dashboard: {e}\n"
+        )),
+    }
+
+    Ok(log)
+}
+
+/// Read /etc/bananas/system.toml, set [system].timezone = tz, atomic-write
+/// it back. Creates the file (and parent dir) if missing. Used by the
+/// SetTimezone helper command so persistence is symmetric across every
+/// caller that drives a tz change.
+async fn persist_timezone_to_system_toml(tz: &str) -> Result<String> {
+    const SYSTEM_TOML: &str = "/etc/bananas/system.toml";
+    if let Some(parent) = std::path::Path::new(SYSTEM_TOML).parent() {
+        fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let existing = fs::read_to_string(SYSTEM_TOML).await.unwrap_or_default();
+    let mut doc: toml::Table = if existing.trim().is_empty() {
+        toml::Table::new()
+    } else {
+        existing
+            .parse()
+            .with_context(|| format!("parsing existing {SYSTEM_TOML}"))?
+    };
+    let system_table = doc
+        .entry("system".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let toml::Value::Table(t) = system_table {
+        t.insert("timezone".into(), tz.into());
+    }
+    let serialized = toml::to_string(&doc).context("serializing system.toml")?;
+    let tmp = format!("{SYSTEM_TOML}.tmp");
+    fs::write(&tmp, &serialized)
+        .await
+        .with_context(|| format!("writing {tmp}"))?;
+    fs::rename(&tmp, SYSTEM_TOML)
+        .await
+        .with_context(|| format!("renaming {tmp} -> {SYSTEM_TOML}"))?;
+    Ok(format!("wrote {SYSTEM_TOML}\n"))
 }
 
 async fn list_timezones() -> Result<String> {
