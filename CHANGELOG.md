@@ -2,6 +2,25 @@
 
 All notable changes to BanaNAS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and entries are derived from [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.1.0](https://github.com/rubeniskov/bananas/compare/v1.0.1...v1.1.0) (2026-04-30)
+
+
+### 🚀 Features
+
+* **config:** bananas-config TUI/CLI for headless management ([c1b62b9](https://github.com/rubeniskov/bananas/commit/c1b62b919a0f93a61581cd327e3e2fa4b4dd938d))
+* **helper:** InstallUpdate primitive for stats/dashboard/webadmin ([d2e2dd3](https://github.com/rubeniskov/bananas/commit/d2e2dd366013cc43dfbd232b6cb3892b8acdc395))
+* **release:** self-aware binaries + SHA256SUMS for in-place updates ([8433bbd](https://github.com/rubeniskov/bananas/commit/8433bbd13c3d1c804a1ee5786620960b3ff4c27f))
+* **server:** /api/updates/install + SSE progress stream ([1d7aaee](https://github.com/rubeniskov/bananas/commit/1d7aaee677adc70bd503a0b43e69ba506a1df4a2))
+* **server:** /api/version + /api/updates/check ([8b93ce9](https://github.com/rubeniskov/bananas/commit/8b93ce963d0078ccbdc1596f7b3b63e9c8c0c1ac))
+* **webadmin:** Updates page with per-component install + SSE log ([7bd46ee](https://github.com/rubeniskov/bananas/commit/7bd46eefdda369a24dd6eecfbc54b7a86967521e))
+
+
+### 🐛 Bug Fixes
+
+* **helper:** serialize install tests + unblock prek ([c323892](https://github.com/rubeniskov/bananas/commit/c323892954e60745664cf53cc08d4ceae7b0071b))
+* **helper:** SetTimezone owns persist + dashboard restart ([172afae](https://github.com/rubeniskov/bananas/commit/172afae2bb61dbf4d5974e8b738bedab0e03d710))
+* **release:** pull --rebase before semantic-release ([663342e](https://github.com/rubeniskov/bananas/commit/663342e700c76e806005e57c80383352ac440419))
+
 ## [1.0.1](https://github.com/rubeniskov/bananas/compare/v1.0.0...v1.0.1) (2026-04-30)
 
 
