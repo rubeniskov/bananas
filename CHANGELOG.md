@@ -2,6 +2,13 @@
 
 All notable changes to BanaNAS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and entries are derived from [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.0.1](https://github.com/rubeniskov/bananas/compare/v1.0.0...v1.0.1) (2026-04-30)
+
+
+### 🐛 Bug Fixes
+
+* **release:** drop 4-byte unicode from SD-card asset label ([aa4018b](https://github.com/rubeniskov/bananas/commit/aa4018b2f758068dc2b04b0c32c9b126455bd0c2))
+
 ## 1.0.0 (2026-04-30)
 
 
