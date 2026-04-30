@@ -24,7 +24,6 @@ use clap::{Parser, Subcommand};
 
 mod cli;
 mod tui;
-mod updates;
 
 /// Default helper socket path; mirrors the server / helper convention.
 fn default_socket() -> PathBuf {
@@ -64,7 +63,7 @@ enum Cmd {
         #[arg(long)]
         yes: bool,
     },
-    /// In-place update operations against the GitHub release.
+    /// In-place package operations against the opkg feed.
     Update {
         #[command(subcommand)]
         sub: UpdateCmd,
@@ -73,14 +72,15 @@ enum Cmd {
 
 #[derive(Debug, Subcommand)]
 enum UpdateCmd {
-    /// Print installed-vs-latest for every component.
+    /// Refresh the feed index + print upgradable bananas-* packages.
     Check,
-    /// Download + verify + install the latest release for one
-    /// component. Components: stats, dashboard, webadmin (server +
-    /// helper self-update lands in v2).
+    /// Run `opkg upgrade` for one or more packages. Each argument
+    /// without a `bananas-` prefix gets one prepended automatically,
+    /// so `bananas-config update install stats dashboard` is
+    /// equivalent to `... bananas-stats bananas-dashboard`.
     Install {
-        #[arg(value_name = "COMPONENT")]
-        component: String,
+        #[arg(value_name = "PACKAGE", required = true)]
+        packages: Vec<String>,
     },
 }
 
@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
             sub: UpdateCmd::Check,
         } => cli::update_check(&socket).await,
         Cmd::Update {
-            sub: UpdateCmd::Install { component },
-        } => cli::update_install(&socket, &component).await,
+            sub: UpdateCmd::Install { packages },
+        } => cli::update_install(&socket, &packages).await,
     }
 }

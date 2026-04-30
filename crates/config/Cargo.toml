@@ -21,7 +21,6 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 toml.workspace = true
-sha2.workspace = true
 # CLI parsing for the non-TUI subcommand mode (status / update / tz /
 # reboot) so the binary is scriptable over SSH.
 clap = { version = "4", features = ["derive"] }
@@ -30,6 +29,3 @@ clap = { version = "4", features = ["derive"] }
 # which conflicts with slint's transitive 0.2.2 requirement.
 ratatui = "0.30"
 crossterm = "0.29"
-# GitHub fetch for the `update check` / `update install` CLI paths.
-reqwest.workspace = true
-futures-util.workspace = true

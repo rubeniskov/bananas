@@ -4,9 +4,8 @@
 use std::{io::Write, path::Path};
 
 use anyhow::{Context, Result, bail};
-use bananas_helper::{Command as HelperCommand, Component};
-
-use crate::updates;
+use bananas_helper::Command as HelperCommand;
+use serde::Deserialize;
 
 const UNITS: &[&str] = &[
     "bananas-server.service",
@@ -14,6 +13,8 @@ const UNITS: &[&str] = &[
     "bananas-stats.service",
     "bananas-dashboard.service",
 ];
+
+const PACKAGE_PREFIX: &str = "bananas-";
 
 pub async fn status(socket: &Path) -> Result<()> {
     let versions = read_versions(socket).await.unwrap_or_default();
@@ -102,85 +103,108 @@ pub async fn reboot(socket: &Path, skip_confirm: bool) -> Result<()> {
     Ok(())
 }
 
+/// Refresh the opkg feed index and print upgradable bananas-* packages.
 pub async fn update_check(socket: &Path) -> Result<()> {
-    let report = updates::check(socket).await?;
-    println!("Latest release: v{}", report.latest_version);
+    let update_resp = bananas_helper::call(socket, &HelperCommand::OpkgUpdate)
+        .await
+        .context("calling helper for opkg update")?;
+    if !update_resp.ok {
+        eprintln!(
+            "warning: opkg update failed: {}",
+            update_resp.error.unwrap_or_else(|| "unknown error".into())
+        );
+        // Continue anyway — list-upgradable still works against
+        // cached metadata.
+    }
+
+    let upgradable = list_upgradable(socket).await?;
+    let bananas: Vec<&UpgradablePackage> = upgradable
+        .iter()
+        .filter(|p| p.name.starts_with(PACKAGE_PREFIX))
+        .collect();
+
+    if bananas.is_empty() {
+        println!("All bananas-* packages are up to date.");
+        return Ok(());
+    }
+    println!("{} package(s) upgradable:", bananas.len());
     println!();
-    println!("  COMPONENT       INSTALLED      LATEST         STATUS");
-    println!("  ─────────────── ────────────── ────────────── ──────────────");
-    for c in updates::COMPONENTS {
-        let s = report.components.get(*c);
-        let installed = s.and_then(|r| r.installed.as_deref()).unwrap_or("—");
-        let latest = &report.latest_version;
-        let outdated = s.is_some_and(|r| r.outdated);
-        let deferred = matches!(*c, "server" | "helper");
-        let status = if deferred {
-            "self-update deferred"
-        } else if outdated {
-            "update available"
-        } else {
-            "up to date"
-        };
-        println!("  {c:<15} {installed:<14} {latest:<14} {status}");
+    println!("  PACKAGE                INSTALLED       AVAILABLE");
+    println!("  ────────────────────── ─────────────── ───────────────");
+    for p in &bananas {
+        println!("  {:<22} {:<15} {}", p.name, p.installed, p.candidate);
     }
     Ok(())
 }
 
-pub async fn update_install(socket: &Path, component_name: &str) -> Result<()> {
-    let component = match component_name {
-        "stats" => Component::Stats,
-        "dashboard" => Component::Dashboard,
-        "webadmin" => Component::Webadmin,
-        "server" => Component::Server,
-        "helper" => Component::Helper,
-        other => bail!("unknown component {other:?}"),
-    };
-    let report = updates::check(socket).await?;
-    let entry = report
-        .components
-        .get(component_name)
-        .ok_or_else(|| anyhow::anyhow!("no GitHub asset for {component_name}"))?;
-    let asset_url = entry
-        .asset_url
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("missing asset_url"))?;
-    let sha256 = entry
-        .sha256
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("missing sha256 — does this release publish SHA256SUMS?"))?;
+/// Run `opkg upgrade` for one or more packages. Names without the
+/// `bananas-` prefix get one auto-prepended for ergonomics.
+pub async fn update_install(socket: &Path, packages: &[String]) -> Result<()> {
+    if packages.is_empty() {
+        bail!("no packages specified");
+    }
+    let resolved: Vec<String> = packages
+        .iter()
+        .map(|p| {
+            if p.starts_with(PACKAGE_PREFIX) {
+                p.clone()
+            } else {
+                format!("{PACKAGE_PREFIX}{p}")
+            }
+        })
+        .collect();
 
-    println!("Installing {component_name} v{}...", report.latest_version);
-    let staged = updates::download(asset_url, component_name)
-        .await
-        .context("download")?;
-    println!("  ✓ downloaded → {}", staged.display());
-    println!("  ✓ verifying sha256...");
-    updates::verify_sha(&staged, sha256)
-        .await
-        .context("sha256")?;
-    println!("  ✓ sha256 ok");
-    println!("  → handing off to helper for atomic install...");
+    println!("Upgrading: {}", resolved.join(", "));
+    println!();
     let resp = bananas_helper::call(
         socket,
-        &HelperCommand::InstallUpdate {
-            component,
-            tarball_path: staged.to_string_lossy().to_string(),
-            expected_version: report.latest_version.clone(),
-            expected_sha256: sha256.clone(),
+        &HelperCommand::OpkgUpgrade {
+            packages: resolved.clone(),
         },
     )
     .await
     .context("calling helper")?;
+    if !resp.output.is_empty() {
+        print!("{}", resp.output);
+        if !resp.output.ends_with('\n') {
+            println!();
+        }
+    }
     if !resp.ok {
         bail!(
             resp.error
                 .unwrap_or_else(|| "helper refused install".into())
         );
     }
-    println!("{}", resp.output.trim_end());
     println!();
     println!("Done.");
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UpgradablePackage {
+    name: String,
+    installed: String,
+    candidate: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InstalledPackageRow {
+    name: String,
+    version: String,
+}
+
+async fn list_upgradable(socket: &Path) -> Result<Vec<UpgradablePackage>> {
+    let resp = bananas_helper::call(socket, &HelperCommand::OpkgListUpgradable)
+        .await
+        .context("calling helper for opkg list-upgradable")?;
+    if !resp.ok {
+        bail!(
+            resp.error
+                .unwrap_or_else(|| "opkg list-upgradable failed".into())
+        );
+    }
+    Ok(serde_json::from_str(&resp.output).context("parsing list-upgradable JSON")?)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────
@@ -195,25 +219,34 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
+/// Map from short component slug ("server", "stats", …) to installed
+/// version, sourced from opkg list-installed. Slugs match the legacy
+/// terminology so the TUI Status tab + the `status` subcommand keep
+/// rendering the same shape; "server" and "helper" both resolve to
+/// the bananas-server package.
 pub async fn read_versions(socket: &Path) -> Result<std::collections::HashMap<String, String>> {
-    let resp = bananas_helper::call(socket, &HelperCommand::ReadVersions)
+    let resp = bananas_helper::call(socket, &HelperCommand::OpkgListInstalled)
         .await
-        .context("calling helper")?;
+        .context("calling helper for opkg list-installed")?;
     if !resp.ok {
         return Ok(std::collections::HashMap::new());
     }
-    if resp.output.trim().is_empty() {
-        return Ok(std::collections::HashMap::new());
+    let rows: Vec<InstalledPackageRow> = serde_json::from_str(&resp.output).unwrap_or_default();
+    let mut by_pkg: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for r in rows {
+        by_pkg.insert(r.name, r.version);
     }
-    let parsed: toml::Table = resp.output.parse().unwrap_or_default();
     let mut out = std::collections::HashMap::new();
-    for (k, v) in &parsed {
-        if let Some(version) = v
-            .as_table()
-            .and_then(|t| t.get("version"))
-            .and_then(|v| v.as_str())
-        {
-            out.insert(k.clone(), version.to_string());
+    for (slug, pkg) in [
+        ("server", "bananas-server"),
+        ("helper", "bananas-server"), // helper rides in the server IPK
+        ("stats", "bananas-stats"),
+        ("dashboard", "bananas-dashboard"),
+        ("config", "bananas-config"),
+        ("webadmin", "bananas-webadmin"),
+    ] {
+        if let Some(v) = by_pkg.get(pkg) {
+            out.insert(slug.to_string(), v.clone());
         }
     }
     Ok(out)
