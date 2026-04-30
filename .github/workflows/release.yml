@@ -95,46 +95,20 @@ jobs:
         with:
           targets: wasm32-unknown-unknown,armv7-unknown-linux-gnueabihf
 
-      # Cache keyed on **/Cargo.toml (deps + version constraints), NOT
-      # Cargo.lock. The lock file gets rewritten by bump-cargo-version.sh
-      # on every release (workspace member version + lockfile metadata),
-      # which means a Cargo.lock-keyed primary key NEVER hits — the
-      # cache only restores via the restore-keys fallback. Since dep
-      # versions in the manifests are what actually drive what cargo
-      # has to (re)compile, hashing Cargo.toml is the right primary
-      # signal: stable across releases that don't add deps. cargo
-      # itself reconciles any lockfile drift from the restored target/.
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      # Single Rust-CI cache step. Swatinem/rust-cache covers
+      # ~/.cargo/registry, ~/.cargo/git, ~/.cargo/bin (so dioxus-cli
+      # / cross persist across runs) AND target/. Its cache-key logic
+      # is Cargo.lock + rustc version + workspace metadata excluding
+      # member versions, so the per-release version bump no longer
+      # invalidates the cache — restores stay warm even though we
+      # rewrite Cargo.toml's [workspace.package] version every run.
+      # cache-on-failure: true keeps a half-warm target/ around for
+      # the next attempt when a release run fails partway through.
+      - name: Cache Rust toolchain artifacts
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo target (release)
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-target-release-
-
-      # Cache the cargo-installed CLI binaries (dx, cross, etc.) so we
-      # don't `cargo install dioxus-cli` from scratch on every release.
-      # That alone was eating ~9 minutes of CI per run before this
-      # cache landed — dioxus-cli builds 200+ deps from source.
-      # Keyed on the pixi task definitions so any version bump in
-      # pixi.toml invalidates and triggers a fresh install.
-      - name: Cache cargo bin (dx, cross, ...)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-${{ hashFiles('pixi.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-bin-
+          workspaces: ". -> target"
+          cache-on-failure: true
 
       # ─── Compute the next release version BEFORE building so the
       # binaries embed it via env!("CARGO_PKG_VERSION"). Without this,
