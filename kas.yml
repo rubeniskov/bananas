@@ -21,7 +21,7 @@ env:
 repos:
   poky:
     url: "https://git.yoctoproject.org/poky"
-    refspec: "scarthgap"
+    branch: "scarthgap"
     layers:
       meta:
       meta-poky:
@@ -29,7 +29,7 @@ repos:
 
   meta-openembedded:
     url: "https://github.com/openembedded/meta-openembedded.git"
-    refspec: "scarthgap"
+    branch: "scarthgap"
     layers:
       meta-oe:
       meta-python:
@@ -38,13 +38,13 @@ repos:
 
   meta-sunxi:
     url: "https://github.com/linux-sunxi/meta-sunxi.git"
-    refspec: "scarthgap"
+    branch: "scarthgap"
     layers:
       .:
 
   meta-arm:
     url: "https://git.yoctoproject.org/meta-arm"
-    refspec: "scarthgap"
+    branch: "scarthgap"
     layers:
       meta-arm:
       meta-arm-toolchain:
