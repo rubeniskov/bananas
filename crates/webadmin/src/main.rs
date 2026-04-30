@@ -1,740 +1,872 @@
-//! BanaNAS web UI — Dioxus 0.7 single-page app.
+//! bananas-webadmin — JSON API + static SPA host.
 //!
-//! Talks to the `crates/server` JSON API at /api/*. The server also serves
-//! the bundled wasm/CSS/HTML (the `dist/` directory written by `dx build`).
+//! Routes:
+//!   GET    /api/exports        → list rows
+//!   POST   /api/exports        → add a row (JSON body)
+//!   DELETE /api/exports/{idx}  → remove a row by index
+//!   GET    /api/browse?path=…  → directory listing for the path picker
+//!   GET    /api/healthz        → liveness
+//!
+//! Everything else is served by the Dioxus Web bundle in
+//! `BANANAS_WEBADMIN_DIR` (defaults to /usr/share/bananas/webadmin),
+//! with SPA-style fallback to index.html so client-side routes resolve.
 
-#![allow(non_snake_case)]
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use dioxus::prelude::*;
+use anyhow::Result;
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    http::{StatusCode, header},
+    middleware::from_fn_with_state,
+    response::{Html, IntoResponse},
+    routing::{delete, get, post, put},
+};
+use bananas_engine::{Command, Response as HelperResponse};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
-mod api;
-mod browse;
+mod auth;
 mod cloud;
-mod components;
-mod dashboard_config;
+mod cloud_jobs;
+mod config;
+mod dirs;
 mod exports;
-mod icons;
-mod login;
-mod mounts;
-mod nfs_help;
+mod fstab;
+mod operations;
 mod permissions;
-mod settings;
+mod service_config;
+mod session;
 mod stats;
-mod stats_config;
+mod stats_ws;
 mod storage;
-mod theme;
-mod tooltip;
+mod system;
 mod updates;
 mod users;
+use exports::{Opts, Row, Squash};
+use session::SessionKey;
 
-const MAIN_CSS: Asset = asset!("/assets/main.css");
-
-fn main() {
-    console_error_panic_hook::set_once();
-    tracing_wasm::set_as_global_default();
-    tooltip::init();
-    // Apply persisted theme to <html> before Dioxus mounts so the
-    // first paint already reflects the operator's choice — avoids a
-    // brief light-flash when reloading on a dark-themed setup.
-    theme::apply(theme::load());
-    dioxus::launch(App);
+#[derive(Clone)]
+pub struct AppState {
+    pub exports_path: Arc<PathBuf>,
+    pub helper_socket: Arc<PathBuf>,
+    pub session_key: Arc<SessionKey>,
+    pub stats: stats::StatsState,
+    pub live_bus: stats_ws::LiveBus,
+    pub jobs: cloud_jobs::JobManager,
+    pub storage_cache: storage::StorageCache,
+    pub operations: operations::OperationManager,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub enum AuthState {
-    Loading,
-    SignedOut,
-    SignedIn,
-}
-
-/// Context carried by `App` so any descendant can flip auth state when an
-/// API call returns 401. Lets `ExportsPage` and friends bounce the user
-/// back to the login screen without prop-drilling a callback through every
-/// component layer.
-#[derive(Clone, Copy)]
-pub struct AuthCtx {
-    pub state: Signal<AuthState>,
-    pub me: Signal<Option<api::Me>>,
-    /// Bump to force every page that observes it to re-fetch its data.
-    /// Used by the "Load config" flow so freshly imported exports/fstab/
-    /// users show up without a manual refresh.
-    pub refresh: Signal<u32>,
-    /// True while a long-running mutating operation (config restore,
-    /// password rotation, etc.) is in flight. Pages observing this
-    /// disable their "save", "delete", "run-now" controls and a
-    /// modal-style overlay covers the whole admin to prevent racing
-    /// API calls against an in-flight import.
-    pub busy: Signal<bool>,
-}
-
-impl AuthCtx {
-    /// Call from any component that received `ApiError::Unauthorized`.
-    pub fn signal_unauthorized(mut self) {
-        self.me.set(None);
-        self.state.set(AuthState::SignedOut);
+#[tokio::main]
+async fn main() -> Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
     }
 
-    /// Tell every page-level fetcher to re-run. Pages that observe the
-    /// returned tick re-query their respective endpoints.
-    pub fn bump_refresh(mut self) {
-        let n = self.refresh.peek().wrapping_add(1);
-        self.refresh.set(n);
-    }
-}
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "bananas_webadmin=info,tower_http=info".into()),
+        )
+        .init();
 
-#[derive(Clone, Copy, PartialEq)]
-enum Page {
-    Stats,
-    Exports,
-    Storage,
-    Users,
-    Cloud,
-    Settings,
-    Updates,
-}
+    let session_key_path: PathBuf = std::env::var_os("BANANAS_SESSION_KEY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/var/lib/bananas/session.key".into());
+    let session_key = SessionKey::load_or_create(&session_key_path)?;
 
-impl Page {
-    /// URL-hash slug used to make the current page survive a full-page
-    /// reload. Hash-based (vs path-based) so the static SPA fallback at
-    /// `/` doesn't need server-side routing rules.
-    fn slug(self) -> &'static str {
-        match self {
-            Page::Stats => "stats",
-            Page::Exports => "exports",
-            Page::Storage => "storage",
-            Page::Users => "users",
-            Page::Cloud => "cloud",
-            Page::Settings => "settings",
-            Page::Updates => "updates",
-        }
-    }
+    let stats_db_path: PathBuf = std::env::var_os("BANANAS_STATS_DB")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/var/lib/bananas/stats.db".into());
 
-    fn from_slug(s: &str) -> Option<Self> {
-        match s {
-            "stats" => Some(Page::Stats),
-            "exports" => Some(Page::Exports),
-            "storage" => Some(Page::Storage),
-            "users" => Some(Page::Users),
-            "cloud" => Some(Page::Cloud),
-            "settings" => Some(Page::Settings),
-            "updates" => Some(Page::Updates),
-            _ => None,
-        }
-    }
-}
+    let stats_state = stats::StatsState::open(&stats_db_path);
+    let live_bus = stats_ws::LiveBus::new();
+    // Subscribe to bananas-stats's live Unix socket and re-broadcast
+    // to web WS clients. SQLite is no longer touched for live data —
+    // bananas-stats is the in-memory source of truth.
+    let live_socket_path: PathBuf = std::env::var_os("BANANAS_STATS_LIVE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas-stats/live.sock".into());
+    live_bus.start_socket(live_socket_path);
 
-/// Resolve the current Page from `window.location.hash`. Stats is the
-/// default landing page — only an explicit `/#<slug>` switches to a
-/// different tab, so legacy path-style URLs (`/exports`, `/users`, …)
-/// from earlier builds land on Stats and get rewritten by the
-/// canonicalize step below.
-fn read_page_from_url() -> Page {
-    let Some(window) = web_sys::window() else {
-        return Page::Stats;
-    };
-    let hash = window.location().hash().unwrap_or_default();
-    let slug = hash.trim_start_matches('#').trim_start_matches('/');
-    Page::from_slug(slug).unwrap_or(Page::Stats)
-}
+    let helper_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
-/// Replace the current entry with `/#<slug>` so the visible URL stays
-/// canonical regardless of how the user got here (typed `/exports`,
-/// followed an old `/users#users` bookmark, etc.). Uses `replaceState`
-/// instead of `set_hash` so the path component is also normalized and
-/// nav-tab clicks don't push a history entry per click.
-fn canonicalize_url(page: Page) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let target = format!("/#{}", page.slug());
-    if let Ok(history) = window.history() {
-        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&target));
-    }
-}
+    let jobs = cloud_jobs::JobManager::new();
+    cloud_jobs::spawn_scheduler(jobs.clone(), helper_socket.clone());
 
-#[derive(Props, Clone, PartialEq)]
-struct SignedInShellProps {
-    username: String,
-}
+    let operations_journal: PathBuf = std::env::var_os("BANANAS_OPERATIONS_JOURNAL")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/var/lib/bananas/operations.json".into());
+    let operations = operations::OperationManager::load(operations_journal).await;
+    // Per-kind reinstaters: ask the helper if any opkg upgrade is
+    // still in flight from a previous server lifetime. If yes, the
+    // matching journal entry is reattached with a fresh log watcher.
+    operations::opkg::reinstate(&operations, &helper_socket).await;
+    // Flush any Running entry no reinstater claimed. After this point,
+    // the only Running ops are ones genuinely backed by live work.
+    operations.flush_orphan_running().await;
 
-#[component]
-fn SignedInShell(props: SignedInShellProps) -> Element {
-    let mut auth_ctx = use_context::<AuthCtx>();
-    let mut page: Signal<Page> = use_signal(read_page_from_url);
-
-    // Mirror page changes into the URL via `history.replaceState` so
-    // the visible URL is always `/#<slug>` (no `/exports#exports`
-    // amalgams) and reloads preserve the current tab.
-    use_effect(move || {
-        canonicalize_url(page());
-    });
-    use_effect(move || {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen::closure::Closure;
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        let cb = Closure::<dyn FnMut()>::new(move || {
-            let next = read_page_from_url();
-            if *page.peek() != next {
-                page.set(next);
-            }
-        });
-        let _ = window.add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref());
-        cb.forget();
-    });
-    let mut config_banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
-    let mut reboot_confirm = use_signal(|| false);
-
-    // On mount: discover any in-flight ConfigImport op and reattach the
-    // busy overlay to it. This is the "refresh during import" path —
-    // without it, the SPA forgets the import is happening and the user
-    // sees Exports/Mounts/Users showing pre-import data even though
-    // the server is mid-write.
-    {
-        let auth_ctx = auth_ctx.clone();
-        use_effect(move || {
-            let mut auth_ctx = auth_ctx.clone();
-            spawn(async move {
-                match api::list_active_operations().await {
-                    Ok(ops) => {
-                        for op in ops {
-                            if matches!(op.kind, api::OperationKind::ConfigImport) {
-                                auth_ctx.busy.set(true);
-                                watch_config_import_op(op.id, config_banner, auth_ctx.clone());
-                                break;
-                            }
-                        }
-                    }
-                    Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                    Err(_) => {}
-                }
-            });
-        });
-    }
-    // Dropdown that consolidates Save/Load config, Reboot, and Sign out
-    // behind one menu trigger at the top-right. Closes on backdrop click
-    // or after any of the actions fires.
-    let mut menu_open = use_signal(|| false);
-    // Active theme — persisted in localStorage. Read once at mount; the
-    // setter below keeps DOM + storage in sync.
-    let mut current_theme = use_signal(theme::load);
-
-    let logout = move |_| {
-        spawn(async move {
-            let _ = api::logout().await;
-            auth_ctx.me.set(None);
-            auth_ctx.state.set(AuthState::SignedOut);
-        });
+    let state = AppState {
+        exports_path: Arc::new(
+            std::env::var_os("BANANAS_EXPORTS_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| "/etc/exports".into()),
+        ),
+        helper_socket: Arc::new(helper_socket),
+        session_key: Arc::new(session_key),
+        stats: stats_state,
+        live_bus,
+        jobs,
+        storage_cache: storage::StorageCache::new(),
+        operations,
     };
 
-    let save_config = move |_| {
-        spawn(async move {
-            match api::fetch_config_toml().await {
-                Ok(toml) => match download_text(&toml, "application/toml") {
-                    Ok(()) => config_banner.set(Some((
-                        BannerKind::Ok,
-                        "Saved config to your downloads.".into(),
-                    ))),
+    // First-boot geoip → timezone (best-effort, non-blocking, non-fatal).
+    // Skips silently if /etc/bananas/system.toml already has a tz set.
+    system::spawn_first_boot_geoip(state.clone());
+
+    let ui_dir: PathBuf = std::env::var_os("BANANAS_WEBADMIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/usr/share/bananas/webadmin".into());
+    let index_html_path = Arc::new(ui_dir.join("index.html"));
+
+    // Sanity-check at startup so we surface a missing file immediately
+    // (without the warning, the SPA would just 404 silently on the
+    // first page load). The actual read happens per request inside the
+    // fallback handler — see below.
+    if let Err(e) = std::fs::metadata(&*index_html_path) {
+        tracing::warn!(
+            path = %index_html_path.display(),
+            error = %e,
+            "UI index.html is not readable at startup — SPA fallback will 500 until it appears"
+        );
+    }
+
+    // Public endpoints (login + healthz) and auth-required endpoints share
+    // the same /api router. The middleware below permits the public ones
+    // and 401s everything else without a valid session cookie.
+    let api = Router::new()
+        .route("/login", post(auth::login))
+        .route("/logout", post(auth::logout))
+        .route("/password", post(auth::change_password))
+        .route("/me", get(auth::me))
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/exports", get(get_exports).post(post_export))
+        .route("/exports/{idx}", delete(delete_export).put(put_export))
+        .route("/browse", get(get_browse))
+        .route(
+            "/permissions",
+            get(permissions::get_perms).put(permissions::put_perms),
+        )
+        .route("/storage", get(get_storage))
+        .route("/stats/snapshot", get(stats::snapshot))
+        .route("/stats/range", get(stats::range))
+        .route("/stats/series", get(stats::series))
+        .route("/stats/live", get(stats_ws::live))
+        .route(
+            "/stats/config",
+            get(stats::get_config).put(stats::put_config),
+        )
+        .route(
+            "/dashboard/config",
+            get(service_config::get_dashboard).put(service_config::put_dashboard),
+        )
+        .route(
+            "/system/config",
+            get(service_config::get_system).put(service_config::put_system),
+        )
+        .route("/system/timezone", post(system::post_timezone))
+        .route("/system/timezones", get(system::get_timezones))
+        .route("/fstab", get(get_fstab).post(post_fstab))
+        .route("/fstab/{idx}", delete(delete_fstab).put(put_fstab))
+        .route("/users", get(users::list).post(users::create))
+        .route("/users/{username}", delete(users::delete))
+        .route("/users/{username}/password", put(users::set_password))
+        .route("/users/{username}/admin", put(users::set_admin))
+        .route("/cloud/providers", get(cloud::providers))
+        .route(
+            "/cloud/accounts",
+            get(cloud::list_accounts).post(cloud::add_account),
+        )
+        .route(
+            "/cloud/accounts/{name}",
+            put(cloud::update_account).delete(cloud::delete_account),
+        )
+        .route("/cloud/syncs", get(cloud::list_syncs).post(cloud::add_sync))
+        .route(
+            "/cloud/syncs/{idx}",
+            put(cloud::update_sync).delete(cloud::delete_sync),
+        )
+        .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
+        .route("/cloud/syncs/{idx}/cancel", post(cloud::cancel_sync))
+        .route("/system/reboot", post(post_reboot))
+        .route("/mkdir", post(post_mkdir))
+        .route("/version", get(updates::get_version))
+        .route("/updates/check", get(updates::get_updates_check))
+        .route("/updates/install", post(updates::post_updates_install))
+        .route("/updates/status", get(updates::get_updates_status))
+        .route("/cloud/runs", get(cloud::list_runs))
+        .route("/cloud/runs/{job_id}", get(cloud::get_run))
+        .route("/operations", get(operations::list))
+        .route("/operations/active", get(operations::list_active))
+        .route("/operations/{id}", get(operations::get_one))
+        .route("/operations/{id}/log", get(operations::log_stream))
+        .route("/operations/{id}/cancel", post(operations::cancel))
+        .route(
+            "/config",
+            get(config::export_config).post(config::import_config),
+        )
+        .route_layer(from_fn_with_state(state.clone(), auth::require_session))
+        .with_state(state);
+
+    // Mount /assets/* as a ServeDir. Two perf knobs:
+    //   1. .precompressed_br() / .precompressed_gzip() — when a `.br`
+    //      or `.gz` companion file sits next to a regular asset and
+    //      the client advertises Accept-Encoding, the precompressed
+    //      blob is sent as-is. The build-webadmin pixi task creates
+    //      these companions; the wasm shrinks ~3×.
+    //   2. Cache-Control: immutable + 1y max-age. Safe because dx-cli
+    //      hash-suffixes every asset filename (e.g.
+    //      `bananas-webadmin_bg-dxh6a6811895f9a3f7.wasm`), so any
+    //      content change ships under a new URL. Repeat page loads
+    //      drop to a single round-trip for index.html.
+    let assets = ServeDir::new(ui_dir.join("assets"))
+        .precompressed_br()
+        .precompressed_gzip();
+
+    let app = Router::new()
+        .nest("/api", api)
+        .nest_service(
+            "/assets",
+            tower::ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ))
+                .service(assets),
+        )
+        // Read index.html per request so a `bananas-webadmin` IPK
+        // upgrade is picked up without restarting bananas-webadmin. The
+        // file is small (<1 KB after dx bundle) and the fallback is
+        // hit only on full-page loads / unmatched routes — never on
+        // hashed assets, which ServeDir handles directly. Still much
+        // cheaper than the cost of restarting the server.
+        .fallback(get(move || {
+            let path = index_html_path.clone();
+            async move {
+                match tokio::fs::read_to_string(&*path).await {
+                    Ok(html) => (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        Html(html),
+                    ),
                     Err(e) => {
-                        config_banner.set(Some((BannerKind::Err, format!("Download failed: {e}"))))
-                    }
-                },
-                Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => config_banner.set(Some((BannerKind::Err, e.to_string()))),
-            }
-        });
-    };
-
-    // File input → read selected file via web_sys (Dioxus' FileData
-    // abstraction is finicky in 0.7, and we already use web_sys for the
-    // download). Look up the input element by id from the global DOM.
-    let mut load_change = move |_: dioxus::prelude::Event<dioxus::prelude::FormData>| {
-        use wasm_bindgen::JsCast;
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        let Some(document) = window.document() else {
-            return;
-        };
-        let Some(el) = document.get_element_by_id("load-config-input") else {
-            return;
-        };
-        let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else {
-            return;
-        };
-        let Some(files) = input.files() else { return };
-        let Some(file) = files.get(0) else { return };
-        let promise = file.text();
-        let future = wasm_bindgen_futures::JsFuture::from(promise);
-        // Reset the input so the same file can be picked again next time.
-        input.set_value("");
-        // Flip the global busy flag so every page-level control
-        // disables and the BusyOverlay fades in. The flag stays set
-        // until the OperationManager-tracked op transitions to a
-        // terminal status — see `watch_config_import_op` for the poll
-        // loop. A browser refresh while the op is in flight will
-        // re-discover it via /api/operations/active and resume the
-        // overlay (see use_effect at the top of this component).
-        auth_ctx.busy.set(true);
-        spawn(async move {
-            match future.await {
-                Ok(val) => {
-                    let text = val.as_string().unwrap_or_default();
-                    match api::upload_config_toml(&text).await {
-                        Ok(accepted) => {
-                            watch_config_import_op(accepted.op_id, config_banner, auth_ctx.clone());
-                        }
-                        Err(api::ApiError::Unauthorized) => {
-                            auth_ctx.busy.set(false);
-                            auth_ctx.signal_unauthorized();
-                        }
-                        Err(e) => {
-                            auth_ctx.busy.set(false);
-                            config_banner.set(Some((BannerKind::Err, e.to_string())));
-                        }
-                    }
-                }
-                Err(_) => {
-                    auth_ctx.busy.set(false);
-                    config_banner.set(Some((BannerKind::Err, "Could not read file".into())));
-                }
-            }
-        });
-    };
-
-    rsx! {
-        main {
-            nav { class: "app-nav",
-                h1 { class: "app-title", "BanaNAS" }
-                NavTab { label: "Stats", icon: "chart-bar", active: page() == Page::Stats,
-                    on_click: move |_| page.set(Page::Stats) }
-                NavTab { label: "Exports", icon: "share-2", active: page() == Page::Exports,
-                    on_click: move |_| page.set(Page::Exports) }
-                NavTab { label: "Storage", icon: "hard-drive", active: page() == Page::Storage,
-                    on_click: move |_| page.set(Page::Storage) }
-                NavTab { label: "Users", icon: "users", active: page() == Page::Users,
-                    on_click: move |_| page.set(Page::Users) }
-                NavTab { label: "Cloud", icon: "cloud", active: page() == Page::Cloud,
-                    on_click: move |_| page.set(Page::Cloud) }
-                NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
-                    on_click: move |_| page.set(Page::Settings) }
-                NavTab { label: "Updates", icon: "package", active: page() == Page::Updates,
-                    on_click: move |_| page.set(Page::Updates) }
-                span { class: "spacer" }
-                div { class: "user-menu",
-                    span { class: "user-greeting", "Welcome, ", strong { "{props.username}" }, "!" }
-                    button {
-                        class: "user-menu-trigger ghost",
-                        "data-tip": "Account & system actions",
-                        disabled: auth_ctx.busy.read().clone(),
-                        onclick: move |_| menu_open.set(!menu_open()),
-                        "aria-expanded": "{menu_open()}",
-                        "aria-haspopup": "menu",
-                        icons::Icon { name: "circle-user-round" }
-                        icons::Icon { name: "chevron-down", class: "user-menu-chevron" }
-                    }
-                    if menu_open() {
-                        div {
-                            class: "user-menu-backdrop",
-                            onclick: move |_| menu_open.set(false),
-                        }
-                        div { class: "user-menu-popover", role: "menu",
-                            button {
-                                class: "user-menu-item",
-                                role: "menuitem",
-                                disabled: auth_ctx.busy.read().clone(),
-                                onclick: move |_| {
-                                    menu_open.set(false);
-                                    save_config(());
-                                },
-                                icons::Icon { name: "download" }
-                                span { "Save config" }
-                            }
-                            {
-                                let busy = auth_ctx.busy.read().clone();
-                                if busy {
-                                    rsx! {
-                                        button {
-                                            class: "user-menu-item",
-                                            role: "menuitem",
-                                            disabled: true,
-                                            icons::Icon { name: "upload" }
-                                            span { "Load config" }
-                                        }
-                                    }
-                                } else {
-                                    rsx! {
-                                        label {
-                                            class: "user-menu-item",
-                                            role: "menuitem",
-                                            icons::Icon { name: "upload" }
-                                            span { "Load config" }
-                                            input {
-                                                id: "load-config-input",
-                                                r#type: "file",
-                                                accept: ".toml,application/toml,text/plain",
-                                                style: "display: none",
-                                                onchange: move |evt: dioxus::prelude::Event<dioxus::prelude::FormData>| {
-                                                    menu_open.set(false);
-                                                    load_change(evt);
-                                                },
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            div { class: "user-menu-sep" }
-                            div { class: "theme-picker", role: "group", "aria-label": "Theme",
-                                span { class: "theme-picker-label", "Theme" }
-                                {
-                                    let active = current_theme();
-                                    let opts = [theme::Theme::Auto, theme::Theme::Light, theme::Theme::Dark];
-                                    rsx! {
-                                        for t in opts {
-                                            {
-                                                let cls = if active == t {
-                                                    "theme-picker-btn active"
-                                                } else {
-                                                    "theme-picker-btn"
-                                                };
-                                                rsx! {
-                                                    button {
-                                                        class: "{cls}",
-                                                        r#type: "button",
-                                                        "data-tip": "{t.label()}",
-                                                        onclick: move |_| {
-                                                            theme::apply(t);
-                                                            current_theme.set(t);
-                                                        },
-                                                        icons::Icon { name: t.icon() }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            div { class: "user-menu-sep" }
-                            button {
-                                class: "user-menu-item danger",
-                                role: "menuitem",
-                                disabled: auth_ctx.busy.read().clone(),
-                                onclick: move |_| {
-                                    menu_open.set(false);
-                                    reboot_confirm.set(true);
-                                },
-                                icons::Icon { name: "power" }
-                                span { "Reboot" }
-                            }
-                            button {
-                                class: "user-menu-item",
-                                role: "menuitem",
-                                disabled: auth_ctx.busy.read().clone(),
-                                onclick: move |evt| {
-                                    menu_open.set(false);
-                                    logout(evt);
-                                },
-                                icons::Icon { name: "log-out" }
-                                span { "Sign out" }
-                            }
-                        }
+                        tracing::warn!(path = %path.display(), error = %e, "SPA fallback read failed");
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                            Html(String::from("UI bundle missing on disk")),
+                        )
                     }
                 }
             }
+        }))
+        .layer(TraceLayer::new_for_http());
 
-            if let Some((kind, msg)) = config_banner() {
-                div { class: "banner {kind.css()} config-banner",
-                    pre { "{msg}" }
-                    button { class: "ghost",
-                        onclick: move |_| config_banner.set(None),
-                        "✕"
-                    }
-                }
-            }
-
-            // Whole-shell loading overlay. Rendered inside <main> so it
-            // covers nav + banner + page content. .busy-overlay's
-            // pointer-events: all blocks every click underneath, so even
-            // a row-action button left :enabled cannot fire while the
-            // import is in flight. Reuses CircularProgress in its
-            // indeterminate (None) form for the spinner.
-            if auth_ctx.busy.read().clone() {
-                div { class: "busy-overlay",
-                    div { class: "busy-card",
-                        components::Spinner { size: 32 }
-                        span { class: "busy-text", "Applying configuration…" }
-                    }
-                }
-            }
-
-            match page() {
-                Page::Stats => rsx! { stats::StatsPage {} },
-                Page::Exports => rsx! { exports::ExportsPage {} },
-                Page::Storage => rsx! { storage::StoragePage {} },
-                Page::Users => rsx! { users::UsersPage {} },
-                Page::Cloud => rsx! { cloud::CloudPage {} },
-                Page::Settings => rsx! { settings::SettingsPage {} },
-                Page::Updates => rsx! { updates::UpdatesPage {} },
-            }
-
-            if reboot_confirm() {
-                components::ConfirmModal {
-                    title: "Reboot BanaNAS?".to_string(),
-                    message: "The web UI will drop for ~30 s while systemd reboots the system.".to_string(),
-                    details: "Any in-flight cloud-sync runs will be interrupted; cron will pick the schedule back up after boot.".to_string(),
-                    confirm_label: "Reboot".to_string(),
-                    danger: true,
-                    on_cancel: move |_| reboot_confirm.set(false),
-                    on_confirm: move |_| {
-                        reboot_confirm.set(false);
-                        spawn(async move {
-                            let _ = api::reboot_system().await;
-                            // Don't bother surfacing a success banner —
-                            // the server is going down and the browser
-                            // will throw a connection error any moment.
-                        });
-                    },
-                }
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum BannerKind {
-    Ok,
-    Err,
-}
-impl BannerKind {
-    fn css(self) -> &'static str {
-        match self {
-            BannerKind::Ok => "ok",
-            BannerKind::Err => "err",
-        }
-    }
-}
-
-/// Trigger a browser download of `text` as `application/toml`. Builds a
-/// Blob, gets a temporary object URL, attaches a hidden anchor with
-/// `download="…"`, clicks it, then revokes the URL. Pure web_sys — no
-/// extra deps.
-fn download_text(text: &str, mime: &str) -> Result<(), String> {
-    use wasm_bindgen::{JsCast, JsValue};
-
-    let window = web_sys::window().ok_or("no window")?;
-    let document = window.document().ok_or("no document")?;
-
-    let parts = js_sys::Array::new();
-    parts.push(&JsValue::from_str(text));
-    let bag = web_sys::BlobPropertyBag::new();
-    bag.set_type(mime);
-    let blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &bag)
-        .map_err(|_| "blob construction failed".to_string())?;
-    let url = web_sys::Url::create_object_url_with_blob(&blob)
-        .map_err(|_| "URL.createObjectURL failed".to_string())?;
-
-    let anchor = document
-        .create_element("a")
-        .map_err(|_| "create_element failed")?
-        .dyn_into::<web_sys::HtmlAnchorElement>()
-        .map_err(|_| "anchor cast failed")?;
-    anchor.set_href(&url);
-    anchor.set_download(&format!("bananas-config-{}.toml", date_stamp()));
-    document.body().ok_or("no body")?.append_child(&anchor).ok();
-    anchor.click();
-    document.body().ok_or("no body")?.remove_child(&anchor).ok();
-    web_sys::Url::revoke_object_url(&url).ok();
+    let addr: SocketAddr = std::env::var("BANANAS_LISTEN_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:8080".into())
+        .parse()?;
+    tracing::info!(%addr, ui=%ui_dir.display(), "listening");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }
 
-/// Poll the OperationManager-tracked ConfigImport op until it
-/// reaches a terminal status, then surface the structured summary as
-/// a banner and bump the page-refresh tick. Holds `auth_ctx.busy`
-/// at `true` for the duration so the BusyOverlay stays visible.
-///
-/// This is shared between the click-to-import path (kicks off a new
-/// op) and the on-mount discovery path (reattaches to one already in
-/// flight from a prior page load).
-fn watch_config_import_op(
-    op_id: u64,
-    mut config_banner: Signal<Option<(BannerKind, String)>>,
-    auth_ctx: AuthCtx,
-) {
-    let mut busy_signal = auth_ctx.busy;
-    spawn(async move {
-        const POLL_MS: i32 = 500;
-        loop {
-            match api::get_operation(op_id).await {
-                Ok(op) => {
-                    let terminal = !matches!(op.status, api::OperationStatus::Running);
-                    if terminal {
-                        let summary = parse_import_summary(&op.output);
-                        let kind = match (op.status.clone(), summary.as_ref()) {
-                            (api::OperationStatus::Success, _) => BannerKind::Ok,
-                            (_, Some(s)) if s.ok => BannerKind::Ok,
-                            _ => BannerKind::Err,
-                        };
-                        let msg = match summary {
-                            Some(s) => {
-                                let mut m = format!(
-                                    "Imported: {} exports, {} fstab entries, {} users restored ({} skipped).",
-                                    s.exports_written,
-                                    s.fstab_written,
-                                    s.users_created,
-                                    s.users_skipped,
-                                );
-                                if !s.notes.is_empty() {
-                                    m.push_str("\n\n");
-                                    m.push_str(&s.notes.join("\n"));
-                                }
-                                m
-                            }
-                            None => match op.status {
-                                api::OperationStatus::Cancelled => "Import cancelled.".into(),
-                                api::OperationStatus::Failure => {
-                                    "Import failed — see server logs.".into()
-                                }
-                                _ => "Import complete.".into(),
-                            },
-                        };
-                        config_banner.set(Some((kind, msg)));
-                        // Tell pages subscribing to the refresh tick
-                        // (Exports, Mounts, Users, Storage) to re-fetch
-                        // so the imported data is visible without a
-                        // manual refresh.
-                        auth_ctx.bump_refresh();
-                        busy_signal.set(false);
-                        return;
-                    }
-                }
-                Err(api::ApiError::Unauthorized) => {
-                    busy_signal.set(false);
-                    auth_ctx.signal_unauthorized();
-                    return;
-                }
-                Err(_) => {
-                    // Transient (server restart, network blip). Keep
-                    // polling — the op state is on disk in
-                    // /var/lib/bananas/operations.json.
-                }
-            }
-            sleep_ms(POLL_MS).await;
-        }
-    });
+// --- /api/exports -----------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+struct ExportRow {
+    idx: usize,
+    path: String,
+    host: String,
+    options: String,
+    parsed: ExportOpts,
 }
 
-/// Parse the trailing `--- summary ---\n{json}` block the server
-/// appends to a ConfigImport op's output when it finishes. Returns
-/// None if the marker isn't present (e.g. interrupted / cancelled
-/// before the summary line was written).
-fn parse_import_summary(output: &str) -> Option<api::ImportSummary> {
-    let marker = "--- summary ---\n";
-    let (_head, tail) = output.rsplit_once(marker)?;
-    serde_json::from_str(tail.trim()).ok()
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct ExportOpts {
+    rw: bool,
+    sync: bool,
+    no_subtree_check: bool,
+    squash: String,
+    anonuid: Option<u32>,
+    anongid: Option<u32>,
+    insecure: bool,
+    extra: Vec<String>,
 }
 
-/// Cooperative sleep on the wasm runtime — `tokio::time::sleep` isn't
-/// available without the `time` feature on the wasm32 target.
-async fn sleep_ms(ms: i32) {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen::closure::Closure;
-    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-        if let Some(window) = web_sys::window() {
-            let cb = Closure::<dyn FnMut()>::new(move || {
-                let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
-            });
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-                cb.as_ref().unchecked_ref(),
-                ms,
-            );
-            cb.forget();
-        }
-    });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-}
-
-fn date_stamp() -> String {
-    // Local-time YYYYMMDD-HHmmss using the JS Date object — no chrono.
-    let date = js_sys::Date::new_0();
-    format!(
-        "{}{:02}{:02}-{:02}{:02}{:02}",
-        date.get_full_year(),
-        (date.get_month() + 1) as u32,
-        date.get_date() as u32,
-        date.get_hours() as u32,
-        date.get_minutes() as u32,
-        date.get_seconds() as u32,
-    )
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct NavTabProps {
-    label: String,
-    #[props(default = "")]
-    icon: &'static str,
-    active: bool,
-    on_click: EventHandler<()>,
-}
-
-#[component]
-fn NavTab(props: NavTabProps) -> Element {
-    let class = if props.active { "active" } else { "" };
-    rsx! {
-        a {
-            class: "{class}",
-            href: "javascript:void(0)",
-            onclick: move |_| props.on_click.call(()),
-            if !props.icon.is_empty() { icons::Icon { name: props.icon } }
-            "{props.label}"
+impl From<&Opts> for ExportOpts {
+    fn from(o: &Opts) -> Self {
+        Self {
+            rw: o.rw,
+            sync: o.sync,
+            no_subtree_check: o.no_subtree_check,
+            squash: o.squash.as_str().into(),
+            anonuid: o.anonuid,
+            anongid: o.anongid,
+            insecure: o.insecure,
+            extra: o.extra.clone(),
         }
     }
 }
 
-#[component]
-fn App() -> Element {
-    let mut auth: Signal<AuthState> = use_signal(|| AuthState::Loading);
-    let mut me: Signal<Option<api::Me>> = use_signal(|| None);
-    let refresh: Signal<u32> = use_signal(|| 0);
-    let busy: Signal<bool> = use_signal(|| false);
-    use_context_provider(|| AuthCtx {
-        state: auth,
-        me,
-        refresh,
-        busy,
-    });
+/// `systemctl is-active` is a read-only check the unprivileged
+/// `bananas` user can run without going through the helper. We surface
+/// the result on `/api/exports` so the UI can warn when /etc/exports
+/// has rows but nfs-server.service isn't running (or vice versa).
+async fn nfs_server_status() -> &'static str {
+    use tokio::process::Command;
+    match Command::new("systemctl")
+        .args(["is-active", "nfs-server.service"])
+        .output()
+        .await
+    {
+        Ok(out) => match String::from_utf8_lossy(&out.stdout).trim() {
+            "active" => "active",
+            "inactive" => "inactive",
+            "failed" => "failed",
+            "activating" => "activating",
+            "deactivating" => "deactivating",
+            _ => "unknown",
+        },
+        Err(_) => "unknown",
+    }
+}
 
-    use_effect(move || {
-        spawn(async move {
-            match api::fetch_me().await {
-                Ok(Some(user)) => {
-                    me.set(Some(user));
-                    auth.set(AuthState::SignedIn);
-                }
-                Ok(None) => auth.set(AuthState::SignedOut),
-                Err(_) => auth.set(AuthState::SignedOut),
+async fn get_exports(State(state): State<AppState>) -> impl IntoResponse {
+    let raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
+    let parsed_rows = exports::rows(&raw);
+    // Canonical pretty-printed view — same string the helper writes to
+    // /etc/exports on save, so the UI's preview can't drift from disk.
+    let preview = exports::serialize(&parsed_rows);
+    let nfs_status = nfs_server_status().await;
+    let rows: Vec<ExportRow> = parsed_rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, r)| {
+            let opts = Opts::parse(&r.options);
+            ExportRow {
+                idx,
+                path: r.path,
+                host: r.host,
+                options: r.options,
+                parsed: ExportOpts::from(&opts),
             }
-        });
-    });
+        })
+        .collect();
+    Json(json!({
+        "rows": rows,
+        "preview": preview,
+        "nfs_server_status": nfs_status,
+    }))
+    .into_response()
+}
 
-    rsx! {
-        document::Stylesheet { href: MAIN_CSS }
-        match auth() {
-            AuthState::Loading => rsx! {
-                main { class: "loading-shell", p { "Loading…" } }
-            },
-            AuthState::SignedOut => rsx! {
-                login::Login {
-                    on_signed_in: move |user| {
-                        me.set(Some(user));
-                        auth.set(AuthState::SignedIn);
-                    }
-                }
-            },
-            AuthState::SignedIn => {
-                let username = me().map(|m| m.username).unwrap_or_default();
-                rsx! { SignedInShell { username } }
-            }
+#[derive(Debug, Deserialize)]
+struct AddExport {
+    path: String,
+    host: String,
+    #[serde(default = "default_true")]
+    rw: bool,
+    #[serde(default = "default_true")]
+    sync: bool,
+    #[serde(default = "default_true")]
+    no_subtree_check: bool,
+    #[serde(default = "default_squash")]
+    squash: String,
+    anonuid: Option<u32>,
+    anongid: Option<u32>,
+    #[serde(default)]
+    insecure: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_squash() -> String {
+    "all_squash".into()
+}
+
+async fn post_export(
+    State(state): State<AppState>,
+    Json(req): Json<AddExport>,
+) -> impl IntoResponse {
+    if req.path.trim().is_empty() || req.host.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "path and host are required");
+    }
+    if !req.path.starts_with('/') {
+        return api_err(StatusCode::BAD_REQUEST, "path must be absolute");
+    }
+    let opts = Opts {
+        rw: req.rw,
+        sync: req.sync,
+        no_subtree_check: req.no_subtree_check,
+        squash: Squash::from_form(&req.squash),
+        anonuid: req.anonuid,
+        anongid: req.anongid,
+        insecure: req.insecure,
+        extra: vec![],
+    };
+    let new_row = Row {
+        path: req.path.trim().into(),
+        host: req.host.trim().into(),
+        options: opts.to_options_string(),
+    };
+    let raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
+    let mut rows = exports::rows(&raw);
+    rows.push(new_row);
+    apply(&state, &rows).await
+}
+
+async fn delete_export(State(state): State<AppState>, Path(idx): Path<usize>) -> impl IntoResponse {
+    let raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
+    let mut rows = exports::rows(&raw);
+    if idx >= rows.len() {
+        return api_err(StatusCode::NOT_FOUND, format!("row {idx} not found"));
+    }
+    rows.remove(idx);
+    apply(&state, &rows).await
+}
+
+async fn put_export(
+    State(state): State<AppState>,
+    Path(idx): Path<usize>,
+    Json(req): Json<AddExport>,
+) -> impl IntoResponse {
+    if req.path.trim().is_empty() || req.host.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "path and host are required");
+    }
+    if !req.path.starts_with('/') {
+        return api_err(StatusCode::BAD_REQUEST, "path must be absolute");
+    }
+    let raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
+    let mut rows = exports::rows(&raw);
+    if idx >= rows.len() {
+        return api_err(StatusCode::NOT_FOUND, format!("row {idx} not found"));
+    }
+    // Preserve unknown options from the existing row so editing through
+    // the structured form doesn't drop tokens like fsid=0 or nohide that
+    // we don't expose as checkboxes.
+    let existing_extra = Opts::parse(&rows[idx].options).extra;
+    let opts = Opts {
+        rw: req.rw,
+        sync: req.sync,
+        no_subtree_check: req.no_subtree_check,
+        squash: Squash::from_form(&req.squash),
+        anonuid: req.anonuid,
+        anongid: req.anongid,
+        insecure: req.insecure,
+        extra: existing_extra,
+    };
+    rows[idx] = Row {
+        path: req.path.trim().into(),
+        host: req.host.trim().into(),
+        options: opts.to_options_string(),
+    };
+    apply(&state, &rows).await
+}
+
+async fn apply(state: &AppState, rows: &[Row]) -> axum::response::Response {
+    let content = exports::serialize(rows);
+    let cmd = Command::WriteExports { content };
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{}\n\n{}",
+                error.as_deref().unwrap_or("helper rejected the change"),
+                output
+            ),
+        ),
+        Err(e) => api_err(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "could not reach helper at {}: {e}",
+                state.helper_socket.display()
+            ),
+        ),
+    }
+}
+
+/// Forward the `RebootSystem` helper command. The helper returns
+/// before systemd actually fires the reboot, so we get a normal 200
+/// back; the browser then sees the connection drop a beat later.
+async fn post_reboot(State(state): State<AppState>) -> impl IntoResponse {
+    let cmd = Command::RebootSystem;
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{}\n\n{}",
+                error.as_deref().unwrap_or("reboot failed"),
+                output
+            ),
+        ),
+        Err(e) => api_err(
+            StatusCode::BAD_GATEWAY,
+            format!("could not reach helper: {e}"),
+        ),
+    }
+}
+
+fn api_err(status: StatusCode, msg: impl Into<String>) -> axum::response::Response {
+    (status, Json(json!({ "ok": false, "error": msg.into() }))).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct MkdirReq {
+    path: String,
+}
+
+async fn post_mkdir(State(state): State<AppState>, Json(req): Json<MkdirReq>) -> impl IntoResponse {
+    let path = req.path.trim().to_string();
+    if path.is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "path required");
+    }
+    let cmd = Command::MakeDirectory { path };
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => api_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{}\n\n{}",
+                error.as_deref().unwrap_or("mkdir failed"),
+                output
+            ),
+        ),
+        Err(e) => api_err(
+            StatusCode::BAD_GATEWAY,
+            format!("could not reach helper: {e}"),
+        ),
+    }
+}
+
+// --- /api/browse ------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct BrowseParams {
+    #[serde(default = "default_browse_path")]
+    path: String,
+}
+
+fn default_browse_path() -> String {
+    "/srv".into()
+}
+
+async fn get_storage(State(state): State<AppState>) -> impl IntoResponse {
+    match storage::get_storage(&state).await {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+// --- /api/fstab ------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+struct FstabRow {
+    idx: usize,
+    source: String,
+    mountpoint: String,
+    fstype: String,
+    options: String,
+    dump: u32,
+    pass: u32,
+    parsed: FstabOpts,
+    /// True when this row represents a system mount (root, /proc, /sys, …)
+    /// the UI is not allowed to edit or delete. Surfaced in the GET
+    /// response so the UI can render a lock icon and disable buttons.
+    protected: bool,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct FstabOpts {
+    defaults: bool,
+    noatime: bool,
+    nofail: bool,
+    ro: bool,
+    discard: bool,
+    noexec: bool,
+    nosuid: bool,
+    nodev: bool,
+    device_timeout: Option<u32>,
+    extra: Vec<String>,
+}
+
+impl From<&fstab::Opts> for FstabOpts {
+    fn from(o: &fstab::Opts) -> Self {
+        Self {
+            defaults: o.defaults,
+            noatime: o.noatime,
+            nofail: o.nofail,
+            ro: o.ro,
+            discard: o.discard,
+            noexec: o.noexec,
+            nosuid: o.nosuid,
+            nodev: o.nodev,
+            device_timeout: o.device_timeout,
+            extra: o.extra.clone(),
         }
+    }
+}
+
+async fn get_fstab() -> impl IntoResponse {
+    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let parsed_rows = fstab::rows(&raw);
+    let preview = fstab::serialize(&parsed_rows);
+    let rows: Vec<FstabRow> = parsed_rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, r)| {
+            let opts = fstab::Opts::parse(&r.options);
+            let protected = fstab::is_protected(&r);
+            FstabRow {
+                idx,
+                source: r.source,
+                mountpoint: r.mountpoint,
+                fstype: r.fstype,
+                options: r.options,
+                dump: r.dump,
+                pass: r.pass,
+                parsed: FstabOpts::from(&opts),
+                protected,
+            }
+        })
+        .collect();
+    Json(json!({ "rows": rows, "preview": preview })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct AddFstab {
+    source: String,
+    mountpoint: String,
+    fstype: String,
+    #[serde(default = "default_true")]
+    defaults: bool,
+    #[serde(default = "default_true")]
+    noatime: bool,
+    #[serde(default = "default_true")]
+    nofail: bool,
+    #[serde(default)]
+    ro: bool,
+    #[serde(default)]
+    discard: bool,
+    #[serde(default)]
+    noexec: bool,
+    #[serde(default)]
+    nosuid: bool,
+    #[serde(default)]
+    nodev: bool,
+    device_timeout: Option<u32>,
+    #[serde(default = "default_pass")]
+    pass: u32,
+    #[serde(default)]
+    dump: u32,
+}
+
+fn default_pass() -> u32 {
+    2
+}
+
+async fn post_fstab(State(state): State<AppState>, Json(req): Json<AddFstab>) -> impl IntoResponse {
+    if req.source.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "device/source is required");
+    }
+    if req.mountpoint.trim().is_empty() || !req.mountpoint.starts_with('/') {
+        return api_err(StatusCode::BAD_REQUEST, "mountpoint must be absolute");
+    }
+    if req.fstype.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "filesystem type is required");
+    }
+    if fstab::is_protected_target(req.mountpoint.trim(), req.fstype.trim(), req.source.trim()) {
+        return api_err(
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} is a protected system mount; refusing to shadow it from the UI",
+                req.mountpoint.trim()
+            ),
+        );
+    }
+    let opts = fstab::Opts {
+        defaults: req.defaults,
+        noatime: req.noatime,
+        nofail: req.nofail,
+        ro: req.ro,
+        discard: req.discard,
+        noexec: req.noexec,
+        nosuid: req.nosuid,
+        nodev: req.nodev,
+        device_timeout: req.device_timeout,
+        extra: vec![],
+    };
+    let new_row = fstab::Row {
+        source: req.source.trim().into(),
+        mountpoint: req.mountpoint.trim().into(),
+        fstype: req.fstype.trim().into(),
+        options: opts.to_options_string(),
+        dump: req.dump,
+        pass: req.pass,
+    };
+    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let mut rows = fstab::rows(&raw);
+    rows.push(new_row);
+    apply_fstab(&state, &rows).await
+}
+
+async fn delete_fstab(State(state): State<AppState>, Path(idx): Path<usize>) -> impl IntoResponse {
+    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let mut rows = fstab::rows(&raw);
+    if idx >= rows.len() {
+        return api_err(StatusCode::NOT_FOUND, format!("row {idx} not found"));
+    }
+    if fstab::is_protected(&rows[idx]) {
+        return api_err(
+            StatusCode::FORBIDDEN,
+            format!(
+                "row {idx} is a protected system mount ({}); refusing to delete",
+                rows[idx].mountpoint
+            ),
+        );
+    }
+    rows.remove(idx);
+    apply_fstab(&state, &rows).await
+}
+
+async fn put_fstab(
+    State(state): State<AppState>,
+    Path(idx): Path<usize>,
+    Json(req): Json<AddFstab>,
+) -> impl IntoResponse {
+    if req.source.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "device/source is required");
+    }
+    if req.mountpoint.trim().is_empty() || !req.mountpoint.starts_with('/') {
+        return api_err(StatusCode::BAD_REQUEST, "mountpoint must be absolute");
+    }
+    if req.fstype.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "filesystem type is required");
+    }
+    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let mut rows = fstab::rows(&raw);
+    if idx >= rows.len() {
+        return api_err(StatusCode::NOT_FOUND, format!("row {idx} not found"));
+    }
+    if fstab::is_protected(&rows[idx]) {
+        return api_err(
+            StatusCode::FORBIDDEN,
+            format!(
+                "row {idx} is a protected system mount ({}); refusing to edit",
+                rows[idx].mountpoint
+            ),
+        );
+    }
+    if fstab::is_protected_target(req.mountpoint.trim(), req.fstype.trim(), req.source.trim()) {
+        return api_err(
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} is a protected system mount; refusing to retarget row {idx}",
+                req.mountpoint.trim()
+            ),
+        );
+    }
+    let existing_extra = fstab::Opts::parse(&rows[idx].options).extra;
+    let opts = fstab::Opts {
+        defaults: req.defaults,
+        noatime: req.noatime,
+        nofail: req.nofail,
+        ro: req.ro,
+        discard: req.discard,
+        noexec: req.noexec,
+        nosuid: req.nosuid,
+        nodev: req.nodev,
+        device_timeout: req.device_timeout,
+        extra: existing_extra,
+    };
+    rows[idx] = fstab::Row {
+        source: req.source.trim().into(),
+        mountpoint: req.mountpoint.trim().into(),
+        fstype: req.fstype.trim().into(),
+        options: opts.to_options_string(),
+        dump: req.dump,
+        pass: req.pass,
+    };
+    apply_fstab(&state, &rows).await
+}
+
+async fn apply_fstab(state: &AppState, rows: &[fstab::Row]) -> axum::response::Response {
+    // Preserve any existing comment-only / blank lines from the on-disk
+    // file by prepending them to our serialized output. Keeps headers
+    // like "# /etc/fstab — generated by bananas-image" alive across edits.
+    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let mut header = String::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            header.push_str(line);
+            header.push('\n');
+        } else {
+            break;
+        }
+    }
+    let body = fstab::serialize(rows);
+    let content = format!("{}{}", header, body);
+
+    let cmd = Command::WriteFstab { content };
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{}\n\n{}",
+                error.as_deref().unwrap_or("helper rejected the change"),
+                output
+            ),
+        ),
+        Err(e) => api_err(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "could not reach helper at {}: {e}",
+                state.helper_socket.display()
+            ),
+        ),
+    }
+}
+
+async fn get_browse(Query(p): Query<BrowseParams>) -> impl IntoResponse {
+    match dirs::list(std::path::Path::new(&p.path)) {
+        Ok(listing) => Json(listing).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string(), "path": p.path })),
+        )
+            .into_response(),
     }
 }

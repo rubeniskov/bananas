@@ -130,9 +130,9 @@ printf "%s" "$RCLONE_VERSION" > "$DEST/.rclone-version"
 echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
 '"""
 
-# `build-webadmin`: compile crates/webadmin to wasm via dioxus-cli (`dx build --release`).
-# Output lands in target/dx/bananas-webadmin/release/web/public/ (index.html, wasm/,
-# assets/, …). Staged into serve/webadmin/ AND packed into serve/bin/bananas-webadmin.tar.gz
+# `build-webadmin`: compile crates/webadmin-ui to wasm via dioxus-cli (`dx build --release`).
+# Output lands in target/dx/bananas-webadmin-ui/release/web/public/ (index.html, wasm/,
+# assets/, …). Staged into serve/webadmin/ AND packed into serve/bin/bananas-webadmin-ui.tar.gz
 # so the Yocto recipe sees the bundle as a tracked SRC_URI input — without the
 # tarball, do_install's cache key doesn't depend on the bundle's contents and
 # `bitbake` keeps shipping a stale UI on subsequent iterations even when the
@@ -148,11 +148,11 @@ cmd = """bash -c '
 unset CARGO RUSTC
 export RUSTUP_TOOLCHAIN=stable
 export PATH="$HOME/.cargo/bin:$PATH"
-rm -rf target/dx/bananas-webadmin/release/web/public
-dx build --release --package bananas-webadmin --platform web
+rm -rf target/dx/bananas-webadmin-ui/release/web/public
+dx build --release --package bananas-webadmin-ui --platform web
 rm -rf serve/webadmin
 mkdir -p serve/webadmin serve/bin
-cp -r target/dx/bananas-webadmin/release/web/public/. serve/webadmin/
+cp -r target/dx/bananas-webadmin-ui/release/web/public/. serve/webadmin/
 # Pre-compress the static assets — brotli at quality 11 (max), gzip
 # at level 9. ServeDir on the server side reads the .br / .gz
 # companions when the browser advertises Accept-Encoding, so the
@@ -163,22 +163,22 @@ find serve/webadmin/assets -type f \\( -name "*.wasm" -o -name "*.js" -o -name "
       brotli -Z -k -f "$f"
       gzip -9 -k -f "$f"
     done
-tar -C serve/webadmin -czf serve/bin/bananas-webadmin.tar.gz .
+tar -C serve/webadmin -czf serve/bin/bananas-webadmin-ui.tar.gz .
 '"""
 depends-on = ["setup-dx"]
 
-# `build-server-arm`: cross-compile bananas-server + bananas-engine for the
+# `build-webadmin-arm`: cross-compile bananas-webadmin + bananas-engine for the
 # BPI's armv7-unknown-linux-gnueabihf target using cargo-zigbuild (zig as the
 # cross linker, no per-target gcc needed). Stages the stripped binaries in
-# serve/bin/ where the bananas-server.bb recipe picks them up. crates/webadmin
+# serve/bin/ where the bananas-webadmin.bb recipe picks them up. crates/webadmin-ui
 # is wasm-only and excluded from the host workspace build via -p flags.
 #
 # `env -u CFLAGS …` strips pixi's conda-env x86_64-host CFLAGS so cc-rs
 # doesn't try to feed `-march=haswell` into the armv7 cross-compile of
 # rusqlite-bundled (pulled in transitively via bananas-stats). Without
 # this, libsqlite3-sys's build script dies with `unknown CPU: 'haswell'`.
-[tasks.build-server-arm]
-cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-server -p bananas-engine --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-server target/armv7-unknown-linux-gnueabihf/release/bananas-engine serve/bin/'"
+[tasks.build-webadmin-arm]
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-webadmin -p bananas-engine --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin target/armv7-unknown-linux-gnueabihf/release/bananas-engine serve/bin/'"
 
 # `build-stats-arm`: cross-compile bananas-stats (the sampler daemon)
 # for armv7 via cargo-zigbuild. Pure-Rust deps + bundled rusqlite, so no
@@ -206,7 +206,7 @@ cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/def
 # spins up a Docker container preloaded with multiarch system libs
 # (configured in Cross.toml at the repo root: armhf fontconfig-dev,
 # libudev-dev, libdrm-dev, libgbm-dev for the linuxkms backend).
-# This is the missing piece bananas-stats / bananas-server didn't
+# This is the missing piece bananas-stats / bananas-webadmin didn't
 # need — Slint's font subsystem links yeslogic-fontconfig-sys at
 # build time, and cargo-zigbuild can't cross-link against fontconfig
 # without a sysroot.
@@ -285,7 +285,7 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
 # now-correctly-staged servers. No buttons, no SD writes, no wedge.
 [tasks.iterate]
-cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin && pixi run build-server-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin && pixi run build-webadmin-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
 [dependencies]
 python = "==3.11"
@@ -312,7 +312,7 @@ git = "*"
 zlib = "*"
 libfdt = "*"
 # Cross-link Rust crates to armv7 without a per-target gcc — `zig cc` doubles
-# as a cross linker. Used by the `build-server-arm` task via cargo-zigbuild.
+# as a cross linker. Used by the `build-webadmin-arm` task via cargo-zigbuild.
 zig = ">=0.13"
 rust = ">=1.75"
 cargo-zigbuild = "*"

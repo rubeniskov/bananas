@@ -142,11 +142,11 @@ pub enum Command {
     /// path already exists.
     MakeDirectory { path: String },
     /// `lsblk -J -b -o NAME,KNAME,SIZE,MODEL,TYPE,MOUNTPOINT,FSTYPE,LABEL,UUID,RO`
-    /// returned verbatim in `output`. The unprivileged bananas-server
+    /// returned verbatim in `output`. The unprivileged bananas-webadmin
     /// user can run lsblk too, but blkid (which lsblk calls
     /// internally for FSTYPE/LABEL/UUID) needs raw-read on /dev/sd*
     /// — and /dev/sd* are mode 0660 root:disk. Routing the call
-    /// through the root helper keeps bananas-server out of the disk
+    /// through the root helper keeps bananas-webadmin out of the disk
     /// group while still surfacing complete partition metadata to
     /// the storage tab.
     Lsblk,
@@ -180,7 +180,7 @@ pub enum Command {
     /// own cgroup. Returns immediately once the unit is queued — the
     /// caller polls `OpkgUpgradeStatus` for log delta + completion.
     ///
-    /// The detach is critical: opkg's postinst on `bananas-server.ipk`
+    /// The detach is critical: opkg's postinst on `bananas-webadmin.ipk`
     /// runs `systemctl restart bananas-engine`, and systemd's default
     /// cgroup-kill semantics would otherwise tear down the opkg
     /// process mid-transaction (leaving the system half-upgraded).

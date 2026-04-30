@@ -2,7 +2,7 @@
 //!
 //! Replaces the previous "every consumer re-reads SQLite" pattern.
 //! `bananas-stats` is the sole writer of in-memory state; readers
-//! (`bananas-server` for the web UI's WebSocket, `bananas-dashboard`
+//! (`bananas-webadmin` for the web UI's WebSocket, `bananas-dashboard`
 //! for the LCD) connect to this socket and get newline-delimited
 //! JSON snapshots, one per sampler tick.
 //!

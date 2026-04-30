@@ -9,7 +9,7 @@
 //!
 //! Two binaries depend on this lib: the daemon at `bin/main.rs` (writer)
 //! and `crates/dashboard` (reader, LCD UI). The HTTP admin
-//! (`crates/server`) also reads through these queries to expose
+//! (`crates/webadmin`) also reads through these queries to expose
 //! `/api/stats/*`.
 
 pub mod config;

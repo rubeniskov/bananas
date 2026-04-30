@@ -8,7 +8,7 @@ Requires=bananas-engine.service
 Type=simple
 User=bananas
 Group=bananas
-ExecStart=/usr/bin/bananas-server
+ExecStart=/usr/bin/bananas-webadmin
 # StateDirectory=bananas → /var/lib/bananas, owned by the User above with
 # mode 0700. Cheapest place to stash the persistent HMAC session key.
 StateDirectory=bananas

@@ -1,376 +1,269 @@
-//! Updates page — opkg-backed table of upgradable bananas-* packages.
+//! opkg-backed update endpoints.
 //!
-//! Header: "Refresh" button (re-runs `opkg update` on the device).
-//! Body: a table of packages where the candidate version is newer
-//! than installed. Each row carries an "Upgrade" button; an
-//! "Upgrade all" button up top runs them in a single transaction.
-//! Install drawer streams the SSE log line-by-line until the helper
-//! signals done/error.
+//! Now backed by the unified `OperationManager` (`crates/webadmin/src/operations`).
+//! The webadmin's *Upgrade* button goes through `POST /api/updates/install`,
+//! which calls `operations::opkg::start` to:
+//!   1. validate package names (must start with `bananas-`)
+//!   2. tell the helper to spawn the transient `bananas-opkg-upgrade.service`
+//!   3. register an `OpkgUpgrade` op in the manager
+//!   4. spawn a background watcher that polls the helper for log delta
 //!
-//! When everything's up to date, the body shows a single "All
-//! packages up to date" line — the SPA never renders the GitHub /
-//! sha256 / asset_url chrome the previous custom flow had.
+//! `GET /api/updates/status` is kept as a back-compat shim for SPA
+//! bundles cached in browsers; it just locates the latest OpkgUpgrade
+//! op and tails it via `/api/operations/{id}/log`. New clients should
+//! use the operations endpoints directly.
+//!
+//!   GET  /api/version          — installed `bananas-*` packages
+//!   GET  /api/updates/check    — upgradable `bananas-*` packages
+//!   POST /api/updates/install  — kick off `opkg upgrade <packages>`
+//!   GET  /api/updates/status   — SSE stream of the active install
+//!                                (legacy shim → operations/{id}/log)
+//!
+//! Filtering is on `bananas-*` prefix: opkg's view of the system
+//! includes ~1000 base-OS packages (libc, busybox, …) that the
+//! webadmin doesn't manage. Operators who want raw opkg can SSH in.
 
-#![allow(non_snake_case)]
+use std::{convert::Infallible, time::Duration};
 
-use dioxus::prelude::*;
-use serde::Deserialize;
-use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
-use web_sys::{EventSource, MessageEvent};
-
-use crate::{
-    AuthCtx, BannerKind,
-    api::{self, UpdatesCheck, UpgradablePackage, UpgradeRequest},
-    components::Spinner,
+use axum::{
+    Json,
+    extract::State,
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
 };
+use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
+use futures_util::stream::Stream;
+use serde::{Deserialize, Serialize};
 
-#[component]
-pub fn UpdatesPage() -> Element {
-    let auth_ctx = use_context::<AuthCtx>();
-    let mut data: Signal<Option<UpdatesCheck>> = use_signal(|| None);
-    let mut loading = use_signal(|| true);
-    let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
-    let mut install_modal: Signal<Option<Vec<String>>> = use_signal(|| None);
+use crate::{AppState, operations};
 
-    let mut load = move || {
-        loading.set(true);
-        spawn(async move {
-            match api::fetch_updates_check().await {
-                Ok(d) => {
-                    if let Some(err) = d.error.as_ref() {
-                        banner.set(Some((BannerKind::Err, format!("Feed warning: {err}"))));
-                    } else {
-                        banner.set(None);
-                    }
-                    data.set(Some(d));
-                }
-                Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => {
-                    banner.set(Some((BannerKind::Err, format!("Check failed: {e}"))));
-                }
-            }
-            loading.set(false);
-        });
-    };
+/// Only packages whose name starts with this prefix are exposed via
+/// the API. Keeps the SPA's view focused on what BanaNAS itself
+/// ships and avoids surfacing every libc / busybox upgrade.
+const PACKAGE_PREFIX: &str = "bananas-";
 
-    use_effect(move || {
-        let _ = auth_ctx.refresh.read();
-        load();
-    });
+/// How often the SSE handler polls the helper for new log content
+/// while the upgrade is active. opkg writes maybe 1–3 lines per
+/// package step, so 500 ms is plenty smooth without being chatty.
+const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-    rsx! {
-        div { class: "section-header",
-            h2 { "Updates" }
-            div { class: "section-actions",
-                button {
-                    class: "ghost",
-                    r#type: "button",
-                    "data-tip": "Re-run opkg update + opkg list-upgradable",
-                    disabled: loading(),
-                    onclick: move |_| load(),
-                    crate::icons::Icon { name: "rotate-cw" }
-                    span { "Refresh" }
-                }
-            }
-        }
+// ─── /api/version ───────────────────────────────────────────────────
 
-        if let Some((kind, msg)) = banner() {
-            div { class: "banner {kind.css()}",
-                pre { "{msg}" }
-                button { class: "ghost",
-                    onclick: move |_| banner.set(None),
-                    "✕"
-                }
-            }
-        }
-
-        if loading() && data().is_none() {
-            div { class: "settings-loading",
-                Spinner { size: 20 }
-                span { "Checking for updates…" }
-            }
-        }
-
-        if let Some(d) = data() {
-            if d.packages.is_empty() {
-                div { class: "updates-empty",
-                    crate::icons::Icon { name: "circle-check" }
-                    span { "All packages up to date." }
-                }
-            } else {
-                div { class: "updates-toolbar",
-                    span { class: "updates-count",
-                        "{d.packages.len()} package",
-                        if d.packages.len() == 1 { "" } else { "s" },
-                        " upgradable"
-                    }
-                    {
-                        let all_packages: Vec<String> = d.packages.iter().map(|p| p.name.clone()).collect();
-                        rsx! {
-                            button {
-                                class: "primary",
-                                r#type: "button",
-                                onclick: move |_| install_modal.set(Some(all_packages.clone())),
-                                crate::icons::Icon { name: "download" }
-                                span { "Upgrade all" }
-                            }
-                        }
-                    }
-                }
-
-                table { class: "upgradable-table",
-                    thead {
-                        tr {
-                            th { "Package" }
-                            th { "Installed" }
-                            th { "Available" }
-                            th { class: "actions" }
-                        }
-                    }
-                    tbody {
-                        for pkg in d.packages.iter() {
-                            {
-                                let pkg_owned: UpgradablePackage = pkg.clone();
-                                let pkg_name = pkg.name.clone();
-                                rsx! {
-                                    tr { key: "{pkg_owned.name}",
-                                        td { class: "pkg-name", "{pkg_owned.name}" }
-                                        td { class: "pkg-version", "{pkg_owned.installed}" }
-                                        td { class: "pkg-version pkg-candidate", "{pkg_owned.candidate}" }
-                                        td { class: "actions",
-                                            button {
-                                                class: "ghost",
-                                                r#type: "button",
-                                                onclick: move |_| install_modal.set(Some(vec![pkg_name.clone()])),
-                                                "Upgrade"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(packages) = install_modal() {
-            InstallModal {
-                packages: packages.clone(),
-                on_close: move |_| {
-                    install_modal.set(None);
-                    load();
-                },
-            }
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPackage {
+    pub name: String,
+    pub version: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct LogLine {
-    #[serde(default)]
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct InstalledVersionsResponse {
+    pub packages: Vec<InstalledPackage>,
+}
+
+pub async fn get_version(State(state): State<AppState>) -> Json<InstalledVersionsResponse> {
+    let mut packages = installed_packages(&state).await.unwrap_or_default();
+    packages.retain(|p| p.name.starts_with(PACKAGE_PREFIX));
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(InstalledVersionsResponse { packages })
+}
+
+async fn installed_packages(state: &AppState) -> Option<Vec<InstalledPackage>> {
+    let resp = bananas_engine::call(&state.helper_socket, &HelperCommand::OpkgListInstalled)
+        .await
+        .ok()?;
+    if !resp.ok {
+        tracing::warn!(error=?resp.error, "opkg list-installed failed");
+        return None;
+    }
+    serde_json::from_str(&resp.output).ok()
+}
+
+// ─── /api/updates/check ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradablePackage {
+    pub name: String,
+    pub installed: String,
+    pub candidate: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UpdatesCheckResponse {
+    pub packages: Vec<UpgradablePackage>,
+    /// Set when the upstream `opkg update` failed (offline feed,
+    /// rate-limited, DNS hiccup). The list-upgradable still runs
+    /// against cached metadata, so `packages` may be populated even
+    /// when `error` is set.
+    pub error: Option<String>,
+}
+
+pub async fn get_updates_check(
+    State(state): State<AppState>,
+) -> Result<Json<UpdatesCheckResponse>, (StatusCode, String)> {
+    let mut error: Option<String> = None;
+    if let Err(e) = run_helper_simple(&state, HelperCommand::OpkgUpdate).await {
+        error = Some(format!("opkg update: {e}"));
+    }
+
+    let upgradable: Vec<UpgradablePackage> = match bananas_engine::call(
+        &state.helper_socket,
+        &HelperCommand::OpkgListUpgradable,
+    )
+    .await
+    {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => serde_json::from_str(&output).unwrap_or_default(),
+        Ok(HelperResponse { error: e, .. }) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "opkg list-upgradable: {}",
+                    e.unwrap_or_else(|| "unknown error".into())
+                ),
+            ));
+        }
+        Err(e) => {
+            return Err((StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")));
+        }
+    };
+
+    let mut packages: Vec<UpgradablePackage> = upgradable
+        .into_iter()
+        .filter(|p| p.name.starts_with(PACKAGE_PREFIX))
+        .collect();
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(Json(UpdatesCheckResponse { packages, error }))
+}
+
+// ─── POST /api/updates/install + SSE stream ─────────────────────────
+
+/// SSE event payload for the legacy `/api/updates/status` shim. Phase
+/// is one of `install` (mid-stream log line), `done`, `error`. The
+/// webadmin still matches these strings to drive the install modal.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogLine {
     pub seq: u64,
-    pub phase: String,
+    pub phase: &'static str,
     pub text: String,
 }
 
-#[derive(Props, Clone, PartialEq)]
-struct InstallModalProps {
-    packages: Vec<String>,
-    on_close: EventHandler<()>,
+#[derive(Debug, Deserialize)]
+pub struct UpgradeRequest {
+    /// One or more package names. Must each start with the
+    /// `bananas-` prefix; anything else is rejected so the API can't
+    /// be used to opkg-upgrade arbitrary system packages.
+    pub packages: Vec<String>,
 }
 
-#[component]
-fn InstallModal(props: InstallModalProps) -> Element {
-    let auth_ctx = use_context::<AuthCtx>();
-    let log: Signal<Vec<LogLine>> = use_signal(Vec::new);
-    let mut error: Signal<Option<String>> = use_signal(|| None);
-    let mut finished: Signal<Option<bool>> = use_signal(|| None);
-    let mut started: Signal<bool> = use_signal(|| false);
+#[derive(Debug, Serialize)]
+pub struct InstallAccepted {
+    /// New clients can subscribe to `/api/operations/{op_id}/log`.
+    /// Old clients ignore this field.
+    pub op_id: u64,
+}
 
-    let packages = props.packages.clone();
+pub async fn post_updates_install(
+    State(state): State<AppState>,
+    Json(req): Json<UpgradeRequest>,
+) -> Result<(StatusCode, Json<InstallAccepted>), (StatusCode, String)> {
+    let op_id = operations::opkg::start(
+        state.operations.clone(),
+        (*state.helper_socket).clone(),
+        req.packages,
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(InstallAccepted { op_id })))
+}
 
-    use_effect(move || {
-        if started() {
-            return;
-        }
-        started.set(true);
-        let packages = packages.clone();
-        spawn(async move {
-            let req = UpgradeRequest {
-                packages: packages.clone(),
+/// Legacy SSE shim. Locates the latest OpkgUpgrade op and emits its
+/// log incrementally + the terminal close event in the same shape the
+/// previous handler used. New webadmin builds bypass this entirely
+/// and subscribe to `/api/operations/{id}/log`.
+pub async fn get_updates_status(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let manager = state.operations.clone();
+    let stream = async_stream::stream! {
+        let mut seq: u64 = 0;
+        let mut sent_len: usize = 0;
+
+        // Find the op to tail. If none ever ran, emit a terminal error.
+        let op_id = match operations::opkg::latest(&manager).await {
+            Some(op) => op.id,
+            None => {
+                yield emit(&mut seq, "error", "no upgrade has been started".into());
+                yield close_event("error");
+                return;
+            }
+        };
+
+        loop {
+            let op = match manager.get(op_id).await {
+                Some(o) => o,
+                None => break,
             };
-            match api::post_install(&req).await {
-                Ok(_) => {
-                    open_event_source(log, finished, error);
-                }
-                Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => {
-                    error.set(Some(format!("Install failed to start: {e}")));
-                    finished.set(Some(false));
+            if op.output.len() > sent_len {
+                let chunk = &op.output[sent_len..];
+                sent_len = op.output.len();
+                for line in chunk.lines() {
+                    if line.is_empty() || line.starts_with("[bananas-opkg-exit=") {
+                        continue;
+                    }
+                    yield emit(&mut seq, "install", line.to_string());
                 }
             }
-        });
-    });
-
-    rsx! {
-        div { class: "modal-overlay",
-            div { class: "modal install-modal",
-                div { class: "modal-header",
-                    strong { "Upgrading…" }
-                    button {
-                        class: "ghost",
-                        r#type: "button",
-                        disabled: finished().is_none(),
-                        onclick: move |_| props.on_close.call(()),
-                        "✕"
-                    }
+            match op.status {
+                crate::operations::OperationStatus::Running => {
+                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
                 }
-                div { class: "install-log",
-                    if log.read().is_empty() && finished().is_none() {
-                        div { class: "install-log-empty",
-                            Spinner { size: 16 }
-                            span { "Starting…" }
-                        }
-                    } else {
-                        for line in log.read().iter() {
-                            div { key: "{line.seq}", class: "install-log-line",
-                                pre { "{line.text}" }
-                            }
-                        }
-                    }
-                    if let Some(err) = error() {
-                        div { class: "install-log-line error",
-                            pre { "{err}" }
-                        }
-                    }
+                crate::operations::OperationStatus::Success => {
+                    yield emit(&mut seq, "done", "Upgrade complete.".into());
+                    yield close_event("ok");
+                    break;
                 }
-                div { class: "modal-footer",
-                    match finished() {
-                        Some(true) => rsx! {
-                            span { class: "ok-text",
-                                crate::icons::Icon { name: "circle-check" }
-                                span { "Upgrade complete." }
-                            }
-                            button {
-                                class: "primary",
-                                r#type: "button",
-                                onclick: move |_| props.on_close.call(()),
-                                "Close"
-                            }
-                        },
-                        Some(false) => rsx! {
-                            span { class: "err-text",
-                                crate::icons::Icon { name: "triangle-alert" }
-                                span { "Upgrade failed — check the log above." }
-                            }
-                            button {
-                                class: "primary",
-                                r#type: "button",
-                                onclick: move |_| props.on_close.call(()),
-                                "Close"
-                            }
-                        },
-                        None => rsx! {
-                            span { class: "running-text",
-                                Spinner { size: 14 }
-                                span { "Running…" }
-                            }
-                        },
-                    }
+                crate::operations::OperationStatus::Failure
+                | crate::operations::OperationStatus::Cancelled => {
+                    let tail = op
+                        .output
+                        .lines()
+                        .last()
+                        .filter(|l| !l.starts_with("[bananas-opkg-exit="))
+                        .unwrap_or("upgrade failed");
+                    yield emit(&mut seq, "error", tail.to_string());
+                    yield close_event("error");
+                    break;
                 }
             }
-        }
-    }
-}
-
-/// Open an EventSource subscription against /api/updates/status and
-/// route incoming events into the log signals. The browser handles
-/// reconnect automatically (~3 s default backoff); the server's SSE
-/// handler always re-streams the full log from byte offset 0 on
-/// reconnect, so we clear the log on each `open` to avoid duplicates
-/// after a server restart mid-upgrade. Only transitions to a terminal
-/// state (`finished = Some(_)`) when the helper signals done/error
-/// OR the EventSource transitions to CLOSED (permanent failure).
-fn open_event_source(
-    mut log: Signal<Vec<LogLine>>,
-    mut finished: Signal<Option<bool>>,
-    mut error: Signal<Option<String>>,
-) {
-    let es = match EventSource::new("/api/updates/status") {
-        Ok(es) => es,
-        Err(e) => {
-            error.set(Some(format!("EventSource open failed: {e:?}")));
-            finished.set(Some(false));
-            return;
         }
     };
 
-    // `open` fires on initial connect AND on every successful
-    // auto-reconnect. Clearing the log here keeps the modal in sync
-    // with the server's resumed stream (which starts again at
-    // since=0). Also clears any "reconnecting…" banner.
-    let mut log_open = log;
-    let mut error_open = error;
-    let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |_evt: web_sys::Event| {
-        log_open.set(Vec::new());
-        if error_open.peek().is_some() {
-            error_open.set(None);
-        }
-    });
-    es.set_onopen(Some(on_open.as_ref().unchecked_ref()));
-    on_open.forget();
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
 
-    let es_clone_msg = es.clone();
-    let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |evt: MessageEvent| {
-        let data = evt.data().as_string().unwrap_or_default();
-        match serde_json::from_str::<LogLine>(&data) {
-            Ok(line) => {
-                let is_final = matches!(line.phase.as_str(), "done" | "error");
-                let was_done = line.phase == "done";
-                log.with_mut(|v| v.push(line));
-                if is_final {
-                    finished.set(Some(was_done));
-                    es_clone_msg.close();
-                }
-            }
-            Err(e) => {
-                tracing::warn!(?data, %e, "bad SSE line");
-            }
-        }
-    });
-    es.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-    on_message.forget();
+fn emit(seq: &mut u64, phase: &'static str, text: String) -> Result<Event, Infallible> {
+    let line = LogLine {
+        seq: *seq,
+        phase,
+        text,
+    };
+    *seq += 1;
+    Ok(Event::default()
+        .json_data(&line)
+        .unwrap_or_else(|_| Event::default()))
+}
 
-    let es_clone_close = es.clone();
-    let on_close = Closure::<dyn FnMut(MessageEvent)>::new(move |_evt: MessageEvent| {
-        es_clone_close.close();
-    });
-    es.add_event_listener_with_callback("close", on_close.as_ref().unchecked_ref())
-        .ok();
-    on_close.forget();
+fn close_event(payload: &'static str) -> Result<Event, Infallible> {
+    Ok(Event::default().event("close").data(payload))
+}
 
-    // EventSource readyState constants: 0=CONNECTING, 1=OPEN, 2=CLOSED.
-    // Browsers fire onerror for every transport hiccup and immediately
-    // start auto-reconnecting (state goes back to CONNECTING). We only
-    // surface a hard failure once the browser itself has given up
-    // (state=CLOSED) — typically only on a 4xx response or a closed
-    // server socket the browser refuses to retry.
-    let es_state = es.clone();
-    let on_error = Closure::<dyn FnMut(web_sys::Event)>::new(move |_evt: web_sys::Event| {
-        if finished.peek().is_some() {
-            return;
-        }
-        if es_state.ready_state() == EventSource::CLOSED {
-            error.set(Some("connection lost".into()));
-            finished.set(Some(false));
-        } else {
-            // Browser is reconnecting. Show a soft notice so the user
-            // knows the upgrade is still in flight; cleared by `open`.
-            error.set(Some("reconnecting…".into()));
-        }
-    });
-    es.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-    on_error.forget();
+// ─── helpers ────────────────────────────────────────────────────────
+
+async fn run_helper_simple(state: &AppState, cmd: HelperCommand) -> anyhow::Result<String> {
+    let resp = bananas_engine::call(&state.helper_socket, &cmd).await?;
+    if !resp.ok {
+        anyhow::bail!(resp.error.unwrap_or_else(|| "helper rejected".into()));
+    }
+    Ok(resp.output)
 }

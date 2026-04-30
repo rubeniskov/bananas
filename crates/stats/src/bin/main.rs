@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     );
     let writer = storage::Writer::new(db.clone(), cfg.storage.clone(), snapshot_rx.clone());
 
-    // Live socket pub/sub. Subscribers (bananas-server's WS bus,
+    // Live socket pub/sub. Subscribers (bananas-webadmin's WS bus,
     // bananas-dashboard's render loop) connect here and receive one
     // newline-delimited JSON snapshot per sampler tick. The watch
     // channel guarantees slow consumers only see the *latest* — never

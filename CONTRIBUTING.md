@@ -65,7 +65,7 @@ pixi run iterate         # ships it (bake will be fast — only the SPA changes)
 ### Server / helper / stats (Rust crates that run on the BPI)
 
 ```bash
-pixi run build-server-arm     # bananas-server + bananas-engine via cargo-zigbuild
+pixi run build-server-arm     # bananas-webadmin + bananas-engine via cargo-zigbuild
 pixi run build-stats-arm      # bananas-stats via cargo-zigbuild
 pixi run build-dashboard-arm  # bananas-dashboard via cross-rs (Slint needs system libs)
 pixi run iterate

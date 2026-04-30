@@ -13,7 +13,7 @@
 # served artifacts (kernel/dtb staged for tftp; rootfs lives in serve/nfs/bananas)
 /serve/tftp
 /serve/nfs/
-# host-cross-compiled bananas-server/helper binaries staged for the recipe
+# host-cross-compiled bananas-webadmin/helper binaries staged for the recipe
 /serve/bin/
 # host-built Dioxus Web wasm bundle staged for the recipe
 /serve/webadmin/

@@ -97,14 +97,14 @@ The repo's a Cargo workspace at edition 2024. Five crates:
 | Crate | Target | Purpose |
 |-------|--------|---------|
 | `crates/engine` | armv7 host bin | Privileged ops over `/run/bananas/engine.sock`. |
-| `crates/server` | armv7 host bin | HTTP / WebSocket server, port 8080. |
+| `crates/webadmin` | armv7 host bin | HTTP / WebSocket server, port 8080. |
 | `crates/webadmin` | wasm32 | Dioxus 0.7 SPA. Built via `dx bundle --release --platform web`. |
 | `crates/stats` | armv7 host bin + lib | Sampler daemon. |
 | `crates/dashboard` | armv7 host bin | Slint LCD app. |
 
 Cross-compile via `pixi run build-server-arm` etc. — uses `cargo-zigbuild` for the armv7 targets and runs only the host-side packages (`crates/webadmin` is wasm-only and excluded via `-p` flags).
 
-The `bananas-server.bb` recipe `bbfatal`s if `serve/webadmin/index.html` is missing, so forgetting `pixi run build-webadmin` fails loudly instead of shipping a 404-only image.
+The `bananas-webadmin.bb` recipe `bbfatal`s if `serve/webadmin/index.html` is missing, so forgetting `pixi run build-webadmin` fails loudly instead of shipping a 404-only image.
 
 ## Where to look when bitbake explodes
 

@@ -1,578 +1,376 @@
-//! /exports page — table of current rows + modal-based add/edit form +
-//! disabled preview of /etc/exports. Each row has pencil + delete
-//! buttons; a single ExportFormModal handles both creating new entries
-//! and editing existing ones (initial values pre-populated from the row).
+//! Parse / render `/etc/exports` (NFS server export table).
+//!
+//! Format (man 5 exports):
+//!   /path        client(opt1,opt2) client2(opt3)
+//!   "/path with spaces"  *(rw,sync)
+//! Lines starting with `#` and blank lines are ignored.
+//!
+//! For the UI we operate on flat (path, host, options) rows. One row per
+//! (path, client) pair — multi-client lines parse into multiple rows.
 
-#![allow(non_snake_case)]
-
-use dioxus::prelude::*;
-
-use crate::{
-    AuthCtx, api,
-    api::ApiError,
-    browse::Browser,
-    components::{ConfirmModal, TextareaWithCopy},
-    icons::Icon,
-    nfs_help,
-    permissions::PermissionsModal,
-};
-
-/// What the form modal is currently doing — None means closed; Some
-/// carries either an existing row (edit) or a placeholder for create.
-#[derive(Clone, PartialEq)]
-enum FormMode {
-    Create,
-    Edit(api::ExportRow),
+#[derive(Debug, Clone)]
+pub struct Export {
+    pub path: String,
+    pub clients: Vec<Client>,
 }
 
-#[component]
-pub fn ExportsPage() -> Element {
-    let auth_ctx = use_context::<AuthCtx>();
-    let mut rows: Signal<Vec<api::ExportRow>> = use_signal(Vec::new);
-    let mut preview: Signal<String> = use_signal(String::new);
-    let mut nfs_status: Signal<String> = use_signal(String::new);
-    let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
-    let mut reload_tick = use_signal(|| 0u32);
-    let mut form_mode: Signal<Option<FormMode>> = use_signal(|| None);
-    // Path the per-row Permissions modal is editing. None = closed.
-    let mut perms_for: Signal<Option<String>> = use_signal(|| None);
-    // Index of the export row pending a delete-confirm. None = closed.
-    let mut pending_delete: Signal<Option<usize>> = use_signal(|| None);
+#[derive(Debug, Clone)]
+pub struct Client {
+    pub host: String,
+    pub options: String,
+}
 
-    use_effect(move || {
-        let _ = reload_tick();
-        // Re-fetch when the global "load config" flow bumps the refresh
-        // counter, so freshly imported exports show up automatically.
-        let _ = auth_ctx.refresh.read();
-        spawn(async move {
-            match api::list_exports().await {
-                Ok(list) => {
-                    rows.set(list.rows);
-                    preview.set(list.preview);
-                    nfs_status.set(list.nfs_server_status);
-                }
-                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(err) => banner.set(Some((
-                    BannerKind::Err,
-                    format!("Loading exports failed: {err}"),
-                ))),
-            }
-        });
-    });
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub path: String,
+    pub host: String,
+    pub options: String,
+}
 
-    rsx! {
-        div { class: "section-header",
-            h2 { "NFS exports" }
-            NfsServerBadge { status: nfs_status(), has_rows: !rows.read().is_empty() }
-            span { class: "spacer" }
-            button {
-                class: "ghost",
-                "data-tip": "Re-fetch from /etc/exports.",
-                onclick: move |_| reload_tick.set(reload_tick() + 1),
-                Icon { name: "rotate-cw" }
-                "Refresh"
+pub fn parse(input: &str) -> Vec<Export> {
+    input
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
             }
-            button {
-                class: "primary",
-                "data-tip": "Add a new NFS export.",
-                onclick: move |_| form_mode.set(Some(FormMode::Create)),
-                Icon { name: "plus" }
-                "Add export"
-            }
-        }
+            parse_line(line)
+        })
+        .collect()
+}
 
-        if let Some((kind, msg)) = banner() {
-            div { class: "banner {kind.css()}",
-                pre { "{msg}" }
-            }
-        }
+pub fn rows(input: &str) -> Vec<Row> {
+    parse(input)
+        .into_iter()
+        .flat_map(|e| {
+            e.clients.into_iter().map(move |c| Row {
+                path: e.path.clone(),
+                host: c.host,
+                options: c.options,
+            })
+        })
+        .collect()
+}
 
-        if rows.read().is_empty() {
-            p { class: "empty", "No exports defined yet — click 'Add export' to create one." }
-        } else {
-            table { class: "rows",
-                thead {
-                    tr {
-                        th { "Path" } th { "Client" } th { "Options" } th {}
-                    }
-                }
-                tbody {
-                    for row in rows.read().iter() {
-                        ExportRowView {
-                            key: "{row.idx}",
-                            row: row.clone(),
-                            on_edit: {
-                                let r = row.clone();
-                                move |_| form_mode.set(Some(FormMode::Edit(r.clone())))
-                            },
-                            on_perms: {
-                                let path = row.path.clone();
-                                move |_| perms_for.set(Some(path.clone()))
-                            },
-                            on_delete: move |idx: usize| pending_delete.set(Some(idx))
-                        }
-                    }
-                }
-            }
-        }
-
-        h3 { "/etc/exports preview" }
-        p { class: "preview-label", "Read-only — column-aligned exactly as written to disk." }
-        TextareaWithCopy { value: preview(), id: "exports-preview" }
-
-        if let Some(mode) = form_mode() {
-            ExportFormModal {
-                mode: mode,
-                on_close: move |_| form_mode.set(None),
-                on_saved: move |verb: &'static str| {
-                    form_mode.set(None);
-                    banner.set(Some((BannerKind::Ok, format!("Export {verb}"))));
-                    reload_tick.set(reload_tick() + 1);
-                },
-                on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
-                on_unauthorized: move |_| auth_ctx.signal_unauthorized()
-            }
-        }
-
-        if let Some(path) = perms_for() {
-            PermissionsModal {
-                path: path,
-                on_close: move |_| perms_for.set(None),
-                on_saved: move |_| {
-                    perms_for.set(None);
-                    banner.set(Some((BannerKind::Ok, "Permissions updated".into())));
-                }
-            }
-        }
-
-        if let Some(idx) = pending_delete() {
-            ConfirmModal {
-                title: "Delete export?".to_string(),
-                message: format!("Remove NFS export row #{idx} from /etc/exports."),
-                details: "Existing client mounts will be cut on the next exportfs sync.".to_string(),
-                confirm_label: "Delete export".to_string(),
-                danger: true,
-                on_cancel: move |_| pending_delete.set(None),
-                on_confirm: move |_| {
-                    pending_delete.set(None);
-                    spawn(async move {
-                        match api::delete_export(idx).await {
-                            Ok(()) => {
-                                banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
-                                reload_tick.set(reload_tick() + 1);
-                            }
-                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                            Err(err) => banner.set(Some((BannerKind::Err, format!("Delete failed: {err}")))),
-                        }
-                    });
-                },
-            }
-        }
+/// Column-aligned `/etc/exports` output. Path is left-padded to the
+/// widest path in the set so the host(options) column lines up
+/// vertically — easier to scan, and `exportfs` doesn't care about
+/// whitespace runs between fields.
+pub fn serialize(rows: &[Row]) -> String {
+    if rows.is_empty() {
+        return String::new();
     }
+    let formatted_paths: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            if r.path.contains(char::is_whitespace) {
+                format!("\"{}\"", r.path)
+            } else {
+                r.path.clone()
+            }
+        })
+        .collect();
+    let path_width = formatted_paths
+        .iter()
+        .map(|p| p.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    rows.iter()
+        .zip(formatted_paths.iter())
+        .map(|(r, path)| {
+            let pad = path_width.saturating_sub(path.chars().count());
+            let spaces = " ".repeat(pad);
+            if r.options.is_empty() {
+                format!("{path}{spaces}  {}\n", r.host)
+            } else {
+                format!("{path}{spaces}  {}({})\n", r.host, r.options)
+            }
+        })
+        .collect()
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum BannerKind {
-    Ok,
-    Err,
+/// Structured view of an export's options. We keep an `extra` bucket for
+/// anything we don't have a checkbox for so round-trips don't drop unknown
+/// flags.
+#[derive(Debug, Clone, Default)]
+pub struct Opts {
+    pub rw: bool,   // rw vs ro
+    pub sync: bool, // sync vs async
+    pub no_subtree_check: bool,
+    pub squash: Squash,
+    pub anonuid: Option<u32>,
+    pub anongid: Option<u32>,
+    pub insecure: bool,
+    /// Tokens we don't know how to render as checkboxes, preserved verbatim.
+    pub extra: Vec<String>,
 }
-impl BannerKind {
-    fn css(self) -> &'static str {
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Squash {
+    NoRootSquash,
+    RootSquash,
+    #[default]
+    AllSquash,
+}
+
+impl Squash {
+    pub fn as_str(self) -> &'static str {
         match self {
-            BannerKind::Ok => "ok",
-            BannerKind::Err => "err",
+            Squash::NoRootSquash => "no_root_squash",
+            Squash::RootSquash => "root_squash",
+            Squash::AllSquash => "all_squash",
+        }
+    }
+
+    pub fn from_form(s: &str) -> Self {
+        match s {
+            "no_root_squash" => Squash::NoRootSquash,
+            "root_squash" => Squash::RootSquash,
+            _ => Squash::AllSquash,
         }
     }
 }
 
-#[derive(Props, Clone, PartialEq)]
-struct ExportRowViewProps {
-    row: api::ExportRow,
-    on_edit: EventHandler<()>,
-    on_perms: EventHandler<()>,
-    on_delete: EventHandler<usize>,
-}
-
-#[component]
-fn ExportRowView(props: ExportRowViewProps) -> Element {
-    let r = &props.row;
-    let idx = r.idx;
-    rsx! {
-        tr {
-            td { code { "{r.path}" } }
-            td { code { "{r.host}" } }
-            td { OptionBadges { opts: r.parsed.clone() } }
-            td { class: "row-actions",
-                button {
-                    class: "btn-icon edit",
-                    "data-tip": "Edit this export",
-                    onclick: move |_| props.on_edit.call(()),
-                    Icon { name: "pencil" }
+impl Opts {
+    /// Parse a comma-joined options string ("rw,sync,no_subtree_check,...").
+    pub fn parse(input: &str) -> Self {
+        let mut o = Opts::default();
+        // Default for ro vs rw is unset; track if we saw anything explicit.
+        let mut saw_access = false;
+        let mut saw_sync = false;
+        for tok in input.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match tok {
+                "rw" => {
+                    o.rw = true;
+                    saw_access = true;
                 }
-                button {
-                    class: "btn-icon perms",
-                    "data-tip": "Edit owner / group / mode for this directory.",
-                    onclick: move |_| props.on_perms.call(()),
-                    Icon { name: "lock" }
+                "ro" => {
+                    o.rw = false;
+                    saw_access = true;
                 }
-                button {
-                    class: "btn-icon delete",
-                    "data-tip": "Delete this export",
-                    onclick: move |_| props.on_delete.call(idx),
-                    Icon { name: "trash-2" }
+                "sync" => {
+                    o.sync = true;
+                    saw_sync = true;
                 }
+                "async" => {
+                    o.sync = false;
+                    saw_sync = true;
+                }
+                "no_subtree_check" => o.no_subtree_check = true,
+                "subtree_check" => o.no_subtree_check = false,
+                "no_root_squash" => o.squash = Squash::NoRootSquash,
+                "root_squash" => o.squash = Squash::RootSquash,
+                "all_squash" => o.squash = Squash::AllSquash,
+                "insecure" => o.insecure = true,
+                "secure" => o.insecure = false,
+                t if t.starts_with("anonuid=") => {
+                    o.anonuid = t["anonuid=".len()..].parse().ok();
+                }
+                t if t.starts_with("anongid=") => {
+                    o.anongid = t["anongid=".len()..].parse().ok();
+                }
+                other => o.extra.push(other.to_string()),
             }
         }
-    }
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct OptionBadgesProps {
-    opts: api::ExportOpts,
-}
-
-#[component]
-fn OptionBadges(props: OptionBadgesProps) -> Element {
-    let o = &props.opts;
-    rsx! {
-        div { class: "badges",
-            if o.rw {
-                span { class: "badge rw", "data-tip": nfs_help::rw(), "rw" }
-            } else {
-                span { class: "badge ro", "data-tip": nfs_help::ro(), "ro" }
-            }
-            if o.sync {
-                span { class: "badge", "data-tip": nfs_help::sync(), "sync" }
-            } else {
-                span { class: "badge warn", "data-tip": nfs_help::r#async(), "async" }
-            }
-            if o.no_subtree_check {
-                span { class: "badge", "data-tip": nfs_help::no_subtree_check(), "no_subtree_check" }
-            }
-            span { class: "badge", "data-tip": nfs_help::squash_label(&o.squash), "{o.squash}" }
-            if let Some(uid) = o.anonuid {
-                span { class: "badge", "data-tip": nfs_help::anonuid(), "anonuid={uid}" }
-            }
-            if let Some(gid) = o.anongid {
-                span { class: "badge", "data-tip": nfs_help::anongid(), "anongid={gid}" }
-            }
-            if o.insecure {
-                span { class: "badge warn", "data-tip": nfs_help::insecure(), "insecure" }
-            }
-            for x in o.extra.iter() {
-                span { class: "badge", "data-tip": "Unknown option, preserved verbatim from /etc/exports.", "{x}" }
-            }
+        // NFS man-page defaults: `ro` and `sync` if unset. Match those.
+        if !saw_access {
+            o.rw = false;
         }
+        if !saw_sync {
+            o.sync = true;
+        }
+        o
     }
-}
 
-/// Allowed characters for an NFS client field. Covers single hosts,
-/// CIDRs, wildcards, IPv6 in brackets, and netgroups (`@name`). Spaces
-/// and shell metacharacters are excluded so an attacker can't sneak
-/// extra entries into /etc/exports through this field.
-const CLIENT_PATTERN: &str = r"^[A-Za-z0-9.\-_*?@:/\[\]]+$";
-
-#[derive(Props, Clone, PartialEq)]
-struct ExportFormModalProps {
-    mode: FormMode,
-    on_close: EventHandler<()>,
-    on_saved: EventHandler<&'static str>,
-    on_error: EventHandler<String>,
-    on_unauthorized: EventHandler<()>,
-}
-
-#[component]
-fn ExportFormModal(props: ExportFormModalProps) -> Element {
-    // Pre-fill from the existing row when editing; otherwise sensible
-    // defaults that match what most users want.
-    let editing_idx: Option<usize> = match &props.mode {
-        FormMode::Edit(r) => Some(r.idx),
-        FormMode::Create => None,
-    };
-    let initial: api::ExportRow = match &props.mode {
-        FormMode::Edit(r) => r.clone(),
-        FormMode::Create => default_export_row(),
-    };
-
-    let mut path = use_signal(|| initial.path.clone());
-    let mut host = use_signal(|| {
-        if initial.host.is_empty() {
-            "*".into()
+    pub fn to_options_string(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        parts.push(if self.rw { "rw".into() } else { "ro".into() });
+        parts.push(if self.sync {
+            "sync".into()
         } else {
-            initial.host.clone()
-        }
-    });
-    let mut rw = use_signal(|| initial.parsed.rw);
-    let mut sync = use_signal(|| initial.parsed.sync);
-    let mut no_subtree_check = use_signal(|| initial.parsed.no_subtree_check);
-    let mut squash = use_signal(|| {
-        if initial.parsed.squash.is_empty() {
-            "all_squash".into()
-        } else {
-            initial.parsed.squash.clone()
-        }
-    });
-    let mut anonuid = use_signal(|| initial.parsed.anonuid.or(Some(1000)));
-    let mut anongid = use_signal(|| initial.parsed.anongid.or(Some(1000)));
-    let mut insecure = use_signal(|| initial.parsed.insecure);
-    let mut show_browser = use_signal(|| false);
-    let mut busy = use_signal(|| false);
-
-    let title = match editing_idx {
-        Some(idx) => format!("Edit export — row {idx}"),
-        None => "Add a new export".into(),
-    };
-    let submit_label = if editing_idx.is_some() {
-        "Save changes"
-    } else {
-        "Add export"
-    };
-
-    let mut submit = move |_| {
-        if busy() {
-            return;
-        }
-        if path().trim().is_empty() {
-            props
-                .on_error
-                .call("Pick a directory via the Browse button".into());
-            return;
-        }
-        if host().trim().is_empty() {
-            props.on_error.call("Client is required".into());
-            return;
-        }
-        busy.set(true);
-        let body = api::AddExport {
-            path: path(),
-            host: host(),
-            rw: rw(),
-            sync: sync(),
-            no_subtree_check: no_subtree_check(),
-            squash: squash(),
-            anonuid: anonuid(),
-            anongid: anongid(),
-            insecure: insecure(),
-        };
-        let on_saved = props.on_saved.clone();
-        let on_error = props.on_error.clone();
-        let on_unauthorized = props.on_unauthorized.clone();
-        spawn(async move {
-            let result = match editing_idx {
-                Some(idx) => api::update_export(idx, &body).await.map(|()| "updated"),
-                None => api::add_export(&body).await.map(|()| "added"),
-            };
-            busy.set(false);
-            match result {
-                Ok(verb) => on_saved.call(verb),
-                Err(ApiError::Unauthorized) => on_unauthorized.call(()),
-                Err(e) => on_error.call(e.to_string()),
-            }
+            "async".into()
         });
+        if self.no_subtree_check {
+            parts.push("no_subtree_check".into());
+        }
+        parts.push(self.squash.as_str().into());
+        if let Some(uid) = self.anonuid {
+            parts.push(format!("anonuid={}", uid));
+        }
+        if let Some(gid) = self.anongid {
+            parts.push(format!("anongid={}", gid));
+        }
+        if self.insecure {
+            parts.push("insecure".into());
+        }
+        for x in &self.extra {
+            parts.push(x.clone());
+        }
+        parts.join(",")
+    }
+}
+
+fn parse_line(line: &str) -> Option<Export> {
+    let (path, rest) = if let Some(stripped) = line.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        (stripped[..end].to_string(), &stripped[end + 1..])
+    } else {
+        let mut iter = line.splitn(2, char::is_whitespace);
+        let path = iter.next()?.to_string();
+        (path, iter.next().unwrap_or(""))
     };
 
-    rsx! {
-        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
-            form {
-                class: "modal form-modal",
-                onclick: move |e| e.stop_propagation(),
-                onsubmit: move |e| { e.prevent_default(); submit(()); },
+    let clients = parse_clients(rest.trim());
+    Some(Export { path, clients })
+}
 
-                div { class: "modal-header",
-                    h3 { "{title}" }
-                    button {
-                        class: "ghost",
-                        r#type: "button",
-                        onclick: move |_| props.on_close.call(()),
-                        "✕"
-                    }
-                }
-
-                div { class: "modal-body form-modal-body",
-                    div { class: "row",
-                        label { r#for: "exp-path", class: "hint", "data-tip": nfs_help::path(), "Path" }
-                        input {
-                            id: "exp-path",
-                            r#type: "text",
-                            class: "path-display",
-                            readonly: true,
-                            required: true,
-                            placeholder: "Click 'Browse…' to pick a directory",
-                            value: "{path()}",
-                            onclick: move |_| show_browser.set(true)
-                        }
-                        button {
-                            r#type: "button",
-                            "data-tip": "Browse the server filesystem to pick a directory.",
-                            onclick: move |_| show_browser.set(true),
-                            Icon { name: "folder-open" }
-                            "Browse"
-                        }
-                    }
-
-                    div { class: "row",
-                        label { r#for: "exp-host", class: "hint", "data-tip": nfs_help::client(), "Client" }
-                        input {
-                            id: "exp-host",
-                            r#type: "text",
-                            placeholder: "*  ·  192.168.1.0/24  ·  *.lan  ·  @netgroup",
-                            title: "Hostname, IP/CIDR, wildcard, or @netgroup. No spaces or shell metacharacters.",
-                            pattern: CLIENT_PATTERN,
-                            required: true,
-                            value: "{host()}",
-                            oninput: move |e| host.set(e.value())
-                        }
-                        span {}
-                    }
-
-                    fieldset {
-                        legend { "Options (hover for details)" }
-                        div { class: "opts",
-                            label { class: "hint", "data-tip": nfs_help::rw(),
-                                input { r#type: "radio", name: "access", checked: rw(), onchange: move |_| rw.set(true) }
-                                " rw"
-                            }
-                            label { class: "hint", "data-tip": nfs_help::ro(),
-                                input { r#type: "radio", name: "access", checked: !rw(), onchange: move |_| rw.set(false) }
-                                " ro"
-                            }
-                            label { class: "hint", "data-tip": if sync() { nfs_help::sync() } else { nfs_help::r#async() },
-                                input { r#type: "checkbox", checked: sync(), onchange: move |e| sync.set(e.checked()) }
-                                " sync"
-                            }
-                            label { class: "hint", "data-tip": nfs_help::no_subtree_check(),
-                                input { r#type: "checkbox", checked: no_subtree_check(),
-                                    onchange: move |e| no_subtree_check.set(e.checked()) }
-                                " no_subtree_check"
-                            }
-                            label { class: "hint", "data-tip": if insecure() { nfs_help::insecure() } else { nfs_help::secure() },
-                                input { r#type: "checkbox", checked: insecure(), onchange: move |e| insecure.set(e.checked()) }
-                                " insecure"
-                            }
-                            label { class: "hint", "data-tip": nfs_help::squash_field(), "squash:"
-                                select {
-                                    value: "{squash()}",
-                                    "data-tip": nfs_help::squash_label(&squash()),
-                                    onchange: move |e| squash.set(e.value()),
-                                    option { value: "all_squash", "all_squash" }
-                                    option { value: "root_squash", "root_squash" }
-                                    option { value: "no_root_squash", "no_root_squash" }
-                                }
-                            }
-                            label { class: "hint", "data-tip": nfs_help::anonuid(), "anonuid:"
-                                input {
-                                    r#type: "number", min: "0", max: "65535",
-                                    value: "{anonuid().map(|n| n.to_string()).unwrap_or_default()}",
-                                    oninput: move |e| anonuid.set(e.value().parse().ok())
-                                }
-                            }
-                            label { class: "hint", "data-tip": nfs_help::anongid(), "anongid:"
-                                input {
-                                    r#type: "number", min: "0", max: "65535",
-                                    value: "{anongid().map(|n| n.to_string()).unwrap_or_default()}",
-                                    oninput: move |e| anongid.set(e.value().parse().ok())
-                                }
-                            }
-                        }
-                    }
-                }
-
-                div { class: "modal-footer",
-                    button { class: "ghost", r#type: "button",
-                        onclick: move |_| props.on_close.call(()), "Cancel" }
-                    button { class: "primary", r#type: "submit", disabled: busy(),
-                        if busy() { "Saving…" } else { "{submit_label}" }
-                    }
-                }
-            }
+fn parse_clients(rest: &str) -> Vec<Client> {
+    let mut out = Vec::new();
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
         }
-
-        if show_browser() {
-            Browser {
-                start: path().clone(),
-                on_pick: move |p: String| {
-                    path.set(p);
-                    show_browser.set(false);
-                },
-                on_close: move |_| show_browser.set(false)
-            }
+        if i >= bytes.len() {
+            break;
         }
+        let start = i;
+        while i < bytes.len() && bytes[i] != b'(' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let host = rest[start..i].to_string();
+        let options = if i < bytes.len() && bytes[i] == b'(' {
+            i += 1;
+            let opt_start = i;
+            while i < bytes.len() && bytes[i] != b')' {
+                i += 1;
+            }
+            let opt = rest[opt_start..i].to_string();
+            if i < bytes.len() {
+                i += 1;
+            }
+            opt
+        } else {
+            String::new()
+        };
+        out.push(Client { host, options });
     }
+    out
 }
 
-fn default_export_row() -> api::ExportRow {
-    api::ExportRow {
-        idx: 0,
-        path: String::new(),
-        host: "*".into(),
-        options: String::new(),
-        parsed: api::ExportOpts {
-            rw: true,
-            sync: true,
-            no_subtree_check: true,
-            squash: "all_squash".into(),
-            anonuid: Some(1000),
-            anongid: Some(1000),
-            insecure: false,
-            extra: vec![],
-        },
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Status badge that sits next to the "NFS exports" heading, mirroring
-/// the result of `systemctl is-active nfs-server.service` on the BPI.
-/// Surface a yellow warning specifically when there ARE rows but the
-/// daemon isn't active — the most common operator-visible failure mode.
-#[derive(Props, Clone, PartialEq)]
-struct NfsServerBadgeProps {
-    status: String,
-    has_rows: bool,
-}
-
-#[component]
-fn NfsServerBadge(props: NfsServerBadgeProps) -> Element {
-    let s = props.status.as_str();
-    if s.is_empty() {
-        return rsx! {};
+    #[test]
+    fn empty_input() {
+        assert!(parse("").is_empty());
     }
-    let (class, label, tip): (&'static str, &'static str, &'static str) = match s {
-        "active" => (
-            "badge ok",
-            "nfs-server: active",
-            "nfs-server.service is running and serving any rows below.",
-        ),
-        "inactive" if !props.has_rows => (
-            "badge",
-            "nfs-server: stopped",
-            "Idle on purpose — no exports defined. Adding the first row will start nfs-server automatically.",
-        ),
-        "inactive" => (
-            "badge warn",
-            "nfs-server: stopped",
-            "There are exports below but nfs-server.service isn't running. Save any row to (re)start it.",
-        ),
-        "failed" => (
-            "badge err",
-            "nfs-server: failed",
-            "nfs-server.service is in the failed state. SSH in and run `journalctl -u nfs-server -b` for details.",
-        ),
-        "activating" => (
-            "badge",
-            "nfs-server: starting…",
-            "nfs-server.service is in the activating state — refresh in a moment.",
-        ),
-        "deactivating" => (
-            "badge",
-            "nfs-server: stopping…",
-            "nfs-server.service is in the deactivating state — refresh in a moment.",
-        ),
-        _ => (
-            "badge",
-            "nfs-server: unknown",
-            "Could not query systemctl is-active. Service state is unknown.",
-        ),
-    };
-    rsx! {
-        span { class: "{class}", style: "margin-left: 12px", "data-tip": "{tip}", "{label}" }
+
+    #[test]
+    fn comments_and_blanks_ignored() {
+        let input = "# header\n\n  \n# /skipped 1.2.3.4(rw)\n";
+        assert!(parse(input).is_empty());
+    }
+
+    #[test]
+    fn single_client() {
+        let parsed = parse("/srv/media 192.168.1.0/24(rw,sync)");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].path, "/srv/media");
+        assert_eq!(parsed[0].clients.len(), 1);
+        assert_eq!(parsed[0].clients[0].host, "192.168.1.0/24");
+        assert_eq!(parsed[0].clients[0].options, "rw,sync");
+    }
+
+    #[test]
+    fn multiple_clients() {
+        let parsed = parse("/srv/services *(ro) 10.0.0.0/8(rw,sync,no_root_squash)");
+        assert_eq!(parsed[0].clients.len(), 2);
+        assert_eq!(parsed[0].clients[0].host, "*");
+        assert_eq!(parsed[0].clients[0].options, "ro");
+        assert_eq!(parsed[0].clients[1].host, "10.0.0.0/8");
+        assert_eq!(parsed[0].clients[1].options, "rw,sync,no_root_squash");
+    }
+
+    #[test]
+    fn quoted_path_with_spaces() {
+        let parsed = parse(r#""/srv/media files" *(rw)"#);
+        assert_eq!(parsed[0].path, "/srv/media files");
+        assert_eq!(parsed[0].clients[0].host, "*");
+    }
+
+    #[test]
+    fn host_without_options() {
+        let parsed = parse("/srv/x host1 host2(rw)");
+        assert_eq!(parsed[0].clients.len(), 2);
+        assert_eq!(parsed[0].clients[0].host, "host1");
+        assert!(parsed[0].clients[0].options.is_empty());
+    }
+
+    #[test]
+    fn flatten_rows() {
+        let r = rows("/a 1.1.1.1(rw) 2.2.2.2(ro)\n/b 3.3.3.3");
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].path, "/a");
+        assert_eq!(r[0].host, "1.1.1.1");
+        assert_eq!(r[1].host, "2.2.2.2");
+        assert_eq!(r[2].path, "/b");
+        assert!(r[2].options.is_empty());
+    }
+
+    #[test]
+    fn round_trip_serialize() {
+        let r = rows("/a 1.1.1.1(rw,sync)");
+        let out = serialize(&r);
+        // Two-space gutter between path column and host(options).
+        assert_eq!(out, "/a  1.1.1.1(rw,sync)\n");
+    }
+
+    #[test]
+    fn aligns_columns_when_paths_differ_in_length() {
+        let r = rows("/short *(ro)\n/a/much/longer/path *(rw)");
+        let out = serialize(&r);
+        // Both rows should have the same column for the host token.
+        let lines: Vec<&str> = out.lines().collect();
+        let host_col_a = lines[0].find('*').unwrap();
+        let host_col_b = lines[1].find('*').unwrap();
+        assert_eq!(host_col_a, host_col_b);
+    }
+
+    #[test]
+    fn opts_defaults() {
+        let o = Opts::parse("");
+        assert!(!o.rw);
+        assert!(o.sync);
+        assert_eq!(o.squash, Squash::AllSquash);
+    }
+
+    #[test]
+    fn opts_full_round_trip() {
+        let s = "rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000,insecure";
+        let o = Opts::parse(s);
+        assert!(o.rw);
+        assert!(o.sync);
+        assert!(o.no_subtree_check);
+        assert_eq!(o.squash, Squash::AllSquash);
+        assert_eq!(o.anonuid, Some(1000));
+        assert_eq!(o.anongid, Some(1000));
+        assert!(o.insecure);
+        assert_eq!(o.to_options_string(), s);
+    }
+
+    #[test]
+    fn opts_preserves_unknown() {
+        let o = Opts::parse("rw,fsid=0,nohide");
+        assert!(o.rw);
+        assert!(o.extra.contains(&"fsid=0".to_string()));
+        assert!(o.extra.contains(&"nohide".to_string()));
+        let back = o.to_options_string();
+        assert!(back.contains("fsid=0"));
+        assert!(back.contains("nohide"));
     }
 }

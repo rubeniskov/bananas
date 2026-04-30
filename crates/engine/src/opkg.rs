@@ -9,7 +9,7 @@
 //!   separate command.
 //!
 //! Why the asynchronous shape for `upgrade`: opkg's own postinst on
-//! `bananas-server.ipk` runs `systemctl restart bananas-server
+//! `bananas-webadmin.ipk` runs `systemctl restart bananas-webadmin
 //! bananas-engine`. systemd's default `KillMode=control-group` would
 //! tear down every PID in the helper's cgroup — including the opkg
 //! child the helper just spawned — leaving the system half-upgraded.
@@ -373,13 +373,13 @@ mod tests {
 
     #[test]
     fn parses_list_upgradable() {
-        let raw = "bananas-server - 1.0.0 - 1.1.0\n\
+        let raw = "bananas-webadmin - 1.0.0 - 1.1.0\n\
                    bananas-stats - 1.0.0 - 1.1.0\n\
                    \n\
                    garbage line\n";
         let rows = parse_list_upgradable(raw);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].name, "bananas-server");
+        assert_eq!(rows[0].name, "bananas-webadmin");
         assert_eq!(rows[0].installed, "1.0.0");
         assert_eq!(rows[0].candidate, "1.1.0");
         assert_eq!(rows[1].name, "bananas-stats");
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn parses_list_installed() {
-        let raw = "bananas-server - 1.1.0\n\
+        let raw = "bananas-webadmin - 1.1.0\n\
                    bananas-stats - 1.1.0\n\
                    bananas-webadmin - 1.1.0\n";
         let rows = parse_list_installed(raw);
@@ -405,7 +405,7 @@ mod tests {
         assert!(validate_package_name("foo bar").is_err());
         assert!(validate_package_name("foo;rm -rf").is_err());
 
-        validate_package_name("bananas-server").unwrap();
+        validate_package_name("bananas-webadmin").unwrap();
         validate_package_name("a").unwrap();
         validate_package_name("a1").unwrap();
         validate_package_name("foo-bar-123").unwrap();
@@ -463,7 +463,7 @@ mod tests {
     async fn upgrade_status_active_while_running() {
         let td = tempfile::tempdir().unwrap();
         let log = td.path().join("opkg.log");
-        std::fs::write(&log, b"Downloading bananas-server.ipk\n").unwrap();
+        std::fs::write(&log, b"Downloading bananas-webadmin.ipk\n").unwrap();
         unsafe {
             std::env::set_var("BANANAS_OPKG_LOG", &log);
         }

@@ -141,7 +141,7 @@ jobs:
       # the pixi env accidentally picking up the host toolchain.
       - name: Verify ARM ELFs
         run: |
-          file serve/bin/bananas-server | grep -q "ARM" || (echo "bananas-server is not ARM!" && exit 1)
+          file serve/bin/bananas-webadmin | grep -q "ARM" || (echo "bananas-webadmin is not ARM!" && exit 1)
           file serve/bin/bananas-engine | grep -q "ARM" || (echo "bananas-engine is not ARM!" && exit 1)
           file serve/bin/bananas-stats  | grep -q "ARM" || (echo "bananas-stats is not ARM!"  && exit 1)
 

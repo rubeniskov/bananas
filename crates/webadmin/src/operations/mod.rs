@@ -8,7 +8,7 @@
 //!    progress UI.
 //! 2. **Survive a server restart** — the JSON journal at
 //!    `BANANAS_OPERATIONS_JOURNAL` (default `/var/lib/bananas/operations.json`)
-//!    persists state across `systemctl restart bananas-server`. Ops
+//!    persists state across `systemctl restart bananas-webadmin`. Ops
 //!    whose state lives off-server (opkg in `bananas-engine`'s log,
 //!    cloud sync's `.progress` file) can reinstate themselves cleanly;
 //!    in-process ops (config import) get marked `Failure` with an

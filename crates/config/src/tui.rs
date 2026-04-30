@@ -272,7 +272,7 @@ fn render_status(f: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let mut items: Vec<ListItem> = vec![ListItem::new(header)];
 
     for (component, unit) in [
-        ("server", Some("bananas-server.service")),
+        ("server", Some("bananas-webadmin.service")),
         ("helper", Some("bananas-engine.service")),
         ("stats", Some("bananas-stats.service")),
         ("dashboard", Some("bananas-dashboard.service")),

@@ -8,11 +8,18 @@
 #   4. Tags the repo (`vX.Y.Z`) and pushes.
 #   5. Creates a GitHub release with the bundled artifacts attached.
 #
-# Artifacts shipped:
-#   - bananas-server-vX.Y.Z-armv7.tar.gz       (server + helper)
-#   - bananas-stats-vX.Y.Z-armv7.tar.gz        (sampler daemon)
-#   - bananas-webadmin-vX.Y.Z.tar.gz           (wasm SPA)
-#   - bananas-dashboard-vX.Y.Z-armv7.tar.gz    (Slint LCD app)
+# Artifacts shipped (as IPKs to the gh-pages opkg feed; the GitHub
+# release page itself only carries the .wic SD-card image post-opkg
+# migration):
+#   - bananas-webadmin    (HTTP daemon + bananas-engine binary, armv7)
+#   - bananas-engine      (privileged Unix-socket daemon, ships with the above)
+#   - bananas-webadmin-ui (wasm SPA, allarch)
+#   - bananas-stats       (sampler daemon, armv7)
+#   - bananas-dashboard   (Slint LCD app, armv7)
+#   - bananas-config      (TUI/CLI config tool, armv7)
+#   - bananas-feed-config (opkg customfeeds.conf, allarch)
+#   - bananas-modprobe    (kernel-module load-on-boot config, allarch)
+#   - bananas-rclone      (vendored rclone armv7 prebuilt)
 #
 # The Yocto bake also runs here so every release ships an SD-card image
 # the operator can `dd` onto a card without touching pixi/kas. Hosted
@@ -300,7 +307,7 @@ jobs:
           echo "Using $OPKG_MAKE_INDEX"
 
           mkdir -p feed-publish/feed/latest
-          PKGS="bananas-server bananas-stats bananas-dashboard bananas-config bananas-webadmin bananas-feed-config bananas-modprobe bananas-rclone"
+          PKGS="bananas-webadmin bananas-stats bananas-dashboard bananas-config bananas-webadmin-ui bananas-feed-config bananas-modprobe bananas-rclone"
           for arch in all bananapro cortexa7t2hf-neon; do
             src="build/tmp/deploy/ipk/$arch"
             [ -d "$src" ] || continue

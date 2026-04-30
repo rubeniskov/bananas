@@ -52,7 +52,7 @@ Reproducibility, low idle power, no cloud lock-in, and "your own data, your own 
 - **SATA + USB storage** with `e2fsprogs-resize2fs`, `tune2fs`, `mke2fs`, `e2fsck`, `gptfdisk` for on-device partition surgery (within the 16 TiB pgoff_t cap on this 32-bit ARM SoC — see the GPT memo in [`docs/`](docs)).
 - **systemd** with key-only SSH, baked-in `authorized_keys`, optional root password (SHA-512 hash injected via `ROOT_PASSWORD_HASH`).
 
-### Web admin (`crates/server` + `crates/webadmin`)
+### Web admin (`crates/webadmin` + `crates/webadmin`)
 
 - Single-page Dioxus 0.7 wasm UI served alongside a JSON `/api/*` from a Rust HTTP server.
 - Hash-based routing — every tab survives a full-page reload.
@@ -76,7 +76,7 @@ Reproducibility, low idle power, no cloud lock-in, and "your own data, your own 
 - Auto-sized DB budget (5 % of free space, capped at 100 MiB) with hourly retention sweeps.
 - Live Unix-socket pub/sub at `/run/bananas-stats/live.sock` — both the dashboard and the web admin's WebSocket bus subscribe here, so live data never round-trips through SQLite.
 
-### Cloud sync (`crates/server` + helper, vendored rclone)
+### Cloud sync (`crates/webadmin` + helper, vendored rclone)
 
 - New **Cloud** tab with Accounts and Sync entries panels.
 - Provider catalog: Google Drive, Dropbox, OneDrive, S3-compatible, WebDAV, FTP — extensible via a one-line const append.
@@ -186,7 +186,7 @@ flowchart LR
         direction TB
         subgraph Userspace["systemd-managed services"]
             direction TB
-            Server["bananas-server<br/>(Rust + axum, port 8080)<br/>/api/* + wasm SPA + WS bus"]
+            Server["bananas-webadmin<br/>(Rust + axum, port 8080)<br/>/api/* + wasm SPA + WS bus"]
             Helper["bananas-engine<br/>(root, Unix socket RPC)"]
             Stats["bananas-stats<br/>(sampler + SQLite WAL<br/>+ live socket)"]
             Dashboard["bananas-dashboard<br/>(Slint app, software<br/>renderer on KMS)"]
@@ -217,7 +217,7 @@ flowchart LR
 | Crate | Target | Purpose |
 |-------|--------|---------|
 | `crates/engine` | armv7 host bin | Privileged ops (NFS exports rewrite, fstab edit, user mgmt, chown/chmod, smartctl, rclone). Listens on `/run/bananas/engine.sock`. |
-| `crates/server` | armv7 host bin | HTTP / WebSocket server, port 8080. JSON `/api/*` + bundled wasm SPA. Routes everything sensitive through the helper. |
+| `crates/webadmin` | armv7 host bin | HTTP / WebSocket server, port 8080. JSON `/api/*` + bundled wasm SPA. Routes everything sensitive through the helper. |
 | `crates/webadmin` | wasm32 | Dioxus 0.7 SPA. Bundled into `/usr/share/bananas/webadmin/`. |
 | `crates/stats` | armv7 host bin + lib | Sampler daemon. Writes SQLite, publishes live snapshots over `/run/bananas-stats/live.sock`. |
 | `crates/dashboard` | armv7 host bin | Slint app. Subscribes to the stats live socket; renders on `/dev/fb0`. |

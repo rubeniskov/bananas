@@ -544,7 +544,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "bananas-server"
+name = "bananas-stats"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "nix 0.31.2",
+ "pretty_assertions",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "bananas-webadmin"
 version = "1.4.0"
 dependencies = [
  "anyhow",
@@ -570,26 +589,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bananas-stats"
-version = "1.4.0"
-dependencies = [
- "anyhow",
- "nix 0.31.2",
- "pretty_assertions",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "toml 1.1.2+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "bananas-webadmin"
+name = "bananas-webadmin-ui"
 version = "1.4.0"
 dependencies = [
  "console_error_panic_hook",

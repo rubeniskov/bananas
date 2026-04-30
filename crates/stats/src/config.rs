@@ -133,7 +133,7 @@ impl Default for Ui {
 #[serde(default)]
 pub struct LiveSocket {
     /// Path of the Unix socket bananas-stats binds for live snapshots.
-    /// Subscribers (bananas-server, bananas-dashboard) connect here and
+    /// Subscribers (bananas-webadmin, bananas-dashboard) connect here and
     /// receive newline-delimited JSON. Default lives under
     /// `/run/bananas-stats/` (created by systemd's RuntimeDirectory=);
     /// dev hosts that don't have that dir fall back to /tmp.

@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o660))
         .await
         .ok();
-    // The unprivileged frontend (bananas-server) runs as the `bananas`
+    // The unprivileged frontend (bananas-webadmin) runs as the `bananas`
     // user. Without this chown the socket is root:root 0660, which the
     // frontend can't open. Look up the GID by reading /etc/group; falls
     // back to a no-op log if the group is missing.
@@ -1723,7 +1723,7 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     }
 
     // Provider keys are rclone backend names verbatim (see the catalog
-    // in `crates/server/src/cloud.rs::PROVIDERS`). Allowlist them so a
+    // in `crates/webadmin/src/cloud.rs::PROVIDERS`). Allowlist them so a
     // forged cloud.toml can't slip an arbitrary backend through.
     let rclone_type = match account.provider.as_str() {
         "drive" | "dropbox" | "onedrive" | "s3" | "webdav" | "ftp" => account.provider.as_str(),
@@ -1747,7 +1747,7 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     // owned by the right user (and rclone can't accidentally read /
     // overwrite root-only paths). Falls back to running as root with
     // a warning if the user is missing — should never happen on the
-    // BPI image since the bananas-server recipe creates it via USERADD.
+    // BPI image since the bananas-webadmin recipe creates it via USERADD.
     let bananas = lookup_uid_gid("bananas");
     if bananas.is_none() {
         tracing::warn!("`bananas` user missing from /etc/passwd; rclone will run as root");
@@ -1991,7 +1991,7 @@ async fn cancel_cloud_sync(idx: usize) -> Result<String> {
 /// `systemctl reboot` schedules a reboot through systemd. The helper
 /// returns success synchronously — systemd waits for the unit handler
 /// to finish before actually pulling the trigger, so our reply makes
-/// it back to bananas-server before the network drops. The browser
+/// it back to bananas-webadmin before the network drops. The browser
 /// just sees a connection close shortly after the apply banner.
 async fn reboot_system() -> Result<String> {
     let out = TokioCommand::new("systemctl")
@@ -2048,7 +2048,7 @@ async fn exportfs_reload() -> Result<String> {
 ///     and reapplies theme + UI changes in place, so the LCD doesn't
 ///     blink off + redo KMS+EGL init every time the operator flips
 ///     a setting through the web UI.
-///   - cloud.toml is read live by bananas-server on each /api/cloud/*
+///   - cloud.toml is read live by bananas-webadmin on each /api/cloud/*
 ///     request — no daemon to restart, hence the empty slice.
 fn service_config_target(name: &str) -> Option<(&'static str, &'static [&'static str])> {
     match name {
@@ -2059,7 +2059,7 @@ fn service_config_target(name: &str) -> Option<(&'static str, &'static [&'static
         // when the operator flips a setting through the web UI.
         "dashboard" => Some(("/etc/bananas/dashboard.toml", &[])),
         "cloud" => Some(("/etc/bananas/cloud.toml", &[])),
-        // Read by bananas-server on every request that needs it; no
+        // Read by bananas-webadmin on every request that needs it; no
         // daemon to restart. Used for the General tab (timezone, etc).
         "system" => Some(("/etc/bananas/system.toml", &[])),
         _ => None,
@@ -2099,7 +2099,7 @@ async fn write_service_config(name: &str, content: &str) -> Result<String> {
         .await
         .with_context(|| format!("renaming {tmp} -> {path}"))?;
     if units.is_empty() {
-        // No daemon to restart — bananas-server reads this config on
+        // No daemon to restart — bananas-webadmin reads this config on
         // each request. Caller (UI) sees an immediate config change.
         return Ok(format!("Saved {path} (live config — no restart).\n"));
     }

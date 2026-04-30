@@ -1,1134 +1,498 @@
-//! Cloud-sync configuration UI.
+//! /api/cloud/* — cloud-sync configuration storage + run dispatch.
 //!
-//! Three stacked panels:
-//!   - **Accounts** — list of providers the operator has configured,
-//!     each shown with its name, provider kind, and a "✓ token" /
-//!     "no token" indicator. Add via a modal that asks for a name,
-//!     provider (dropdown from /api/cloud/providers), and the
-//!     `rclone authorize` token blob (paste).
-//!   - **Sync entries** — list of (local path, remote path, direction,
-//!     schedule, account) rows. Add / edit / delete / run-now.
-//!   - **Recent runs** — last ~20 jobs with status badge, started /
-//!     finished timestamps and label. Fed by `/api/cloud/runs`.
+//! Storage shape lives at `/etc/bananas/cloud.toml` and is round-trip
+//! safe through the existing config bundle (TOML save/load on the
+//! Save Config / Load Config buttons). The `cloud_jobs` module owns
+//! the in-process job table that backs `/api/cloud/runs/*`.
 //!
-//! "Run now" enqueues a job server-side and returns immediately with a
-//! job_id; the UI then polls `/api/cloud/runs/{id}` every 2 s and
-//! updates the toast banner when the run finishes — so the browser tab
-//! can be closed without aborting a long sync.
+//! Endpoints:
+//!   GET    /api/cloud/providers      — static list of supported
+//!                                       provider kinds.
+//!   GET    /api/cloud/accounts       — current accounts (tokens
+//!                                       redacted).
+//!   POST   /api/cloud/accounts       — add an account.
+//!   DELETE /api/cloud/accounts/<n>   — remove an account by name.
+//!   GET    /api/cloud/syncs          — list sync entries.
+//!   POST   /api/cloud/syncs          — add a sync entry.
+//!   PUT    /api/cloud/syncs/<idx>    — update entry by index.
+//!   DELETE /api/cloud/syncs/<idx>    — remove entry by index.
+//!   POST   /api/cloud/syncs/<idx>/run — enqueue a run; returns the
+//!                                       job_id immediately.
+//!   GET    /api/cloud/runs           — list recent runs (newest first).
+//!   GET    /api/cloud/runs/<job_id>  — fetch one run with its output
+//!                                       tail; UI polls this while a
+//!                                       sync is in flight.
 
-#![allow(non_snake_case)]
+use axum::{
+    Json,
+    extract::{Path as AxumPath, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use bananas_engine::{Command, Response as HelperResponse};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use dioxus::prelude::*;
-use gloo_timers::future::TimeoutFuture;
+use crate::AppState;
 
-use crate::{AuthCtx, api, api::ApiError, browse::Browser, components::ConfirmModal, icons::Icon};
+/// Static provider catalog. Surfaced via /api/cloud/providers so the
+/// UI's "Add account" form can populate a dropdown without baking the
+/// list into the wasm bundle. Add new entries here as we gain
+/// confidence each provider works end-to-end with the (future)
+/// rclone wiring.
+// Provider keys MUST match rclone's actual backend names so the
+// "rclone authorize <key>" hint in the UI is copy-pasteable. rclone
+// calls Google Drive `drive`, not `google_drive` — getting that wrong
+// blew up the operator's first authorize attempt.
+const PROVIDERS: &[(&str, &str)] = &[
+    ("drive", "Google Drive"),
+    ("dropbox", "Dropbox"),
+    ("onedrive", "OneDrive"),
+    ("s3", "Amazon S3 / S3-compatible"),
+    ("webdav", "WebDAV"),
+    ("ftp", "FTP / FTPS"),
+];
 
-/// Confirm-modal payload for deletes that need a yes/no before firing.
-#[derive(Clone, PartialEq)]
-enum PendingDelete {
-    Account(String),
-    Sync(usize),
+/// Mirrors the on-disk cloud.toml shape. Round-trips through serde
+/// + the helper's `WriteServiceConfig`. The same struct is consumed
+/// by the config-bundle save/load flow so an admin's TOML backup
+/// captures their cloud setup verbatim (tokens included — operators
+/// who don't want tokens in their backups can scrub them by hand
+/// before sharing the bundle, just like /etc/shadow hashes).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudConfig {
+    pub accounts: Vec<Account>,
+    pub syncs: Vec<SyncEntry>,
 }
 
-#[component]
-pub fn CloudPage() -> Element {
-    let auth_ctx = use_context::<AuthCtx>();
-    let mut providers: Signal<Vec<api::CloudProvider>> = use_signal(Vec::new);
-    let mut accounts: Signal<Vec<api::CloudAccount>> = use_signal(Vec::new);
-    let mut syncs: Signal<Vec<api::CloudSync>> = use_signal(Vec::new);
-    let mut runs: Signal<Vec<api::CloudJob>> = use_signal(Vec::new);
-    let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
-    let mut tick = use_signal(|| 0u32);
-    let mut runs_tick = use_signal(|| 0u32);
-    let mut account_form: Signal<Option<AccountFormMode>> = use_signal(|| None);
-    let mut sync_form: Signal<Option<SyncFormMode>> = use_signal(|| None);
-    let mut pending_delete: Signal<Option<PendingDelete>> = use_signal(|| None);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Account {
+    /// Human-friendly name — also the rclone "remote" name. Validated:
+    /// POSIX-portable charset only so it round-trips through rclone's
+    /// section-header parser.
+    pub name: String,
+    /// One of the keys in `PROVIDERS`.
+    pub provider: String,
+    /// rclone-authorize JSON token blob, base64 or raw. The UI shows
+    /// it as a redacted "•••" with a "reveal" toggle.
+    #[serde(default)]
+    pub token: String,
+}
 
-    use_effect(move || {
-        let _ = tick();
-        let _ = auth_ctx.refresh.read();
-        spawn(async move {
-            match api::list_cloud_providers().await {
-                Ok(list) => providers.set(list),
-                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => banner.set(Some((
-                    BannerKind::Err,
-                    format!("Loading providers failed: {e}"),
-                ))),
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncEntry {
+    /// References Account.name. The server doesn't enforce existence
+    /// at save time — orphan entries surface as "missing account" in
+    /// the UI rather than blocking edits.
+    pub account: String,
+    pub local_path: String,
+    pub remote_path: String,
+    /// `push` (local → remote), `pull` (remote → local), or
+    /// `bidirectional`. Default push.
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    /// `manual` (run-on-demand) or a 5-field cron string. Default manual.
+    #[serde(default = "default_schedule")]
+    pub schedule: String,
+}
+
+fn default_direction() -> String {
+    "push".into()
+}
+fn default_schedule() -> String {
+    "manual".into()
+}
+
+// ---------------- Provider catalog ----------------
+
+pub async fn providers() -> Response {
+    let list: Vec<serde_json::Value> = PROVIDERS
+        .iter()
+        .map(|(k, label)| json!({ "key": k, "label": label }))
+        .collect();
+    Json(json!({ "providers": list })).into_response()
+}
+
+// ---------------- Read / write helpers ----------------
+
+async fn load(state: &AppState) -> Result<CloudConfig, String> {
+    let cmd = Command::ReadServiceConfig {
+        name: "cloud".into(),
+    };
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => {
+            if output.trim().is_empty() {
+                return Ok(CloudConfig::default());
             }
-        });
-        spawn(async move {
-            match api::list_cloud_accounts().await {
-                Ok(list) => accounts.set(list),
-                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => banner.set(Some((
-                    BannerKind::Err,
-                    format!("Loading accounts failed: {e}"),
-                ))),
-            }
-        });
-        spawn(async move {
-            match api::list_cloud_syncs().await {
-                Ok(list) => syncs.set(list),
-                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                Err(e) => banner.set(Some((
-                    BannerKind::Err,
-                    format!("Loading sync entries failed: {e}"),
-                ))),
-            }
-        });
+            let mut cfg: CloudConfig =
+                toml::from_str(&output).map_err(|e| format!("parsing cloud.toml: {e}"))?;
+            migrate_provider_keys(&mut cfg);
+            Ok(cfg)
+        }
+        Ok(HelperResponse { error, .. }) => {
+            Err(error.unwrap_or_else(|| "helper rejected ReadServiceConfig".into()))
+        }
+        Err(e) => Err(format!("helper unreachable: {e}")),
+    }
+}
+
+/// Backward-compat shim for cloud.toml files that predate the
+/// `google_drive` → `drive` provider-key rename. Bundles saved with
+/// the old key still need to load + run after a config restore — and
+/// the helper's rclone allowlist only accepts current names. Rewriting
+/// here means the next save() flushes a normalized cloud.toml without
+/// any extra migration step on the operator's side.
+fn migrate_provider_keys(cfg: &mut CloudConfig) {
+    for account in &mut cfg.accounts {
+        if account.provider == "google_drive" {
+            account.provider = "drive".into();
+        }
+    }
+}
+
+async fn save(state: &AppState, cfg: &CloudConfig) -> Result<(), String> {
+    let body = toml::to_string_pretty(cfg).map_err(|e| format!("serializing cloud.toml: {e}"))?;
+    let cmd = Command::WriteServiceConfig {
+        name: "cloud".into(),
+        content: body,
+    };
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse { ok: true, .. }) => Ok(()),
+        Ok(HelperResponse { error, output, .. }) => Err(format!(
+            "{}\n\n{}",
+            error.unwrap_or_else(|| "helper rejected WriteServiceConfig".into()),
+            output
+        )),
+        Err(e) => Err(format!("helper unreachable: {e}")),
+    }
+}
+
+fn err(status: StatusCode, msg: impl Into<String>) -> Response {
+    (status, Json(json!({ "ok": false, "error": msg.into() }))).into_response()
+}
+
+// ---------------- Accounts ----------------
+
+/// List configured accounts. Tokens are redacted to a single `•` so
+/// they never leak through normal API browsing — the operator can
+/// confirm an account exists without exposing the credential. Backup
+/// (config save) goes through a different code path that includes
+/// the token verbatim.
+pub async fn list_accounts(State(state): State<AppState>) -> Response {
+    let cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let accounts: Vec<serde_json::Value> = cfg
+        .accounts
+        .iter()
+        .map(|a| {
+            json!({
+                "name": a.name,
+                "provider": a.provider,
+                "token_present": !a.token.is_empty(),
+            })
+        })
+        .collect();
+    Json(json!({ "accounts": accounts })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddAccountReq {
+    pub name: String,
+    pub provider: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+pub async fn add_account(
+    State(state): State<AppState>,
+    Json(req): Json<AddAccountReq>,
+) -> Response {
+    if !is_safe_account_name(&req.name) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "account name must be 1–32 chars from [A-Za-z0-9_-]",
+        );
+    }
+    if !PROVIDERS.iter().any(|(k, _)| *k == req.provider) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("unknown provider {:?}", req.provider),
+        );
+    }
+    let mut cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    if cfg.accounts.iter().any(|a| a.name == req.name) {
+        return err(
+            StatusCode::CONFLICT,
+            format!("account {:?} already exists", req.name),
+        );
+    }
+    cfg.accounts.push(Account {
+        name: req.name,
+        provider: req.provider,
+        token: req.token,
     });
+    if let Err(e) = save(&state, &cfg).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
 
-    // Refresh the recent-runs list whenever something bumps `runs_tick`
-    // (initial load, after Run-now click, or after a polling task notices
-    // a job finished).
-    use_effect(move || {
-        let _ = runs_tick();
-        let _ = auth_ctx.refresh.read();
-        spawn(async move {
-            match api::list_cloud_runs().await {
-                Ok(list) => runs.set(list),
-                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                // Don't surface load-runs errors as banners — they'd
-                // overwrite the user's actual sync feedback.
-                Err(_) => {}
-            }
-        });
+/// Update the provider and/or token of an existing account. Renaming an
+/// account is intentionally NOT supported here — `name` is the rclone
+/// remote identifier, and renaming would orphan every sync entry that
+/// references it. Operators who want a different name delete + add.
+///
+/// Empty `token` keeps the existing token (the same redaction the GET
+/// path uses), so an operator who's only swapping provider does not have
+/// to re-paste their auth blob.
+#[derive(Debug, Deserialize)]
+pub struct UpdateAccountReq {
+    pub provider: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+pub async fn update_account(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    Json(req): Json<UpdateAccountReq>,
+) -> Response {
+    if !PROVIDERS.iter().any(|(k, _)| *k == req.provider) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("unknown provider {:?}", req.provider),
+        );
+    }
+    let mut cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let Some(account) = cfg.accounts.iter_mut().find(|a| a.name == name) else {
+        return err(StatusCode::NOT_FOUND, format!("account {name:?} not found"));
+    };
+    account.provider = req.provider;
+    if !req.token.is_empty() {
+        account.token = req.token;
+    }
+    if let Err(e) = save(&state, &cfg).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
+pub async fn delete_account(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    let mut cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let before = cfg.accounts.len();
+    cfg.accounts.retain(|a| a.name != name);
+    if cfg.accounts.len() == before {
+        return err(StatusCode::NOT_FOUND, format!("account {name:?} not found"));
+    }
+    // Also drop any sync entries pointing at the removed account so
+    // the UI doesn't end up listing orphans.
+    cfg.syncs.retain(|s| s.account != name);
+    if let Err(e) = save(&state, &cfg).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
+fn is_safe_account_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+// ---------------- Sync entries ----------------
+
+pub async fn list_syncs(State(state): State<AppState>) -> Response {
+    let cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let with_idx: Vec<serde_json::Value> = cfg
+        .syncs
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            json!({
+                "idx": i,
+                "account": s.account,
+                "local_path": s.local_path,
+                "remote_path": s.remote_path,
+                "direction": s.direction,
+                "schedule": s.schedule,
+            })
+        })
+        .collect();
+    Json(json!({ "syncs": with_idx })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddSyncReq {
+    pub account: String,
+    pub local_path: String,
+    pub remote_path: String,
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    #[serde(default = "default_schedule")]
+    pub schedule: String,
+}
+
+fn validate_sync(req: &AddSyncReq) -> Result<(), String> {
+    if req.account.is_empty() {
+        return Err("account is required".into());
+    }
+    if !req.local_path.starts_with('/') {
+        return Err("local_path must be absolute".into());
+    }
+    if req.remote_path.is_empty() {
+        return Err("remote_path is required".into());
+    }
+    if !["push", "pull", "bidirectional"].contains(&req.direction.as_str()) {
+        return Err(format!("unknown direction {:?}", req.direction));
+    }
+    Ok(())
+}
+
+pub async fn add_sync(State(state): State<AppState>, Json(req): Json<AddSyncReq>) -> Response {
+    if let Err(e) = validate_sync(&req) {
+        return err(StatusCode::BAD_REQUEST, e);
+    }
+    let mut cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    cfg.syncs.push(SyncEntry {
+        account: req.account,
+        local_path: req.local_path,
+        remote_path: req.remote_path,
+        direction: req.direction,
+        schedule: req.schedule,
     });
+    if let Err(e) = save(&state, &cfg).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
 
-    // Background auto-poll: while any recent run is in the Running state
-    // (cron-fired job, a run started in another tab, or one already
-    // mid-flight when the page mounted), keep refreshing /api/cloud/runs
-    // every 2 s so the live progress + status update without a manual
-    // Refresh click. Stops once the list contains no Running rows.
-    use_effect(move || {
-        let any_running = runs
-            .read()
-            .iter()
-            .any(|j| j.status == api::CloudJobStatus::Running);
-        if !any_running {
-            return;
-        }
-        spawn(async move {
-            TimeoutFuture::new(2000).await;
-            // Re-check inside the spawn so a finish that lands during
-            // the wait doesn't fire one extra fetch.
-            let still_running = runs
-                .read()
-                .iter()
-                .any(|j| j.status == api::CloudJobStatus::Running);
-            if still_running {
-                runs_tick.set(runs_tick() + 1);
-            }
-        });
-    });
+pub async fn update_sync(
+    State(state): State<AppState>,
+    AxumPath(idx): AxumPath<usize>,
+    Json(req): Json<AddSyncReq>,
+) -> Response {
+    if let Err(e) = validate_sync(&req) {
+        return err(StatusCode::BAD_REQUEST, e);
+    }
+    let mut cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    if idx >= cfg.syncs.len() {
+        return err(StatusCode::NOT_FOUND, format!("sync row {idx} not found"));
+    }
+    cfg.syncs[idx] = SyncEntry {
+        account: req.account,
+        local_path: req.local_path,
+        remote_path: req.remote_path,
+        direction: req.direction,
+        schedule: req.schedule,
+    };
+    if let Err(e) = save(&state, &cfg).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
 
-    rsx! {
-        div { class: "section-header",
-            h2 { "Cloud accounts" }
-            span { class: "spacer" }
-            button {
-                class: "ghost",
-                "data-tip": "Re-fetch accounts + sync entries from the server.",
-                onclick: move |_| tick.set(tick() + 1),
-                Icon { name: "rotate-cw" }
-                "Refresh"
-            }
-            button {
-                class: "primary",
-                "data-tip": "Add a new cloud account. You'll need an rclone-authorize token for the chosen provider.",
-                onclick: move |_| account_form.set(Some(AccountFormMode::Create)),
-                Icon { name: "plus" }
-                "Add account"
-            }
-        }
+pub async fn delete_sync(
+    State(state): State<AppState>,
+    AxumPath(idx): AxumPath<usize>,
+) -> Response {
+    let mut cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    if idx >= cfg.syncs.len() {
+        return err(StatusCode::NOT_FOUND, format!("sync row {idx} not found"));
+    }
+    cfg.syncs.remove(idx);
+    if let Err(e) = save(&state, &cfg).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
 
-        if let Some((kind, msg)) = banner() {
-            div { class: "banner {kind.css()}", pre { "{msg}" } }
-        }
+/// Trigger a sync. Returns immediately with the new (or existing, if a
+/// run was already in flight) job_id; the actual rclone call runs on a
+/// background task. Caller polls `/api/cloud/runs/{job_id}` to follow it.
+pub async fn run_sync(State(state): State<AppState>, AxumPath(idx): AxumPath<usize>) -> Response {
+    let cfg = match load(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let Some(entry) = cfg.syncs.get(idx) else {
+        return err(StatusCode::NOT_FOUND, format!("sync row {idx} not found"));
+    };
+    let label = format!(
+        "{}:{} → {}:{}",
+        entry.account, entry.local_path, entry.account, entry.remote_path
+    );
+    let job_id = state
+        .jobs
+        .enqueue(idx, label, (*state.helper_socket).clone())
+        .await;
+    Json(json!({ "ok": true, "job_id": job_id })).into_response()
+}
 
-        if accounts.read().is_empty() {
-            p { class: "empty", "No cloud accounts yet. Click 'Add account' to connect one." }
-        } else {
-            table { class: "rows",
-                thead {
-                    tr { th { "Name" } th { "Provider" } th { "Token" } th {} }
-                }
-                tbody {
-                    for a in accounts.read().iter() {
-                        AccountRow {
-                            key: "{a.name}",
-                            account: a.clone(),
-                            on_edit: {
-                                let entry = a.clone();
-                                move |_| account_form.set(Some(AccountFormMode::Edit(entry.clone())))
-                            },
-                            on_delete: {
-                                let name = a.name.clone();
-                                move |_| pending_delete.set(Some(PendingDelete::Account(name.clone())))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        div { class: "section-header", style: "margin-top: 1.6em",
-            h2 { "Sync entries" }
-            span { class: "spacer" }
-            button {
-                class: "primary",
-                "data-tip": "Add a directory to sync to / from a cloud account.",
-                disabled: accounts.read().is_empty(),
-                onclick: move |_| sync_form.set(Some(SyncFormMode::Create)),
-                Icon { name: "plus" }
-                "Add sync entry"
-            }
-        }
-        if accounts.read().is_empty() {
-            p { class: "preview-label", "Add at least one account before defining sync entries." }
-        } else if syncs.read().is_empty() {
-            p { class: "empty", "No sync entries yet." }
-        } else {
-            table { class: "rows",
-                thead {
-                    tr {
-                        th { "Account" }
-                        th { "Local" }
-                        th { "Remote" }
-                        th { "Direction" }
-                        th { "Schedule" }
-                        th {}
-                    }
-                }
-                tbody {
-                    for s in syncs.read().iter() {
-                        SyncRow {
-                            key: "{s.idx}",
-                            sync: s.clone(),
-                            on_edit: {
-                                let entry = s.clone();
-                                move |_| sync_form.set(Some(SyncFormMode::Edit(entry.clone())))
-                            },
-                            on_run: {
-                                let idx = s.idx;
-                                move |_| {
-                                    banner.set(Some((BannerKind::Ok, format!("Queueing sync row {idx}…"))));
-                                    spawn(async move {
-                                        let job_id = match api::run_cloud_sync(idx).await {
-                                            Ok(id) => id,
-                                            Err(ApiError::Unauthorized) => {
-                                                auth_ctx.signal_unauthorized();
-                                                return;
-                                            }
-                                            Err(e) => {
-                                                banner.set(Some((BannerKind::Err, e.to_string())));
-                                                return;
-                                            }
-                                        };
-                                        banner.set(Some((BannerKind::Ok, format!("Sync running (job #{job_id}). You can leave this page; the run continues on the NAS."))));
-                                        runs_tick.set(runs_tick() + 1);
-                                        // Poll every 2s until the job leaves the Running state.
-                                        loop {
-                                            TimeoutFuture::new(2000).await;
-                                            match api::get_cloud_run(job_id).await {
-                                                Ok(job) => match job.status {
-                                                    api::CloudJobStatus::Running => continue,
-                                                    api::CloudJobStatus::Success => {
-                                                        let tail = output_tail(&job.output);
-                                                        banner.set(Some((BannerKind::Ok, format!("Sync #{job_id} complete. {tail}"))));
-                                                        runs_tick.set(runs_tick() + 1);
-                                                        break;
-                                                    }
-                                                    api::CloudJobStatus::Failure => {
-                                                        let tail = output_tail(&job.output);
-                                                        banner.set(Some((BannerKind::Err, format!("Sync #{job_id} failed. {tail}"))));
-                                                        runs_tick.set(runs_tick() + 1);
-                                                        break;
-                                                    }
-                                                },
-                                                Err(ApiError::Unauthorized) => {
-                                                    auth_ctx.signal_unauthorized();
-                                                    break;
-                                                }
-                                                Err(_) => {
-                                                    // Transient network burp — keep polling.
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                            },
-                            on_delete: {
-                                let idx = s.idx;
-                                move |_| pending_delete.set(Some(PendingDelete::Sync(idx)))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        div { class: "section-header", style: "margin-top: 1.6em",
-            h2 { "Recent runs" }
-            span { class: "spacer" }
-            button {
-                class: "ghost",
-                "data-tip": "Re-fetch the recent-runs list.",
-                onclick: move |_| runs_tick.set(runs_tick() + 1),
-                Icon { name: "rotate-cw" }
-                "Refresh"
-            }
-        }
-        if runs.read().is_empty() {
-            p { class: "empty", "No runs yet. Trigger one with the ↻ button on a sync entry, or wait for a scheduled run to fire." }
-        } else {
-            table { class: "rows",
-                thead {
-                    tr {
-                        th { "Job" }
-                        th { "Status" }
-                        th { "Started" }
-                        th { "Finished" }
-                        th { "Label" }
-                    }
-                }
-                tbody {
-                    for j in runs.read().iter().take(20) {
-                        RunRow {
-                            key: "{j.id}",
-                            job: j.clone(),
-                            on_cancel: move |idx: usize| {
-                                spawn(async move {
-                                    match api::cancel_cloud_sync(idx).await {
-                                        Ok(()) => {
-                                            banner.set(Some((BannerKind::Ok, format!("Cancel signaled to sync {idx}"))));
-                                            runs_tick.set(runs_tick() + 1);
-                                        }
-                                        Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                        Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(mode) = account_form() {
-            AccountFormModal {
-                mode: mode,
-                providers: providers.read().clone(),
-                on_close: move |_| account_form.set(None),
-                on_saved: move |verb: &'static str| {
-                    account_form.set(None);
-                    banner.set(Some((BannerKind::Ok, format!("Account {verb}."))));
-                    tick.set(tick() + 1);
-                },
-                on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
-                on_unauthorized: move |_| auth_ctx.signal_unauthorized()
-            }
-        }
-
-        if let Some(mode) = sync_form() {
-            SyncFormModal {
-                mode: mode,
-                accounts: accounts.read().clone(),
-                on_close: move |_| sync_form.set(None),
-                on_saved: move |verb: &'static str| {
-                    sync_form.set(None);
-                    banner.set(Some((BannerKind::Ok, format!("Sync entry {verb}"))));
-                    tick.set(tick() + 1);
-                },
-                on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
-                on_unauthorized: move |_| auth_ctx.signal_unauthorized()
-            }
-        }
-
-        if let Some(pending) = pending_delete() {
-            {
-                let (title, message, details, label) = match &pending {
-                    PendingDelete::Account(name) => (
-                        "Remove account?".to_string(),
-                        format!("Delete cloud account '{name}'."),
-                        "Any sync entries using this account will also be removed.".to_string(),
-                        "Delete account".to_string(),
-                    ),
-                    PendingDelete::Sync(idx) => (
-                        "Remove sync entry?".to_string(),
-                        format!("Delete sync row #{idx}."),
-                        "The next scheduled run is cancelled. The local directory is left untouched.".to_string(),
-                        "Delete entry".to_string(),
-                    ),
-                };
-                rsx! {
-                    ConfirmModal {
-                        title: title,
-                        message: message,
-                        details: details,
-                        confirm_label: label,
-                        danger: true,
-                        on_cancel: move |_| pending_delete.set(None),
-                        on_confirm: move |_| {
-                            let action = pending.clone();
-                            pending_delete.set(None);
-                            spawn(async move {
-                                match action {
-                                    PendingDelete::Account(name) => {
-                                        match api::delete_cloud_account(&name).await {
-                                            Ok(()) => {
-                                                banner.set(Some((BannerKind::Ok, format!("Removed account {name}"))));
-                                                tick.set(tick() + 1);
-                                            }
-                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
-                                        }
-                                    }
-                                    PendingDelete::Sync(idx) => {
-                                        match api::delete_cloud_sync(idx).await {
-                                            Ok(()) => {
-                                                banner.set(Some((BannerKind::Ok, format!("Removed sync {idx}"))));
-                                                tick.set(tick() + 1);
-                                            }
-                                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                                            Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
-                                        }
-                                    }
-                                }
-                            });
-                        },
-                    }
-                }
-            }
-        }
+/// Cancel an in-flight sync — sends SIGTERM to the rclone child via
+/// the helper. Idempotent: if no run is in flight (or it just finished)
+/// the helper returns a benign "no live PID" message instead of an
+/// error, so the UI's Cancel button doesn't need to know about timing.
+pub async fn cancel_sync(
+    State(state): State<AppState>,
+    AxumPath(idx): AxumPath<usize>,
+) -> Response {
+    let cmd = Command::CancelCloudSync { idx };
+    match bananas_engine::call(&state.helper_socket, &cmd).await {
+        Ok(HelperResponse {
+            ok: true, output, ..
+        }) => Json(json!({ "ok": true, "output": output })).into_response(),
+        Ok(HelperResponse { error, output, .. }) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "{}\n\n{}",
+                error.unwrap_or_else(|| "cancel failed".into()),
+                output
+            ),
+        ),
+        Err(e) => err(StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")),
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum BannerKind {
-    Ok,
-    Err,
-}
-impl BannerKind {
-    fn css(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Err => "err",
-        }
-    }
+/// List recent jobs (newest first). Bounded to ~100 by the job manager.
+pub async fn list_runs(State(state): State<AppState>) -> Response {
+    let jobs = state.jobs.list().await;
+    Json(json!({ "runs": jobs })).into_response()
 }
 
-// ---------------------------------------------------------------- Account row
-
-#[derive(Props, Clone, PartialEq)]
-struct AccountRowProps {
-    account: api::CloudAccount,
-    on_edit: EventHandler<()>,
-    on_delete: EventHandler<()>,
-}
-
-#[component]
-fn AccountRow(props: AccountRowProps) -> Element {
-    let a = &props.account;
-    let token_class: &'static str = if a.token_present {
-        "badge ok"
-    } else {
-        "badge warn"
-    };
-    let token_text: &'static str = if a.token_present {
-        "✓ token set"
-    } else {
-        "no token"
-    };
-    let pretty_provider = provider_pretty(&a.provider);
-    rsx! {
-        tr {
-            td { code { "{a.name}" } }
-            td {
-                div { class: "provider-cell",
-                    ProviderBadge { provider: a.provider.clone() }
-                    span { class: "provider-label", "{pretty_provider}" }
-                }
-            }
-            td { span { class: "{token_class}", "{token_text}" } }
-            td { class: "row-actions",
-                button {
-                    class: "btn-icon edit",
-                    "data-tip": "Edit this account (rotate token, change provider).",
-                    onclick: move |_| props.on_edit.call(()),
-                    Icon { name: "pencil" }
-                }
-                button {
-                    class: "btn-icon delete",
-                    "data-tip": "Remove this account (and any sync entries pointing at it).",
-                    onclick: move |_| props.on_delete.call(()),
-                    Icon { name: "trash-2" }
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------- Sync row
-
-#[derive(Props, Clone, PartialEq)]
-struct SyncRowProps {
-    sync: api::CloudSync,
-    on_edit: EventHandler<()>,
-    on_run: EventHandler<()>,
-    on_delete: EventHandler<()>,
-}
-
-#[component]
-fn SyncRow(props: SyncRowProps) -> Element {
-    let s = &props.sync;
-    let direction_arrow: &'static str = match s.direction.as_str() {
-        "pull" => "←",
-        "bidirectional" => "↔",
-        _ => "→",
-    };
-    rsx! {
-        tr {
-            td { code { "{s.account}" } }
-            td { code { "{s.local_path}" } }
-            td { code { "{s.remote_path}" } }
-            td { span { class: "muted", "{direction_arrow} {s.direction}" } }
-            td { code { "{s.schedule}" } }
-            td { class: "row-actions",
-                button {
-                    class: "btn-icon ok",
-                    "data-tip": "Run this sync now (manual trigger).",
-                    onclick: move |_| props.on_run.call(()),
-                    Icon { name: "rotate-cw" }
-                }
-                button {
-                    class: "btn-icon edit",
-                    "data-tip": "Edit this sync entry",
-                    onclick: move |_| props.on_edit.call(()),
-                    Icon { name: "pencil" }
-                }
-                button {
-                    class: "btn-icon delete",
-                    "data-tip": "Remove this sync entry",
-                    onclick: move |_| props.on_delete.call(()),
-                    Icon { name: "trash-2" }
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------- Run row
-
-#[derive(Props, Clone, PartialEq)]
-struct RunRowProps {
-    job: api::CloudJob,
-    on_cancel: EventHandler<usize>,
-}
-
-#[component]
-fn RunRow(props: RunRowProps) -> Element {
-    let j = &props.job;
-    let status_class: String = format!("badge {}", j.status.css());
-    let started = format_unix_short(j.started_unix);
-    let finished = j
-        .finished_unix
-        .map(format_unix_short)
-        .unwrap_or_else(|| "—".into());
-    let label = if j.label.is_empty() {
-        format!("sync row {}", j.sync_idx)
-    } else {
-        j.label.clone()
-    };
-    let is_running = j.status == api::CloudJobStatus::Running;
-    let sync_idx = j.sync_idx;
-    let progress = j.progress;
-    rsx! {
-        tr {
-            td { code { "#{j.id}" } }
-            td { span { class: "{status_class}", "{j.status.label()}" } }
-            td { code { "{started}" } }
-            // Finished cell doubles as the live-progress slot while the
-            // job is still running — no finish time yet, so the
-            // circular bar lives there. After the run resolves, the
-            // cell flips back to the actual finish timestamp.
-            td {
-                if is_running {
-                    CircularProgress { percent: progress }
-                } else {
-                    code { "{finished}" }
-                }
-            }
-            // Label cell sits on the right and holds the cancel button
-            // (only while running) next to the label text — the
-            // operator's hand is already heading right when scanning a
-            // running row, so the cancel target is closest there.
-            td {
-                div { class: "label-cell",
-                    span { class: "muted label-text", "{label}" }
-                    if is_running {
-                        button {
-                            class: "btn-icon delete",
-                            "data-tip": "Cancel this in-flight sync (SIGTERM to rclone).",
-                            onclick: move |_| props.on_cancel.call(sync_idx),
-                            Icon { name: "x" }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Circular progress indicator. Determinate when `percent` is `Some`
-/// (renders an SVG arc filling 0..=100% of the circumference); shows
-/// an animated indeterminate spinner otherwise. Sized to fit inline
-/// with a status badge — see the matching CSS classes
-/// `.circ-progress` / `.circ-progress.spinning` in main.scss.
-#[derive(Props, Clone, PartialEq)]
-struct CircularProgressProps {
-    percent: Option<u32>,
-}
-
-#[component]
-fn CircularProgress(props: CircularProgressProps) -> Element {
-    // 18 px radius / 56.5 circumference. The dasharray = full
-    // circumference, dashoffset = (1 - p/100) * circumference yields
-    // the standard "stroke fills clockwise" effect.
-    const RADIUS: f32 = 8.0;
-    let circumference: f32 = 2.0 * std::f32::consts::PI * RADIUS;
-    match props.percent {
-        Some(p) => {
-            let p = p.min(100) as f32;
-            let offset = circumference * (1.0 - p / 100.0);
-            let label = format!("{}%", p as u32);
-            rsx! {
-                svg {
-                    class: "circ-progress",
-                    width: "20",
-                    height: "20",
-                    view_box: "0 0 20 20",
-                    role: "img",
-                    "aria-label": "{label}",
-                    circle {
-                        class: "track",
-                        cx: "10", cy: "10", r: "{RADIUS}",
-                        fill: "none",
-                    }
-                    circle {
-                        class: "fill",
-                        cx: "10", cy: "10", r: "{RADIUS}",
-                        fill: "none",
-                        stroke_dasharray: "{circumference}",
-                        stroke_dashoffset: "{offset}",
-                        // Rotate -90deg so the arc starts at 12 o'clock.
-                        transform: "rotate(-90 10 10)",
-                    }
-                }
-            }
-        }
-        None => rsx! {
-            svg {
-                class: "circ-progress spinning",
-                width: "20",
-                height: "20",
-                view_box: "0 0 20 20",
-                role: "img",
-                "aria-label": "loading",
-                circle {
-                    class: "track",
-                    cx: "10", cy: "10", r: "{RADIUS}",
-                    fill: "none",
-                }
-                circle {
-                    class: "fill",
-                    cx: "10", cy: "10", r: "{RADIUS}",
-                    fill: "none",
-                    // Quarter-arc that animates around (CSS rotates).
-                    stroke_dasharray: "{circumference / 4.0} {circumference}",
-                }
-            }
-        },
-    }
-}
-
-/// Last non-empty line of the job's combined output, trimmed to ~120
-/// chars. Used in the toast banner so a successful run shows the
-/// "Transferred:" summary, and a failure shows the rclone error.
-fn output_tail(output: &str) -> String {
-    let line = output
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("");
-    if line.len() > 120 {
-        format!("{}…", &line[..120])
-    } else {
-        line.to_string()
-    }
-}
-
-/// Render a unix timestamp as HH:MM:SS in the browser's local zone.
-/// JavaScript's `Date` does the heavy lifting; we just stringify a
-/// Date object via `toLocaleTimeString`.
-fn format_unix_short(ts: i64) -> String {
-    if ts <= 0 {
-        return "—".into();
-    }
-    // JS Date takes milliseconds. Use a minimal locale string so the
-    // table doesn't blow out width on long timezones.
-    let date = js_sys::Date::new(&((ts * 1000) as f64).into());
-    date.to_locale_time_string("en-GB")
-        .as_string()
-        .unwrap_or_default()
-}
-
-// rsx! parses `{...}` in string literals as format args; we use a const
-// instead of an inline literal because the JSON example placeholder
-// contains both braces and escaped quotes that the macro can't handle.
-const TOKEN_PLACEHOLDER: &str = "{\"access_token\":\"…\",\"refresh_token\":\"…\",…}";
-
-// ---------------------------------------------------------------- Account form modal
-
-/// Drives the AccountFormModal. `Create` ⇒ all fields editable; `Edit`
-/// pre-fills name+provider, locks the name (it's the rclone remote
-/// identifier — renaming would orphan every sync entry pointing at it),
-/// and treats an empty token as "leave the existing token alone".
-#[derive(Clone, PartialEq)]
-enum AccountFormMode {
-    Create,
-    Edit(api::CloudAccount),
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct AccountFormModalProps {
-    mode: AccountFormMode,
-    providers: Vec<api::CloudProvider>,
-    on_close: EventHandler<()>,
-    on_saved: EventHandler<&'static str>,
-    on_error: EventHandler<String>,
-    on_unauthorized: EventHandler<()>,
-}
-
-#[component]
-fn AccountFormModal(props: AccountFormModalProps) -> Element {
-    let editing: Option<api::CloudAccount> = match &props.mode {
-        AccountFormMode::Edit(a) => Some(a.clone()),
-        AccountFormMode::Create => None,
-    };
-    let initial_provider: String = match &editing {
-        Some(a) => a.provider.clone(),
-        None => props
-            .providers
-            .first()
-            .map(|p| p.key.clone())
-            .unwrap_or_default(),
-    };
-    let initial_name: String = editing.as_ref().map(|a| a.name.clone()).unwrap_or_default();
-
-    let mut name = use_signal(|| initial_name.clone());
-    let mut provider = use_signal(|| initial_provider);
-    let mut token = use_signal(String::new);
-    let mut busy = use_signal(|| false);
-
-    let is_edit = editing.is_some();
-    let title: &'static str = if is_edit {
-        "Edit cloud account"
-    } else {
-        "Add cloud account"
-    };
-    let submit_label: &'static str = if is_edit {
-        "Save changes"
-    } else {
-        "Add account"
-    };
-    let busy_label: &'static str = if is_edit { "Saving…" } else { "Adding…" };
-
-    let editing_for_submit = editing.clone();
-    let mut submit = move |_| {
-        if busy() {
-            return;
-        }
-        let on_saved = props.on_saved.clone();
-        let on_error = props.on_error.clone();
-        let on_unauthorized = props.on_unauthorized.clone();
-        match editing_for_submit.clone() {
-            None => {
-                if name().trim().is_empty() {
-                    props.on_error.call("Name is required.".into());
-                    return;
-                }
-                busy.set(true);
-                let body = api::AddCloudAccount {
-                    name: name(),
-                    provider: provider(),
-                    token: token(),
-                };
-                spawn(async move {
-                    let r = api::add_cloud_account(&body).await;
-                    busy.set(false);
-                    match r {
-                        Ok(()) => on_saved.call("added"),
-                        Err(ApiError::Unauthorized) => on_unauthorized.call(()),
-                        Err(e) => on_error.call(e.to_string()),
-                    }
-                });
-            }
-            Some(a) => {
-                busy.set(true);
-                let body = api::UpdateCloudAccount {
-                    provider: provider(),
-                    token: token(),
-                };
-                let nm = a.name.clone();
-                spawn(async move {
-                    let r = api::update_cloud_account(&nm, &body).await;
-                    busy.set(false);
-                    match r {
-                        Ok(()) => on_saved.call("updated"),
-                        Err(ApiError::Unauthorized) => on_unauthorized.call(()),
-                        Err(e) => on_error.call(e.to_string()),
-                    }
-                });
-            }
-        }
-    };
-
-    let name_locked = is_edit;
-    let token_hint: &'static str = if is_edit {
-        "Paste a fresh rclone-authorize blob to rotate the credential, or leave empty to keep the current token."
-    } else {
-        "rclone opens an OAuth flow and prints a JSON blob — paste it here. Leave empty to add the account now and connect later."
-    };
-
-    rsx! {
-        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
-            form {
-                class: "modal user-modal",
-                onclick: move |e| e.stop_propagation(),
-                onsubmit: move |e| { e.prevent_default(); submit(()); },
-
-                div { class: "modal-header",
-                    h3 { "{title}" }
-                    button { class: "ghost", r#type: "button",
-                        onclick: move |_| props.on_close.call(()),
-                        Icon { name: "x" }
-                    }
-                }
-
-                div { class: "modal-body user-form",
-                    label { r#for: "cloud-name", "Name" }
-                    input {
-                        id: "cloud-name",
-                        r#type: "text",
-                        autocomplete: "off",
-                        autofocus: !name_locked,
-                        required: true,
-                        readonly: name_locked,
-                        disabled: name_locked,
-                        pattern: "[A-Za-z0-9_-]+",
-                        title: "Lowercase / digits / underscore / hyphen, 1–32 chars.",
-                        value: "{name()}",
-                        oninput: move |e| name.set(e.value())
-                    }
-                    p { class: "preview-label",
-                        if name_locked {
-                            "The name is the rclone remote identifier — changing it would orphan every sync entry. Delete and re-add to rename."
-                        } else {
-                            "Used as the rclone remote name. Pick something short like ‘personal’ or ‘work-drive’."
-                        }
-                    }
-
-                    label { r#for: "cloud-provider", "Provider" }
-                    select {
-                        id: "cloud-provider",
-                        value: "{provider()}",
-                        onchange: move |e| provider.set(e.value()),
-                        for p in props.providers.iter() {
-                            option { value: "{p.key}", "{p.label}" }
-                        }
-                    }
-
-                    label { r#for: "cloud-token", "Token (rclone-authorize JSON)" }
-                    textarea {
-                        id: "cloud-token",
-                        spellcheck: false,
-                        autofocus: name_locked,
-                        style: "min-height: 120px",
-                        placeholder: TOKEN_PLACEHOLDER,
-                        value: "{token()}",
-                        oninput: move |e| token.set(e.value())
-                    }
-                    p { class: "preview-label",
-                        "On a machine with a browser, run: "
-                        code { "rclone authorize \"{provider()}\"" }
-                        ". {token_hint}"
-                    }
-                }
-
-                div { class: "modal-footer",
-                    button { class: "ghost", r#type: "button",
-                        onclick: move |_| props.on_close.call(()),
-                        "Cancel"
-                    }
-                    button { class: "primary", r#type: "submit", disabled: busy(),
-                        if busy() { "{busy_label}" } else { "{submit_label}" }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------- Sync form modal
-
-#[derive(Clone, PartialEq)]
-enum SyncFormMode {
-    Create,
-    Edit(api::CloudSync),
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct SyncFormModalProps {
-    mode: SyncFormMode,
-    accounts: Vec<api::CloudAccount>,
-    on_close: EventHandler<()>,
-    on_saved: EventHandler<&'static str>,
-    on_error: EventHandler<String>,
-    on_unauthorized: EventHandler<()>,
-}
-
-#[component]
-fn SyncFormModal(props: SyncFormModalProps) -> Element {
-    let editing_idx: Option<usize> = match &props.mode {
-        SyncFormMode::Edit(s) => Some(s.idx),
-        SyncFormMode::Create => None,
-    };
-    let initial: api::CloudSync = match &props.mode {
-        SyncFormMode::Edit(s) => s.clone(),
-        SyncFormMode::Create => api::CloudSync {
-            idx: 0,
-            account: props
-                .accounts
-                .first()
-                .map(|a| a.name.clone())
-                .unwrap_or_default(),
-            local_path: String::new(),
-            remote_path: String::new(),
-            direction: "push".into(),
-            schedule: "manual".into(),
-        },
-    };
-
-    let mut account = use_signal(|| initial.account.clone());
-    let mut local_path = use_signal(|| initial.local_path.clone());
-    let mut remote_path = use_signal(|| initial.remote_path.clone());
-    let mut direction = use_signal(|| initial.direction.clone());
-    let mut schedule = use_signal(|| initial.schedule.clone());
-    let mut show_browser = use_signal(|| false);
-    let mut busy = use_signal(|| false);
-
-    let title: String = match editing_idx {
-        Some(idx) => format!("Edit sync entry — row {idx}"),
-        None => "Add sync entry".into(),
-    };
-    let submit_label: &'static str = if editing_idx.is_some() {
-        "Save changes"
-    } else {
-        "Add sync entry"
-    };
-
-    let mut submit = move |_| {
-        if busy() {
-            return;
-        }
-        if !local_path().starts_with('/') {
-            props.on_error.call("Local path must be absolute.".into());
-            return;
-        }
-        if remote_path().trim().is_empty() {
-            props.on_error.call("Remote path is required.".into());
-            return;
-        }
-        busy.set(true);
-        let body = api::AddCloudSync {
-            account: account(),
-            local_path: local_path(),
-            remote_path: remote_path(),
-            direction: direction(),
-            schedule: schedule(),
-        };
-        let on_saved = props.on_saved.clone();
-        let on_error = props.on_error.clone();
-        let on_unauthorized = props.on_unauthorized.clone();
-        spawn(async move {
-            let result = match editing_idx {
-                Some(idx) => api::update_cloud_sync(idx, &body).await.map(|()| "updated"),
-                None => api::add_cloud_sync(&body).await.map(|()| "added"),
-            };
-            busy.set(false);
-            match result {
-                Ok(verb) => on_saved.call(verb),
-                Err(ApiError::Unauthorized) => on_unauthorized.call(()),
-                Err(e) => on_error.call(e.to_string()),
-            }
-        });
-    };
-
-    rsx! {
-        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
-            form {
-                class: "modal form-modal",
-                onclick: move |e| e.stop_propagation(),
-                onsubmit: move |e| { e.prevent_default(); submit(()); },
-
-                div { class: "modal-header",
-                    h3 { "{title}" }
-                    button { class: "ghost", r#type: "button",
-                        onclick: move |_| props.on_close.call(()),
-                        Icon { name: "x" }
-                    }
-                }
-
-                div { class: "modal-body form-modal-body",
-                    div { class: "row",
-                        label { class: "hint", "data-tip": "Which connected cloud account to sync against.",
-                            "Account" }
-                        select {
-                            value: "{account()}",
-                            onchange: move |e| account.set(e.value()),
-                            for a in props.accounts.iter() {
-                                option { value: "{a.name}", "{a.name} ({a.provider})" }
-                            }
-                        }
-                        span {}
-                    }
-                    div { class: "row",
-                        label { class: "hint", "data-tip": "Absolute path on this NAS. Click to pick via the directory browser.",
-                            "Local path" }
-                        input {
-                            r#type: "text",
-                            class: "path-display",
-                            readonly: true,
-                            required: true,
-                            placeholder: "Click 'Browse…' to pick a directory",
-                            value: "{local_path()}",
-                            onclick: move |_| show_browser.set(true)
-                        }
-                        button {
-                            r#type: "button",
-                            "data-tip": "Pick a directory on the server.",
-                            onclick: move |_| show_browser.set(true),
-                            Icon { name: "folder-open" }
-                            "Browse"
-                        }
-                    }
-                    div { class: "row",
-                        label { class: "hint", "data-tip": "Path on the cloud provider. Slashes separate folders.",
-                            "Remote path" }
-                        input {
-                            r#type: "text",
-                            placeholder: "BanaNAS-backup/photos",
-                            required: true,
-                            value: "{remote_path()}",
-                            oninput: move |e| remote_path.set(e.value())
-                        }
-                        span {}
-                    }
-                    div { class: "row",
-                        label { class: "hint", "data-tip": "Push = local to remote. Pull = remote to local. Bidirectional = both, with conflict resolution by mtime.",
-                            "Direction" }
-                        select {
-                            value: "{direction()}",
-                            onchange: move |e| direction.set(e.value()),
-                            option { value: "push", "push (local → remote)" }
-                            option { value: "pull", "pull (remote → local)" }
-                            option { value: "bidirectional", "bidirectional" }
-                        }
-                        span {}
-                    }
-                    div { class: "row",
-                        label { class: "hint", "data-tip": "‘manual’ = run-on-demand only. Or a 5-field cron string like '0 2 * * *' (2 AM daily).",
-                            "Schedule" }
-                        input {
-                            r#type: "text",
-                            placeholder: "manual",
-                            value: "{schedule()}",
-                            oninput: move |e| schedule.set(e.value())
-                        }
-                        span {}
-                    }
-                }
-
-                div { class: "modal-footer",
-                    button { class: "ghost", r#type: "button",
-                        onclick: move |_| props.on_close.call(()),
-                        "Cancel"
-                    }
-                    button { class: "primary", r#type: "submit", disabled: busy(),
-                        if busy() { "Saving…" } else { "{submit_label}" }
-                    }
-                }
-            }
-        }
-
-        if show_browser() {
-            Browser {
-                start: if local_path().is_empty() { "/srv".to_string() } else { local_path() },
-                on_pick: move |p: String| {
-                    local_path.set(p);
-                    show_browser.set(false);
-                },
-                on_close: move |_| show_browser.set(false)
-            }
-        }
-    }
-}
-
-/// Compact circular badge identifying the provider — colored disc with
-/// the provider's first letter. Picked over inline brand SVGs because
-/// keeping per-vendor logo paths up-to-date is its own tax, and a
-/// colored letter scans at table-row size just as well.
-#[derive(Props, Clone, PartialEq)]
-struct ProviderBadgeProps {
-    provider: String,
-}
-
-#[component]
-fn ProviderBadge(props: ProviderBadgeProps) -> Element {
-    let key = props.provider.as_str();
-    let (initial, color, fg) = match key {
-        "drive" => ("G", "#4285F4", "#fff"),
-        "dropbox" => ("D", "#0061FF", "#fff"),
-        "onedrive" => ("O", "#0078D4", "#fff"),
-        "s3" => ("S", "#FF9900", "#1f2937"),
-        "webdav" => ("W", "#5b6770", "#fff"),
-        "ftp" => ("F", "#1a7f37", "#fff"),
-        _ => ("?", "#9ca3af", "#fff"),
-    };
-    let style = format!("background:{color};color:{fg};",);
-    rsx! {
-        span {
-            class: "provider-badge",
-            style: "{style}",
-            "aria-label": "{key}",
-            "{initial}"
-        }
-    }
-}
-
-/// Human-readable label keyed off the rclone backend name, matching
-/// the dropdown labels in the Add-account modal.
-fn provider_pretty(key: &str) -> &'static str {
-    match key {
-        "drive" => "Google Drive",
-        "dropbox" => "Dropbox",
-        "onedrive" => "OneDrive",
-        "s3" => "Amazon S3",
-        "webdav" => "WebDAV",
-        "ftp" => "FTP / FTPS",
-        _ => "Unknown",
+pub async fn get_run(State(state): State<AppState>, AxumPath(job_id): AxumPath<u64>) -> Response {
+    match state.jobs.get(job_id).await {
+        Some(j) => Json(j).into_response(),
+        None => err(StatusCode::NOT_FOUND, format!("job {job_id} not found")),
     }
 }

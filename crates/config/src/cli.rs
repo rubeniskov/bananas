@@ -8,7 +8,7 @@ use bananas_engine::Command as HelperCommand;
 use serde::Deserialize;
 
 const UNITS: &[&str] = &[
-    "bananas-server.service",
+    "bananas-webadmin.service",
     "bananas-engine.service",
     "bananas-stats.service",
     "bananas-dashboard.service",
@@ -26,7 +26,7 @@ pub async fn status(socket: &Path) -> Result<()> {
 
     let units = unit_states().await;
     for (component, unit) in &[
-        ("server", Some("bananas-server.service")),
+        ("server", Some("bananas-webadmin.service")),
         ("helper", Some("bananas-engine.service")),
         ("stats", Some("bananas-stats.service")),
         ("dashboard", Some("bananas-dashboard.service")),
@@ -223,7 +223,7 @@ fn hostname() -> String {
 /// version, sourced from opkg list-installed. Slugs match the legacy
 /// terminology so the TUI Status tab + the `status` subcommand keep
 /// rendering the same shape; "server" and "helper" both resolve to
-/// the bananas-server package.
+/// the bananas-webadmin package.
 pub async fn read_versions(socket: &Path) -> Result<std::collections::HashMap<String, String>> {
     let resp = bananas_engine::call(socket, &HelperCommand::OpkgListInstalled)
         .await
@@ -238,8 +238,8 @@ pub async fn read_versions(socket: &Path) -> Result<std::collections::HashMap<St
     }
     let mut out = std::collections::HashMap::new();
     for (slug, pkg) in [
-        ("server", "bananas-server"),
-        ("helper", "bananas-server"), // helper rides in the server IPK
+        ("server", "bananas-webadmin"),
+        ("helper", "bananas-webadmin"), // helper rides in the server IPK
         ("stats", "bananas-stats"),
         ("dashboard", "bananas-dashboard"),
         ("config", "bananas-config"),

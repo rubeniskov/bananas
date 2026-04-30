@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "BanaNAS sampler daemon — collects /proc + /sys metrics into a WAL-mode SQLite store. Library is also consumed by bananas-server (for /api/stats/*) and bananas-dashboard (for the LCD UI)."
+description = "BanaNAS sampler daemon — collects /proc + /sys metrics into a WAL-mode SQLite store. Library is also consumed by bananas-webadmin (for /api/stats/*) and bananas-dashboard (for the LCD UI)."
 
 [lib]
 path = "src/lib.rs"
