@@ -214,6 +214,25 @@ pub enum Command {
     /// for /api/version; falls back to running `<bin> --version`
     /// when a row is missing.
     ReadVersions,
+    /// Run `opkg update` to refresh the feed index from
+    /// /etc/opkg/customfeeds.conf. Reply.output carries opkg's
+    /// combined stdout+stderr; ok=true iff exit code was 0.
+    OpkgUpdate,
+    /// Run `opkg list-upgradable` and return the parsed result as a
+    /// JSON array of {name, installed, candidate} rows in
+    /// Reply.output. Empty array when nothing is upgradable.
+    OpkgListUpgradable,
+    /// Run `opkg list-installed` and return the parsed result as a
+    /// JSON array of {name, version} rows in Reply.output. Used by
+    /// /api/version to learn the installed version of each package
+    /// without per-binary --version shell-outs.
+    OpkgListInstalled,
+    /// Run `opkg upgrade <packages...>`. The helper validates each
+    /// name against `[a-z][a-z0-9-]*` to keep argv clean. Reply.output
+    /// carries opkg's combined stdout+stderr; ok=true iff exit code
+    /// was 0. Postinst scripts in each .ipk handle systemctl
+    /// restart with --no-block where needed (server, helper).
+    OpkgUpgrade { packages: Vec<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

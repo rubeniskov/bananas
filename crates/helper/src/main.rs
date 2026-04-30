@@ -12,6 +12,7 @@ use bananas_helper::{Command, Response};
 use serde_json::json;
 
 mod install;
+mod opkg;
 use tokio::{
     fs,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -258,6 +259,28 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             Err(e) => Response::err(e.to_string(), String::new()),
         },
         Command::ReadVersions => match install::read_versions() {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::OpkgUpdate => match opkg::update().await {
+            Ok(out) => Response::ok(out),
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::OpkgListUpgradable => match opkg::list_upgradable().await {
+            Ok(rows) => match serde_json::to_string(&rows) {
+                Ok(json) => Response::ok(json),
+                Err(e) => Response::err(format!("serializing upgradable: {e}"), String::new()),
+            },
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::OpkgListInstalled => match opkg::list_installed().await {
+            Ok(rows) => match serde_json::to_string(&rows) {
+                Ok(json) => Response::ok(json),
+                Err(e) => Response::err(format!("serializing installed: {e}"), String::new()),
+            },
+            Err(e) => Response::err(e.to_string(), String::new()),
+        },
+        Command::OpkgUpgrade { packages } => match opkg::upgrade(&packages).await {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
