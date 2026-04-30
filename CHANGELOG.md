@@ -2,6 +2,18 @@
 
 All notable changes to BanaNAS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and entries are derived from [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.2.0](https://github.com/rubeniskov/bananas/compare/v1.1.1...v1.2.0) (2026-04-30)
+
+
+### 🚀 Features
+
+* **helper:** drop the artificial Server/Helper update split ([67dde32](https://github.com/rubeniskov/bananas/commit/67dde3207d47579a9ee3549028c014ecc28a4678))
+
+
+### 🐛 Bug Fixes
+
+* **image:** wire chronyd into multi-user.target.wants at rootfs assembly ([219c148](https://github.com/rubeniskov/bananas/commit/219c148b77c65ea5938076c4c326f8298b761ca5))
+
 ## [1.1.1](https://github.com/rubeniskov/bananas/compare/v1.1.0...v1.1.1) (2026-04-30)
 
 
