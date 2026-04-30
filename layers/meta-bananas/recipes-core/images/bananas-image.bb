@@ -181,6 +181,7 @@ IMAGE_INSTALL += " \
     bananas-webadmin \
     bananas-stats \
     bananas-config \
+    bananas-feed-config \
 "
 # bananas-dashboard (Slint LCD UI) and the Mali GPU userspace stack
 # (mesa lima + libegl + libgles2 + libgbm + libdrm + fontconfig + fonts)

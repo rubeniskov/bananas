@@ -282,6 +282,62 @@ jobs:
           ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
           ls -la dist/
 
+      # ─── opkg feed publishing ─────────────────────────────────────
+      # `bitbake package-index` regenerates the per-arch Packages /
+      # Packages.gz index files inside build/tmp/deploy/ipk/ — Yocto
+      # writes the indices alongside the .ipk files but they're not
+      # always refreshed automatically when only some packages change.
+      # Running it explicitly is cheap and guarantees the gh-pages
+      # mirror is internally consistent.
+      - name: Refresh opkg package index
+        run: |
+          eval "$(pixi shell-hook --shell bash)"
+          kas shell kas.yml -c 'bitbake package-index'
+
+      # Stage the IPK tree for gh-pages publication. Mirrors only the
+      # three arch directories we care about (all, bananapro,
+      # cortexa7t2hf-neon) — the deploy/ipk/ root may also contain
+      # work-shared subdirs that we don't want operators to see.
+      - name: Stage feed for gh-pages
+        run: |
+          set -e
+          mkdir -p feed-publish/feed/latest
+          for arch in all bananapro cortexa7t2hf-neon; do
+            if [ -d "build/tmp/deploy/ipk/$arch" ]; then
+              cp -r "build/tmp/deploy/ipk/$arch" "feed-publish/feed/latest/$arch"
+            fi
+          done
+          # Tiny landing page so https://<owner>.github.io/<repo>/ has
+          # something to render rather than a 404 — pure documentation,
+          # not consumed by opkg.
+          cat > feed-publish/index.html <<'EOF'
+          <!doctype html>
+          <meta charset=utf-8>
+          <title>BanaNAS opkg feed</title>
+          <h1>BanaNAS opkg feed</h1>
+          <p>This branch hosts <code>.ipk</code> packages for the
+          BanaNAS distribution. Devices configured via
+          <code>/etc/opkg/customfeeds.conf</code> consume it directly;
+          there is nothing here for a browser to do.</p>
+          <p>Repo: <a href="https://github.com/rubeniskov/bananas">rubeniskov/bananas</a></p>
+          EOF
+          ls -R feed-publish/feed/latest | head -40
+
+      # Push to the gh-pages branch. peaceiris/actions-gh-pages
+      # creates the branch if it doesn't exist; first run requires
+      # the operator to enable Pages on the repo (Settings →
+      # Pages → Source: gh-pages branch). keep_files: false so the
+      # feed always reflects the latest release exactly — old IPKs
+      # that aren't part of this build are pruned.
+      - name: Publish opkg feed to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./feed-publish
+          publish_branch: gh-pages
+          keep_files: false
+          commit_message: "feed(opkg): publish ${{ github.sha }}"
+
       # ─── Publish ──────────────────────────────────────────────────
       # semantic-release was already installed early (before the dry-run
       # version computation), so this step just publishes. The bump
