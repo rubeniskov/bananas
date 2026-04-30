@@ -34,6 +34,7 @@ mod config;
 mod dirs;
 mod exports;
 mod fstab;
+mod operations;
 mod permissions;
 mod service_config;
 mod session;
@@ -55,6 +56,7 @@ pub struct AppState {
     pub live_bus: stats_ws::LiveBus,
     pub jobs: cloud_jobs::JobManager,
     pub storage_cache: storage::StorageCache,
+    pub operations: operations::OperationManager,
 }
 
 #[tokio::main]
@@ -97,6 +99,11 @@ async fn main() -> Result<()> {
     let jobs = cloud_jobs::JobManager::new();
     cloud_jobs::spawn_scheduler(jobs.clone(), helper_socket.clone());
 
+    let operations_journal: PathBuf = std::env::var_os("BANANAS_OPERATIONS_JOURNAL")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/var/lib/bananas/operations.json".into());
+    let operations = operations::OperationManager::load(operations_journal).await;
+
     let state = AppState {
         exports_path: Arc::new(
             std::env::var_os("BANANAS_EXPORTS_PATH")
@@ -109,6 +116,7 @@ async fn main() -> Result<()> {
         live_bus,
         jobs,
         storage_cache: storage::StorageCache::new(),
+        operations,
     };
 
     // First-boot geoip → timezone (best-effort, non-blocking, non-fatal).
@@ -197,6 +205,11 @@ async fn main() -> Result<()> {
         .route("/updates/status", get(updates::get_updates_status))
         .route("/cloud/runs", get(cloud::list_runs))
         .route("/cloud/runs/{job_id}", get(cloud::get_run))
+        .route("/operations", get(operations::list))
+        .route("/operations/active", get(operations::list_active))
+        .route("/operations/{id}", get(operations::get_one))
+        .route("/operations/{id}/log", get(operations::log_stream))
+        .route("/operations/{id}/cancel", post(operations::cancel))
         .route(
             "/config",
             get(config::export_config).post(config::import_config),
