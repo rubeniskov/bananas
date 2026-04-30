@@ -293,6 +293,10 @@ jobs:
             echo "::error::opkg-make-index not found in build tree — opkg-utils-native may not have been built"
             exit 1
           fi
+          # Make absolute so it survives the `cd "$dst"` per-arch loop below;
+          # opkg-make-index also needs to import opkg.py from its own dir,
+          # which only resolves when invoked via an absolute script path.
+          OPKG_MAKE_INDEX=$(realpath "$OPKG_MAKE_INDEX")
           echo "Using $OPKG_MAKE_INDEX"
 
           mkdir -p feed-publish/feed/latest
