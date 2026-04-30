@@ -131,9 +131,8 @@ pub async fn update_install(socket: &Path, component_name: &str) -> Result<()> {
         "stats" => Component::Stats,
         "dashboard" => Component::Dashboard,
         "webadmin" => Component::Webadmin,
-        "server" | "helper" => {
-            bail!("self-update for `{component_name}` is not yet supported (deferred to v2)")
-        }
+        "server" => Component::Server,
+        "helper" => Component::Helper,
         other => bail!("unknown component {other:?}"),
     };
     let report = updates::check(socket).await?;

@@ -173,16 +173,19 @@ fn ComponentCard(props: ComponentCardProps) -> Element {
         None => ("—".into(), "?".into(), false, false),
     };
 
-    // Server + Helper are deferred to step 7+8 — show a "coming soon"
-    // affordance instead of a live install button.
-    let deferred = matches!(props.slug.as_str(), "server" | "helper");
-    let badge = if deferred {
-        ("Self-update coming soon", "deferred")
-    } else if outdated {
+    let badge = if outdated {
         ("Update available", "outdated")
     } else {
         ("Up to date", "current")
     };
+    // Server + Helper restart their own units mid-flight, so the
+    // browser will see the SSE connection drop on a successful
+    // install. The helper's --no-block restart and 300 ms self-exit
+    // give us a clean "done" event before the drop, but the install
+    // is technically a destructive operation (the operator's session
+    // hiccups). Surface that via a hint on the button rather than
+    // gating the action.
+    let session_disrupting = matches!(props.slug.as_str(), "server" | "helper");
 
     rsx! {
         div { class: "update-card",
@@ -201,11 +204,12 @@ fn ComponentCard(props: ComponentCardProps) -> Element {
                 }
             }
             div { class: "update-card-foot",
-                if deferred {
-                    span { class: "update-foot-note",
-                        "Self-update arrives with bananas-server v1.x"
+                if can_install {
+                    if session_disrupting {
+                        span { class: "update-foot-note",
+                            "Restarts this session"
+                        }
                     }
-                } else if can_install {
                     button {
                         class: "primary",
                         r#type: "button",

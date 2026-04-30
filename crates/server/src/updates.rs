@@ -370,21 +370,6 @@ pub async fn post_updates_install(
     State(state): State<AppState>,
     Json(req): Json<InstallRequest>,
 ) -> Result<(StatusCode, Json<InstallAccepted>), (StatusCode, String)> {
-    // Server + Helper self-update mechanics differ (process can't
-    // restart itself the same way as a sibling unit). Step 7+8 lift
-    // this; until then, fail fast with a clear message instead of
-    // making the operator wait for the helper's "not yet supported"
-    // round-trip.
-    if matches!(req.component, Component::Server | Component::Helper) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!(
-                "in-place install for `{}` is not yet supported (deferred to v2)",
-                req.component.as_str()
-            ),
-        ));
-    }
-
     // Fail fast if another install is already in flight. Sequential
     // installs only — there's no benefit to two at once and the helper
     // would queue them anyway.

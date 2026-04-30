@@ -78,8 +78,29 @@ struct Target {
     /// Single binary at the tarball root, gets renamed into `bin_dir`.
     bin_files: &'static [&'static str],
     /// systemd units to bounce after the swap completes. Empty for
-    /// webadmin (ServeDir re-reads on the next request).
+    /// webadmin (ServeDir re-reads on the next request) and for the
+    /// helper component (we exit cleanly instead of asking systemctl
+    /// to restart ourselves — see `self_exit` below).
     restart_units: &'static [&'static str],
+    /// `systemctl restart --no-block` instead of waiting for the unit
+    /// to actually stop+start. Used for the Server component because
+    /// the running server is the one whose HTTP / SSE response is in
+    /// flight when this code runs. Blocking would have systemctl wait
+    /// for the server to shut down — but the helper's response can't
+    /// reach a dead server, so the SSE client would see the connection
+    /// drop instead of a clean "done" event. With --no-block the
+    /// server stays alive long enough to read our `Response::ok`,
+    /// flush the "done" SSE event to the browser, and then get killed
+    /// by systemd's queued restart.
+    restart_no_block: bool,
+    /// Helper updating itself: skip systemctl entirely. After the
+    /// response is written back to the caller, schedule a delayed
+    /// `exit(0)`; systemd's `Restart=always` brings us back with the
+    /// new binary on disk. Doing the swap synchronously and exiting
+    /// after a brief drain window is the cleanest path — `systemctl
+    /// restart bananas-helper.service` from inside the helper would
+    /// kill us before the response made it back to the caller.
+    self_exit: bool,
     /// True for the webadmin tarball: the install path is a directory,
     /// not a single binary. Extract-then-swap-parent semantics.
     is_webadmin: bool,
@@ -90,27 +111,50 @@ fn target_for(component: Component) -> Result<Target> {
         Component::Stats => Target {
             bin_files: &["bananas-stats"],
             restart_units: &["bananas-stats.service"],
+            restart_no_block: false,
+            self_exit: false,
             is_webadmin: false,
         },
         Component::Dashboard => Target {
             bin_files: &["bananas-dashboard"],
             restart_units: &["bananas-dashboard.service"],
+            restart_no_block: false,
+            self_exit: false,
             is_webadmin: false,
         },
         Component::Webadmin => Target {
             bin_files: &[],
             restart_units: &[],
+            restart_no_block: false,
+            self_exit: false,
             is_webadmin: true,
         },
-        // Server + Helper self-update mechanics differ (the running
-        // binary can't restart itself the same way). Step 7+8 lift this
-        // restriction.
-        Component::Server | Component::Helper => {
-            bail!(
-                "in-place install for `{}` not yet supported",
-                component.as_str()
-            )
-        }
+        // Server: same swap+restart shape as Stats, but the in-flight
+        // SSE caller IS the unit being restarted, so we use --no-block
+        // to keep the server alive long enough to flush the "done"
+        // event before systemd kills it. The bananas-server-armv7
+        // tarball ships both bananas-server and bananas-helper at the
+        // root; we only swap the named binary so the operator can
+        // upgrade them independently.
+        Component::Server => Target {
+            bin_files: &["bananas-server"],
+            restart_units: &["bananas-server.service"],
+            restart_no_block: true,
+            self_exit: false,
+            is_webadmin: false,
+        },
+        // Helper: swap own binary, write response, exit. systemd's
+        // Restart=always brings us back with the new ELF (see the
+        // bananas-helper.service unit; without that flag, exit(0)
+        // would be treated as a clean stop and the helper would never
+        // come back).
+        Component::Helper => Target {
+            bin_files: &["bananas-helper"],
+            restart_units: &[],
+            restart_no_block: false,
+            self_exit: true,
+            is_webadmin: false,
+        },
     })
 }
 
@@ -178,7 +222,7 @@ pub async fn install_update(
 
     if !paths.skip_systemctl {
         for unit in target.restart_units {
-            let result = systemctl_restart(unit).await;
+            let result = systemctl_restart(unit, target.restart_no_block).await;
             log.push_str(&format!("restart {unit}: "));
             match result {
                 Ok(out) => log.push_str(&format!("ok\n{out}")),
@@ -190,6 +234,23 @@ pub async fn install_update(
                     );
                 }
             }
+        }
+        // Helper updating itself: schedule a clean exit AFTER this
+        // function returns and main.rs writes the response back to
+        // the socket. 300 ms is generous for the serialize + write_all
+        // + shutdown pipeline; if the wire is slower than that, the
+        // worst case is a missed response (systemd Restart=always
+        // brings us back regardless, the operator just sees "helper
+        // unreachable" once and a re-check shows the new version).
+        if target.self_exit {
+            log.push_str(
+                "scheduling clean exit; systemd Restart=always will rehydrate the new binary\n",
+            );
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                tracing::info!("helper self-update: exiting for systemd-driven restart");
+                std::process::exit(0);
+            });
         }
     }
 
@@ -499,9 +560,16 @@ fn write_version_entry(
     Ok(())
 }
 
-async fn systemctl_restart(unit: &str) -> Result<String> {
-    let out = TokioCommand::new("systemctl")
-        .arg("restart")
+async fn systemctl_restart(unit: &str, no_block: bool) -> Result<String> {
+    let mut cmd = TokioCommand::new("systemctl");
+    cmd.arg("restart");
+    if no_block {
+        // Don't wait for the unit to finish stopping. Used when the
+        // caller of this code path IS the unit being restarted (server
+        // case) — see Target::restart_no_block for the rationale.
+        cmd.arg("--no-block");
+    }
+    let out = cmd
         .arg(unit)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -678,16 +746,6 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("outside"), "got: {err}");
-    }
-
-    #[tokio::test]
-    #[serial_test::serial(install_env)]
-    async fn rejects_unsupported_component() {
-        let (_td, _staging) = setup_env();
-        let result = install_update(Component::Server, "/tmp/whatever.tar.gz", "1.2.3", "00").await;
-        assert!(result.is_err());
-        let err = format!("{:#}", result.unwrap_err());
-        assert!(err.contains("not yet supported"), "got: {err}");
     }
 
     #[tokio::test]
