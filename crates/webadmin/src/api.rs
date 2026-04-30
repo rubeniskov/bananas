@@ -1296,6 +1296,76 @@ pub async fn get_cloud_run(job_id: u64) -> Result<CloudJob, ApiError> {
         .map_err(|e| ApiError::Other(e.to_string()))
 }
 
+// --- updates ---------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ComponentStatus {
+    pub installed: Option<String>,
+    pub latest: Option<String>,
+    pub outdated: bool,
+    pub asset_url: Option<String>,
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct UpdatesCheck {
+    pub latest_version: Option<String>,
+    pub release_url: Option<String>,
+    pub components: std::collections::HashMap<String, ComponentStatus>,
+    pub error: Option<String>,
+}
+
+pub async fn fetch_updates_check() -> Result<UpdatesCheck, ApiError> {
+    let resp = Request::get("/api/updates/check")
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        let status = resp.status();
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
+    }
+    resp.json::<UpdatesCheck>()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallRequest {
+    pub component: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct InstallAccepted {
+    pub id: String,
+    pub started_at: u64,
+}
+
+pub async fn post_install(req: &InstallRequest) -> Result<InstallAccepted, ApiError> {
+    let resp = Request::post("/api/updates/install")
+        .json(req)
+        .map_err(|e| ApiError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        let status = resp.status();
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
+    }
+    resp.json::<InstallAccepted>()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))
+}
+
 fn urlencode(s: &str) -> String {
     s.bytes()
         .flat_map(|b| {

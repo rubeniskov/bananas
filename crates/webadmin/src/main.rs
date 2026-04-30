@@ -24,6 +24,7 @@ mod stats_config;
 mod storage;
 mod theme;
 mod tooltip;
+mod updates;
 mod users;
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -89,6 +90,7 @@ enum Page {
     Users,
     Cloud,
     Settings,
+    Updates,
 }
 
 impl Page {
@@ -103,6 +105,7 @@ impl Page {
             Page::Users => "users",
             Page::Cloud => "cloud",
             Page::Settings => "settings",
+            Page::Updates => "updates",
         }
     }
 
@@ -114,6 +117,7 @@ impl Page {
             "users" => Some(Page::Users),
             "cloud" => Some(Page::Cloud),
             "settings" => Some(Page::Settings),
+            "updates" => Some(Page::Updates),
             _ => None,
         }
     }
@@ -298,6 +302,8 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     on_click: move |_| page.set(Page::Cloud) }
                 NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
                     on_click: move |_| page.set(Page::Settings) }
+                NavTab { label: "Updates", icon: "package", active: page() == Page::Updates,
+                    on_click: move |_| page.set(Page::Updates) }
                 span { class: "spacer" }
                 div { class: "user-menu",
                     span { class: "user-greeting", "Welcome, ", strong { "{props.username}" }, "!" }
@@ -452,6 +458,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Users => rsx! { users::UsersPage {} },
                 Page::Cloud => rsx! { cloud::CloudPage {} },
                 Page::Settings => rsx! { settings::SettingsPage {} },
+                Page::Updates => rsx! { updates::UpdatesPage {} },
             }
 
             if reboot_confirm() {
