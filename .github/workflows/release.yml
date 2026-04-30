@@ -51,24 +51,15 @@ jobs:
     # being skipped. Anchor on the subject line's prefix instead.
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
     steps:
-      # Yocto needs ≈20 GB working space + pixi's conda cache (~5 GB), and
-      # default ubuntu-latest only ships ~14 GB free on /. easimon's action
-      # was creating a loop-backed LVM that ATE the very root filesystem
-      # we needed (jumping / from 56→144 GB used, leaving 1 GB free for
-      # pixi's cache). jlumbroso's just deletes the unused .NET / Android /
-      # Haskell / CodeQL trees in place — about 25 GB freed on /, where
-      # both pixi and the bake actually live. No LVM, no symlinks.
-      - name: Free disk space for the Yocto bake
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false  # keep nodejs/python/go — we use them
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: false
-
+      # Yocto needs ≈20 GB working space; the standard ubuntu-latest
+      # runner ships with 145 GB / 90 GB free which is comfortably more
+      # than the ~30 GB we end up using through the bake. The previous
+      # `Free disk space for the Yocto bake` step (jlumbroso/
+      # free-disk-space) was burning 2m30s on every release deleting
+      # Android/.NET/Haskell trees we never touched. The 14-GB claim
+      # the old comment cited was for an older runner generation —
+      # measured on real runs the disk is roomy. The post-bake `df -h`
+      # below confirms it.
       - uses: actions/checkout@v4
         with:
           # semantic-release walks tags + history to compute the next
@@ -249,6 +240,19 @@ jobs:
       # the web UI on first boot.
       - name: Bake Yocto image
         run: pixi run build
+
+      # Sanity check after the bake — surfaces actual peak usage.
+      # If `Avail` here ever drops under ~10 GB we should reconsider
+      # putting the disk-cleanup step back.
+      - name: Disk usage after bake
+        if: always()
+        run: |
+          echo "::group::df -h /"
+          df -h /
+          echo "::endgroup::"
+          echo "::group::biggest things on /"
+          du -h --max-depth=2 / 2>/dev/null | sort -hr | head -25 || true
+          echo "::endgroup::"
 
       # ─── Stage tarballs for semantic-release to upload ────────────
       - name: Pack artifacts
