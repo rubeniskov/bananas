@@ -2,6 +2,13 @@
 
 All notable changes to BanaNAS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and entries are derived from [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.1.1](https://github.com/rubeniskov/bananas/compare/v1.1.0...v1.1.1) (2026-04-30)
+
+
+### 🐛 Bug Fixes
+
+* **release:** bump Cargo.toml BEFORE building so binaries embed the right version ([98a1844](https://github.com/rubeniskov/bananas/commit/98a1844be372c22a9b2a1372e4e039d65cc7634d))
+
 ## [1.1.0](https://github.com/rubeniskov/bananas/compare/v1.0.1...v1.1.0) (2026-04-30)
 
 
