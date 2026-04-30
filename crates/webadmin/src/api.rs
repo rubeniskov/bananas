@@ -1299,19 +1299,17 @@ pub async fn get_cloud_run(job_id: u64) -> Result<CloudJob, ApiError> {
 // --- updates ---------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ComponentStatus {
-    pub installed: Option<String>,
-    pub latest: Option<String>,
-    pub outdated: bool,
-    pub asset_url: Option<String>,
-    pub sha256: Option<String>,
+pub struct UpgradablePackage {
+    pub name: String,
+    pub installed: String,
+    pub candidate: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
 pub struct UpdatesCheck {
-    pub latest_version: Option<String>,
-    pub release_url: Option<String>,
-    pub components: std::collections::HashMap<String, ComponentStatus>,
+    #[serde(default)]
+    pub packages: Vec<UpgradablePackage>,
+    #[serde(default)]
     pub error: Option<String>,
 }
 
@@ -1334,9 +1332,8 @@ pub async fn fetch_updates_check() -> Result<UpdatesCheck, ApiError> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct InstallRequest {
-    pub component: String,
-    pub version: String,
+pub struct UpgradeRequest {
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1346,7 +1343,7 @@ pub struct InstallAccepted {
     pub started_at: u64,
 }
 
-pub async fn post_install(req: &InstallRequest) -> Result<InstallAccepted, ApiError> {
+pub async fn post_install(req: &UpgradeRequest) -> Result<InstallAccepted, ApiError> {
     let resp = Request::post("/api/updates/install")
         .json(req)
         .map_err(|e| ApiError::Other(e.to_string()))?

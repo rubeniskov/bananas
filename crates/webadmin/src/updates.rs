@@ -1,17 +1,15 @@
-//! Updates page — per-component status cards + install flow.
+//! Updates page — opkg-backed table of upgradable bananas-* packages.
 //!
-//! Layout:
-//!   - Header: latest tag (links to GitHub release notes) + Refresh
-//!     button so the operator can force a re-check without waiting
-//!     for the 5-minute server cache.
-//!   - One card per component (server / helper / stats / dashboard /
-//!     webadmin). Each shows installed-vs-latest and an Install button
-//!     when an update is available. Server + Helper are "Coming soon"
-//!     in v1 since their self-update primitive lands separately.
+//! Header: "Refresh" button (re-runs `opkg update` on the device).
+//! Body: a table of packages where the candidate version is newer
+//! than installed. Each row carries an "Upgrade" button; an
+//! "Upgrade all" button up top runs them in a single transaction.
+//! Install drawer streams the SSE log line-by-line until the helper
+//! signals done/error.
 //!
-//! The install button opens a modal that subscribes to /api/updates/status
-//! via EventSource and streams the SSE log lines until the helper's
-//! Done/Error event closes the connection.
+//! When everything's up to date, the body shows a single "All
+//! packages up to date" line — the SPA never renders the GitHub /
+//! sha256 / asset_url chrome the previous custom flow had.
 
 #![allow(non_snake_case)]
 
@@ -23,18 +21,9 @@ use web_sys::{EventSource, MessageEvent};
 
 use crate::{
     AuthCtx, BannerKind,
-    api::{self, ComponentStatus, InstallRequest, UpdatesCheck},
+    api::{self, UpdatesCheck, UpgradablePackage, UpgradeRequest},
     components::Spinner,
 };
-
-/// Order shown on the page. Mirrors crate::version::ALL on the server.
-const COMPONENTS: &[(&str, &str)] = &[
-    ("server", "bananas-server"),
-    ("helper", "bananas-helper"),
-    ("stats", "bananas-stats"),
-    ("dashboard", "bananas-dashboard"),
-    ("webadmin", "bananas-webadmin"),
-];
 
 #[component]
 pub fn UpdatesPage() -> Element {
@@ -42,15 +31,19 @@ pub fn UpdatesPage() -> Element {
     let mut data: Signal<Option<UpdatesCheck>> = use_signal(|| None);
     let mut loading = use_signal(|| true);
     let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
-    let mut install_modal: Signal<Option<(String, String)>> = use_signal(|| None);
+    let mut install_modal: Signal<Option<Vec<String>>> = use_signal(|| None);
 
     let mut load = move || {
         loading.set(true);
         spawn(async move {
             match api::fetch_updates_check().await {
                 Ok(d) => {
+                    if let Some(err) = d.error.as_ref() {
+                        banner.set(Some((BannerKind::Err, format!("Feed warning: {err}"))));
+                    } else {
+                        banner.set(None);
+                    }
                     data.set(Some(d));
-                    banner.set(None);
                 }
                 Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
                 Err(e) => {
@@ -73,7 +66,7 @@ pub fn UpdatesPage() -> Element {
                 button {
                     class: "ghost",
                     r#type: "button",
-                    "data-tip": "Re-check GitHub now",
+                    "data-tip": "Re-run opkg update + opkg list-upgradable",
                     disabled: loading(),
                     onclick: move |_| load(),
                     crate::icons::Icon { name: "rotate-cw" }
@@ -100,39 +93,61 @@ pub fn UpdatesPage() -> Element {
         }
 
         if let Some(d) = data() {
-            if let Some(err) = d.error.as_ref() {
-                div { class: "banner err",
-                    pre { "GitHub fetch failed: {err}" }
+            if d.packages.is_empty() {
+                div { class: "updates-empty",
+                    crate::icons::Icon { name: "circle-check" }
+                    span { "All packages up to date." }
                 }
-            } else if let (Some(latest), Some(url)) = (d.latest_version.as_ref(), d.release_url.as_ref()) {
-                div { class: "updates-header",
-                    span { "Latest release: " }
-                    a { href: "{url}", target: "_blank", rel: "noopener noreferrer",
-                        strong { "v{latest}" }
+            } else {
+                div { class: "updates-toolbar",
+                    span { class: "updates-count",
+                        "{d.packages.len()} package",
+                        if d.packages.len() == 1 { "" } else { "s" },
+                        " upgradable"
+                    }
+                    {
+                        let all_packages: Vec<String> = d.packages.iter().map(|p| p.name.clone()).collect();
+                        rsx! {
+                            button {
+                                class: "primary",
+                                r#type: "button",
+                                onclick: move |_| install_modal.set(Some(all_packages.clone())),
+                                crate::icons::Icon { name: "download" }
+                                span { "Upgrade all" }
+                            }
+                        }
                     }
                 }
-            }
 
-            div { class: "updates-grid",
-                for &(slug, label) in COMPONENTS {
-                    {
-                        let component = slug.to_string();
-                        let display_name = label.to_string();
-                        let status = d.components.get(slug).cloned();
-                        let install_for = component.clone();
-                        let install_version = status
-                            .as_ref()
-                            .and_then(|s| s.latest.clone())
-                            .unwrap_or_default();
-                        rsx! {
-                            ComponentCard {
-                                key: "{slug}",
-                                slug: component,
-                                display_name,
-                                status,
-                                on_install: move |_| {
-                                    install_modal.set(Some((install_for.clone(), install_version.clone())));
-                                },
+                table { class: "upgradable-table",
+                    thead {
+                        tr {
+                            th { "Package" }
+                            th { "Installed" }
+                            th { "Available" }
+                            th { class: "actions" }
+                        }
+                    }
+                    tbody {
+                        for pkg in d.packages.iter() {
+                            {
+                                let pkg_owned: UpgradablePackage = pkg.clone();
+                                let pkg_name = pkg.name.clone();
+                                rsx! {
+                                    tr { key: "{pkg_owned.name}",
+                                        td { class: "pkg-name", "{pkg_owned.name}" }
+                                        td { class: "pkg-version", "{pkg_owned.installed}" }
+                                        td { class: "pkg-version pkg-candidate", "{pkg_owned.candidate}" }
+                                        td { class: "actions",
+                                            button {
+                                                class: "ghost",
+                                                r#type: "button",
+                                                onclick: move |_| install_modal.set(Some(vec![pkg_name.clone()])),
+                                                "Upgrade"
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -140,86 +155,13 @@ pub fn UpdatesPage() -> Element {
             }
         }
 
-        if let Some((component, version)) = install_modal() {
+        if let Some(packages) = install_modal() {
             InstallModal {
-                component: component.clone(),
-                version: version.clone(),
+                packages: packages.clone(),
                 on_close: move |_| {
                     install_modal.set(None);
                     load();
                 },
-            }
-        }
-    }
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct ComponentCardProps {
-    slug: String,
-    display_name: String,
-    status: Option<ComponentStatus>,
-    on_install: EventHandler<()>,
-}
-
-#[component]
-fn ComponentCard(props: ComponentCardProps) -> Element {
-    let (installed, latest, outdated, can_install) = match props.status.as_ref() {
-        Some(s) => (
-            s.installed.clone().unwrap_or_else(|| "—".into()),
-            s.latest.clone().unwrap_or_else(|| "?".into()),
-            s.outdated,
-            s.outdated && s.asset_url.is_some() && s.sha256.is_some(),
-        ),
-        None => ("—".into(), "?".into(), false, false),
-    };
-
-    let badge = if outdated {
-        ("Update available", "outdated")
-    } else {
-        ("Up to date", "current")
-    };
-    // Server + Helper restart their own units mid-flight, so the
-    // browser will see the SSE connection drop on a successful
-    // install. The helper's --no-block restart and 300 ms self-exit
-    // give us a clean "done" event before the drop, but the install
-    // is technically a destructive operation (the operator's session
-    // hiccups). Surface that via a hint on the button rather than
-    // gating the action.
-    let session_disrupting = matches!(props.slug.as_str(), "server" | "helper");
-
-    rsx! {
-        div { class: "update-card",
-            div { class: "update-card-head",
-                strong { "{props.display_name}" }
-                span { class: "update-badge {badge.1}", "{badge.0}" }
-            }
-            div { class: "update-card-body",
-                div { class: "update-row",
-                    span { class: "update-label", "Installed" }
-                    span { class: "update-version", "{installed}" }
-                }
-                div { class: "update-row",
-                    span { class: "update-label", "Latest" }
-                    span { class: "update-version", "{latest}" }
-                }
-            }
-            div { class: "update-card-foot",
-                if can_install {
-                    if session_disrupting {
-                        span { class: "update-foot-note",
-                            "Restarts this session"
-                        }
-                    }
-                    button {
-                        class: "primary",
-                        r#type: "button",
-                        onclick: move |_| props.on_install.call(()),
-                        crate::icons::Icon { name: "download" }
-                        span { "Install" }
-                    }
-                } else {
-                    span { class: "update-foot-note", "Nothing to install" }
-                }
             }
         }
     }
@@ -235,8 +177,7 @@ struct LogLine {
 
 #[derive(Props, Clone, PartialEq)]
 struct InstallModalProps {
-    component: String,
-    version: String,
+    packages: Vec<String>,
     on_close: EventHandler<()>,
 }
 
@@ -248,20 +189,18 @@ fn InstallModal(props: InstallModalProps) -> Element {
     let mut finished: Signal<Option<bool>> = use_signal(|| None);
     let mut started: Signal<bool> = use_signal(|| false);
 
-    let component = props.component.clone();
-    let version = props.version.clone();
+    let packages = props.packages.clone();
+    let title_packages = packages.join(", ");
 
     use_effect(move || {
         if started() {
             return;
         }
         started.set(true);
-        let component = component.clone();
-        let version = version.clone();
+        let packages = packages.clone();
         spawn(async move {
-            let req = InstallRequest {
-                component: component.clone(),
-                version: version.clone(),
+            let req = UpgradeRequest {
+                packages: packages.clone(),
             };
             match api::post_install(&req).await {
                 Ok(_) => {
@@ -276,20 +215,11 @@ fn InstallModal(props: InstallModalProps) -> Element {
         });
     });
 
-    let phase_class = |p: &str| match p {
-        "download" => "phase phase-download",
-        "verify" => "phase phase-verify",
-        "install" => "phase phase-install",
-        "done" => "phase phase-done",
-        "error" => "phase phase-error",
-        _ => "phase",
-    };
-
     rsx! {
         div { class: "modal-overlay",
             div { class: "modal install-modal",
                 div { class: "modal-header",
-                    strong { "Installing {props.component} {props.version}" }
+                    strong { "Upgrading {title_packages}" }
                     button {
                         class: "ghost",
                         r#type: "button",
@@ -307,7 +237,6 @@ fn InstallModal(props: InstallModalProps) -> Element {
                     } else {
                         for line in log.read().iter() {
                             div { key: "{line.seq}", class: "install-log-line",
-                                span { class: "{phase_class(&line.phase)}", "{line.phase}" }
                                 pre { "{line.text}" }
                             }
                         }
@@ -323,7 +252,7 @@ fn InstallModal(props: InstallModalProps) -> Element {
                         Some(true) => rsx! {
                             span { class: "ok-text",
                                 crate::icons::Icon { name: "circle-check" }
-                                span { "Install complete." }
+                                span { "Upgrade complete." }
                             }
                             button {
                                 class: "primary",
@@ -335,7 +264,7 @@ fn InstallModal(props: InstallModalProps) -> Element {
                         Some(false) => rsx! {
                             span { class: "err-text",
                                 crate::icons::Icon { name: "triangle-alert" }
-                                span { "Install failed — check the log above." }
+                                span { "Upgrade failed — check the log above." }
                             }
                             button {
                                 class: "primary",
@@ -358,9 +287,9 @@ fn InstallModal(props: InstallModalProps) -> Element {
 }
 
 /// Open an EventSource subscription against /api/updates/status and
-/// route incoming events into the log signals. The ES is leaked
-/// intentionally — we close it via the JS-side close event handler
-/// when the helper sends a final phase=done|error.
+/// route incoming events into the log signals. ES is leaked
+/// intentionally — closed via the message handler when the helper
+/// sends the final phase=done|error event.
 fn open_event_source(
     mut log: Signal<Vec<LogLine>>,
     mut finished: Signal<Option<bool>>,
@@ -398,9 +327,6 @@ fn open_event_source(
 
     let es_clone_close = es.clone();
     let on_close = Closure::<dyn FnMut(MessageEvent)>::new(move |_evt: MessageEvent| {
-        // The server emits a custom `event: close` with `data: ok|error`
-        // when the install settles; we treat any of these as the
-        // explicit close signal.
         es_clone_close.close();
     });
     es.add_event_listener_with_callback("close", on_close.as_ref().unchecked_ref())
@@ -408,15 +334,7 @@ fn open_event_source(
     on_close.forget();
 
     let on_error = Closure::<dyn FnMut(web_sys::Event)>::new(move |_evt: web_sys::Event| {
-        // Don't surface a banner-level error here — EventSource can fire
-        // `error` on a clean close (last event followed by EOF), and we
-        // already track terminal state via the message handler. Just
-        // ensure we eventually flip `finished` if the network drops mid
-        // install without a final phase event.
         if finished.peek().is_none() {
-            // Wait one tick before deciding — message handler may still
-            // run after the error event in the same callback batch. To
-            // keep it simple, just mark errored.
             error.set(Some("connection lost".into()));
             finished.set(Some(false));
         }

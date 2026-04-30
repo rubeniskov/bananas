@@ -1,26 +1,22 @@
 //! opkg-backed update endpoints.
 //!
-//! Replaces the previous custom GitHub-tarball flow with thin wrappers
-//! around the helper's opkg commands. The four endpoints are:
+//! Step 6 cleanup: the API shapes match the underlying opkg model
+//! directly. No more legacy "Component" enum, no more
+//! component-slug-to-package mapping, no more `asset_url` / `sha256`
+//! fields that were always None. Frontends (webadmin SPA, bananas-
+//! config CLI) consume `{ name, installed, candidate }` rows the
+//! same shape opkg itself uses.
 //!
-//!   GET  /api/version          — current installed versions
-//!   GET  /api/updates/check    — what's upgradable + installed
-//!   POST /api/updates/install  — kick `opkg upgrade <packages>`
+//!   GET  /api/version          — installed `bananas-*` packages
+//!   GET  /api/updates/check    — upgradable `bananas-*` packages
+//!   POST /api/updates/install  — `opkg upgrade <packages>`
 //!   GET  /api/updates/status   — SSE stream of the active install
 //!
-//! The JSON shape of /api/updates/check is preserved from the legacy
-//! GitHub-fetch implementation so the webadmin SPA keeps working
-//! through this step. Step 6 rewrites the SPA to use a more natural
-//! opkg-shaped payload, and at that point we can simplify the
-//! response too.
-//!
-//! No more on-server caching: `opkg list-upgradable` reads the local
-//! /var/lib/opkg state which is already in-process-fast. Pre-step
-//! `opkg update` is rate-limited inside the helper-side run, but
-//! every check refreshes by default — the network round-trip to the
-//! gh-pages feed is small (Packages.gz is single-digit KB).
+//! Filtering is on `bananas-*` prefix: opkg's view of the system
+//! includes ~1000 base-OS packages (libc, busybox, …) that the
+//! webadmin doesn't manage. Operators who want raw opkg can SSH in.
 
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::SystemTime};
+use std::{convert::Infallible, sync::Arc, time::SystemTime};
 
 use axum::{
     Json,
@@ -28,61 +24,39 @@ use axum::{
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
 };
-use bananas_helper::{Command as HelperCommand, Component, Response as HelperResponse};
+use bananas_helper::{Command as HelperCommand, Response as HelperResponse};
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::AppState;
 
-/// Map a Component (which is the wire shape clients send today) to
-/// the opkg package name. Server + Helper share a single IPK
-/// (bananas-server) since they're built from the same Cargo workspace
-/// and their ELF binaries ride together; the legacy frontend still
-/// asks for them separately, so we accept that and resolve to the
-/// same package.
-fn package_name(c: Component) -> &'static str {
-    match c {
-        Component::Server | Component::Helper => "bananas-server",
-        Component::Stats => "bananas-stats",
-        Component::Dashboard => "bananas-dashboard",
-        Component::Webadmin => "bananas-webadmin",
-    }
-}
-
-const COMPONENT_SLUGS: &[(&str, Component)] = &[
-    ("server", Component::Server),
-    ("helper", Component::Helper),
-    ("stats", Component::Stats),
-    ("dashboard", Component::Dashboard),
-    ("webadmin", Component::Webadmin),
-];
+/// Only packages whose name starts with this prefix are exposed via
+/// the API. Keeps the SPA's view focused on what BanaNAS itself
+/// ships and avoids surfacing every libc / busybox upgrade.
+const PACKAGE_PREFIX: &str = "bananas-";
 
 // ─── /api/version ───────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPackage {
+    pub name: String,
+    pub version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
-pub struct InstalledVersions {
-    /// Map slug → version string. Slugs match the legacy frontend
-    /// terminology ("server", "helper", "stats", ...). Helper +
-    /// Server map to the same `bananas-server` package and report
-    /// the same version.
-    #[serde(flatten)]
-    pub by_component: HashMap<String, String>,
+pub struct InstalledVersionsResponse {
+    pub packages: Vec<InstalledPackage>,
 }
 
-pub async fn get_version(State(state): State<AppState>) -> Json<InstalledVersions> {
-    let installed = installed_packages(&state).await.unwrap_or_default();
-    let mut by_component = HashMap::new();
-    for &(slug, c) in COMPONENT_SLUGS {
-        let pkg = package_name(c);
-        if let Some(version) = installed.get(pkg) {
-            by_component.insert(slug.to_string(), version.clone());
-        }
-    }
-    Json(InstalledVersions { by_component })
+pub async fn get_version(State(state): State<AppState>) -> Json<InstalledVersionsResponse> {
+    let mut packages = installed_packages(&state).await.unwrap_or_default();
+    packages.retain(|p| p.name.starts_with(PACKAGE_PREFIX));
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(InstalledVersionsResponse { packages })
 }
 
-async fn installed_packages(state: &AppState) -> Option<HashMap<String, String>> {
+async fn installed_packages(state: &AppState) -> Option<Vec<InstalledPackage>> {
     let resp = bananas_helper::call(&state.helper_socket, &HelperCommand::OpkgListInstalled)
         .await
         .ok()?;
@@ -90,70 +64,37 @@ async fn installed_packages(state: &AppState) -> Option<HashMap<String, String>>
         tracing::warn!(error=?resp.error, "opkg list-installed failed");
         return None;
     }
-    #[derive(Deserialize)]
-    struct Row {
-        name: String,
-        version: String,
-    }
-    let rows: Vec<Row> = serde_json::from_str(&resp.output).ok()?;
-    Some(rows.into_iter().map(|r| (r.name, r.version)).collect())
+    serde_json::from_str(&resp.output).ok()
 }
 
 // ─── /api/updates/check ─────────────────────────────────────────────
 
-/// Per-component view, kept compatible with the legacy frontend so
-/// step 5 doesn't break the SPA. `asset_url` and `sha256` are always
-/// None now — opkg has its own integrity story; step 6 drops them.
-#[derive(Debug, Clone, Serialize)]
-pub struct ComponentStatus {
-    pub installed: Option<String>,
-    pub latest: Option<String>,
-    pub outdated: bool,
-    pub asset_url: Option<String>,
-    pub sha256: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradablePackage {
+    pub name: String,
+    pub installed: String,
+    pub candidate: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct UpdatesCheckResponse {
-    /// Maximum candidate version across all upgradable packages (or
-    /// any installed-but-not-upgradable version if nothing is
-    /// upgradable). Preserved so the SPA can render a "Latest:
-    /// vX.Y.Z" banner.
-    pub latest_version: Option<String>,
-    /// Always None in the opkg world — there's no single GitHub
-    /// release page to deep-link to from a local opkg upgrade.
-    pub release_url: Option<String>,
-    pub components: HashMap<String, ComponentStatus>,
+    pub packages: Vec<UpgradablePackage>,
+    /// Set when the upstream `opkg update` failed (offline feed,
+    /// rate-limited, DNS hiccup). The list-upgradable still runs
+    /// against cached metadata, so `packages` may be populated even
+    /// when `error` is set.
     pub error: Option<String>,
 }
 
 pub async fn get_updates_check(
     State(state): State<AppState>,
 ) -> Result<Json<UpdatesCheckResponse>, (StatusCode, String)> {
-    // Refresh feeds first so a freshly-pushed release shows up.
-    // Failure here doesn't kill the call — list-upgradable + list-
-    // installed against the cached metadata still produces a useful
-    // answer; we just stuff the error into the response so the SPA
-    // can surface it.
     let mut error: Option<String> = None;
     if let Err(e) = run_helper_simple(&state, HelperCommand::OpkgUpdate).await {
         error = Some(format!("opkg update: {e}"));
     }
 
-    let installed = installed_packages(&state).await.unwrap_or_default();
-
-    #[derive(Deserialize)]
-    #[allow(dead_code)]
-    struct UpgRow {
-        name: String,
-        // `installed` is in the helper's JSON for completeness but
-        // we reconstruct from list-installed below — opkg sometimes
-        // reports a different installed string here vs there when a
-        // hold/lock is in play.
-        installed: String,
-        candidate: String,
-    }
-    let upgradable: Vec<UpgRow> = match bananas_helper::call(
+    let upgradable: Vec<UpgradablePackage> = match bananas_helper::call(
         &state.helper_socket,
         &HelperCommand::OpkgListUpgradable,
     )
@@ -175,79 +116,14 @@ pub async fn get_updates_check(
             return Err((StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")));
         }
     };
-    let upg_by_pkg: HashMap<String, &UpgRow> =
-        upgradable.iter().map(|r| (r.name.clone(), r)).collect();
 
-    let mut components = HashMap::new();
-    let mut highest_candidate: Option<String> = None;
-    for &(slug, c) in COMPONENT_SLUGS {
-        let pkg = package_name(c);
-        let installed_v = installed.get(pkg).cloned();
-        let upg = upg_by_pkg.get(pkg);
-        let candidate = upg.map(|r| r.candidate.clone());
-        let latest = candidate.clone().or_else(|| installed_v.clone());
-        let outdated = upg.is_some();
-        if let Some(c) = &candidate {
-            highest_candidate = Some(match highest_candidate.take() {
-                Some(prev) if version_gt(&prev, c) => prev,
-                _ => c.clone(),
-            });
-        }
-        components.insert(
-            slug.to_string(),
-            ComponentStatus {
-                installed: installed_v,
-                latest,
-                outdated,
-                asset_url: None,
-                sha256: None,
-            },
-        );
-    }
+    let mut packages: Vec<UpgradablePackage> = upgradable
+        .into_iter()
+        .filter(|p| p.name.starts_with(PACKAGE_PREFIX))
+        .collect();
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let latest_version = highest_candidate.or_else(|| {
-        // Nothing upgradable — surface the highest installed version
-        // so the SPA still has a "you're at vX.Y.Z" banner.
-        installed.values().max_by(|a, b| compare(a, b)).cloned()
-    });
-
-    Ok(Json(UpdatesCheckResponse {
-        latest_version,
-        release_url: None,
-        components,
-        error,
-    }))
-}
-
-/// Naive "is `a` > `b`" for X.Y.Z[-suffix] strings. Sufficient for
-/// our release tags; falls back to lexical for non-numeric segments.
-fn version_gt(a: &str, b: &str) -> bool {
-    matches!(compare(a, b), std::cmp::Ordering::Greater)
-}
-
-fn compare(a: &str, b: &str) -> std::cmp::Ordering {
-    let parts = |s: &str| -> Vec<u64> {
-        s.split('.')
-            .map(|p| {
-                p.split('-')
-                    .next()
-                    .unwrap_or("")
-                    .parse::<u64>()
-                    .unwrap_or(0)
-            })
-            .collect()
-    };
-    let av = parts(a);
-    let bv = parts(b);
-    for i in 0..av.len().max(bv.len()) {
-        let ai = av.get(i).copied().unwrap_or(0);
-        let bi = bv.get(i).copied().unwrap_or(0);
-        match ai.cmp(&bi) {
-            std::cmp::Ordering::Equal => continue,
-            other => return other,
-        }
-    }
-    a.cmp(b)
+    Ok(Json(UpdatesCheckResponse { packages, error }))
 }
 
 // ─── POST /api/updates/install + SSE stream ─────────────────────────
@@ -255,11 +131,8 @@ fn compare(a: &str, b: &str) -> std::cmp::Ordering {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
-    /// Helper is running `opkg upgrade`.
     Install,
-    /// Final ok=true line.
     Done,
-    /// Final ok=false line.
     Error,
 }
 
@@ -273,8 +146,7 @@ pub struct LogLine {
 #[derive(Debug, Clone, Serialize)]
 pub struct ActiveInstall {
     pub id: String,
-    pub component: String,
-    pub version: String,
+    pub packages: Vec<String>,
     pub started_at: u64,
     pub finished: bool,
     pub ok: Option<bool>,
@@ -313,12 +185,11 @@ impl InstallState {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct InstallRequest {
-    pub component: Component,
-    /// Kept on the wire for legacy compatibility but ignored — opkg
-    /// always installs the candidate version from the feed.
-    #[serde(default)]
-    pub version: String,
+pub struct UpgradeRequest {
+    /// One or more package names. Must each start with the
+    /// `bananas-` prefix; anything else is rejected so the API can't
+    /// be used to opkg-upgrade arbitrary system packages.
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -329,30 +200,40 @@ pub struct InstallAccepted {
 
 pub async fn post_updates_install(
     State(state): State<AppState>,
-    Json(req): Json<InstallRequest>,
+    Json(req): Json<UpgradeRequest>,
 ) -> Result<(StatusCode, Json<InstallAccepted>), (StatusCode, String)> {
+    if req.packages.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "no packages specified".to_string()));
+    }
+    for p in &req.packages {
+        if !p.starts_with(PACKAGE_PREFIX) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("package {p:?} is not in the {PACKAGE_PREFIX}* allowlist"),
+            ));
+        }
+    }
+
     {
         let guard = state.install.inner.lock().await;
         if let Some(a) = guard.as_ref() {
             if !a.finished {
                 return Err((
                     StatusCode::CONFLICT,
-                    format!("install already in flight: {} {}", a.component, a.version),
+                    format!("install already in flight: {}", a.packages.join(", ")),
                 ));
             }
         }
     }
 
-    let pkg = package_name(req.component).to_string();
     let started_at = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let id = format!("{}-{started_at}", req.component.as_str());
+    let id = format!("opkg-{started_at}");
     let active = ActiveInstall {
         id: id.clone(),
-        component: req.component.as_str().to_string(),
-        version: req.version.clone(),
+        packages: req.packages.clone(),
         started_at,
         finished: false,
         ok: None,
@@ -364,9 +245,9 @@ pub async fn post_updates_install(
     }
 
     let task_state = state.clone();
-    let component_name = req.component.as_str().to_string();
+    let packages = req.packages.clone();
     tokio::spawn(async move {
-        run_install(task_state, &component_name, &pkg).await;
+        run_install(task_state, packages).await;
     });
 
     Ok((
@@ -375,14 +256,17 @@ pub async fn post_updates_install(
     ))
 }
 
-async fn run_install(state: AppState, component_name: &str, pkg: &str) {
+async fn run_install(state: AppState, packages: Vec<String>) {
     state
         .install
-        .push(Phase::Install, format!("running opkg upgrade {pkg}"))
+        .push(
+            Phase::Install,
+            format!("running opkg upgrade {}", packages.join(" ")),
+        )
         .await;
 
     let cmd = HelperCommand::OpkgUpgrade {
-        packages: vec![pkg.to_string()],
+        packages: packages.clone(),
     };
     let resp = match bananas_helper::call(&state.helper_socket, &cmd).await {
         Ok(r) => r,
@@ -402,7 +286,7 @@ async fn run_install(state: AppState, component_name: &str, pkg: &str) {
             .install
             .push(
                 Phase::Done,
-                format!("upgraded {component_name} ({pkg}) successfully"),
+                format!("upgraded {} successfully", packages.join(", ")),
             )
             .await;
     } else {
@@ -467,17 +351,4 @@ async fn run_helper_simple(state: &AppState, cmd: HelperCommand) -> anyhow::Resu
         anyhow::bail!(resp.error.unwrap_or_else(|| "helper rejected".into()));
     }
     Ok(resp.output)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn version_compare_basic() {
-        assert!(version_gt("1.2.0", "1.1.0"));
-        assert!(version_gt("2.0.0", "1.99.99"));
-        assert!(!version_gt("1.0.0", "1.0.0"));
-        assert!(!version_gt("1.0.0", "1.0.1"));
-    }
 }

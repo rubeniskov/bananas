@@ -1518,85 +1518,69 @@ button.mp-chip:hover { filter: brightness(1.05); }
   color: var(--text);
 }
 
-/* ─── Updates page (per-component cards + install modal) ─────────── */
-.updates-header {
-  margin: 8px 0 16px;
+/* ─── Updates page (opkg-backed table + install drawer) ──────────── */
+.updates-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ok) 8%, var(--bg));
+  color: var(--ok);
+  font-size: 13px;
+}
+.updates-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.updates-count {
   font-size: 13px;
   color: var(--text-soft);
 }
-.updates-header a { color: var(--accent); text-decoration: none; }
-.updates-header a:hover { text-decoration: underline; }
-
-.updates-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 14px;
+.upgradable-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
-.update-card {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px 16px;
-  background: var(--bg-soft);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.upgradable-table th,
+.upgradable-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
 }
-.update-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
+.upgradable-table th {
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
 }
-.update-card-head strong { font-size: 14px; }
-.update-badge {
-  font: 11px/1 system-ui, sans-serif;
-  padding: 3px 8px;
-  border-radius: 999px;
+.upgradable-table th.actions,
+.upgradable-table td.actions {
+  text-align: right;
+  width: 1%;
   white-space: nowrap;
 }
-.update-badge.outdated {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+.upgradable-table .pkg-name {
+  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+}
+.upgradable-table .pkg-version {
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text-soft);
+}
+.upgradable-table .pkg-candidate {
   color: var(--accent);
 }
-.update-badge.current {
-  background: color-mix(in srgb, var(--ok) 14%, var(--bg));
-  color: var(--ok);
-}
-.update-badge.deferred {
-  background: color-mix(in srgb, var(--text-soft) 14%, var(--bg));
-  color: var(--text-soft);
-}
-.update-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.update-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
-}
-.update-label { color: var(--text-soft); }
-.update-version {
-  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
-  color: var(--text);
-}
-.update-card-foot {
-  margin-top: auto;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-}
-.update-foot-note {
-  font-size: 12px;
-  color: var(--text-soft);
+.upgradable-table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg));
 }
 
-/* Install progress modal — wider than the default and the body is a
- * scrolling log of SSE lines from the server. */
+/* Install progress modal — wider than the default; body is a
+ * scrolling log of SSE lines streamed from `opkg upgrade`. */
 .modal.install-modal {
   width: min(720px, 96vw);
   max-height: 80vh;
@@ -1613,7 +1597,7 @@ button.mp-chip:hover { filter: brightness(1.05); }
   font: 12px ui-monospace, "SF Mono", Menlo, monospace;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   background: var(--bg-soft);
 }
 .install-log-empty {
@@ -1622,36 +1606,12 @@ button.mp-chip:hover { filter: brightness(1.05); }
   gap: 8px;
   color: var(--text-soft);
 }
-.install-log-line {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
 .install-log-line pre {
-  flex: 1;
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .install-log-line.error pre { color: var(--danger); }
-.install-log-line .phase {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--text-soft) 12%, var(--bg));
-  color: var(--text-soft);
-  min-width: 70px;
-  text-align: center;
-}
-.install-log-line .phase.phase-download { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); color: var(--accent); }
-.install-log-line .phase.phase-verify   { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); color: var(--accent); }
-.install-log-line .phase.phase-install  { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); color: var(--accent); }
-.install-log-line .phase.phase-done     { background: color-mix(in srgb, var(--ok) 18%, var(--bg)); color: var(--ok); }
-.install-log-line .phase.phase-error    { background: color-mix(in srgb, var(--danger) 18%, var(--bg)); color: var(--danger); }
 
 .install-modal .ok-text     { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); }
 .install-modal .err-text    { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); }
