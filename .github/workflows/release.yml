@@ -122,6 +122,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-target-release-
 
+      # Cache the cargo-installed CLI binaries (dx, cross, etc.) so we
+      # don't `cargo install dioxus-cli` from scratch on every release.
+      # That alone was eating ~9 minutes of CI per run before this
+      # cache landed — dioxus-cli builds 200+ deps from source.
+      # Keyed on the pixi task definitions so any version bump in
+      # pixi.toml invalidates and triggers a fresh install.
+      - name: Cache cargo bin (dx, cross, ...)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-bin-${{ hashFiles('pixi.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bin-
+
       # ─── Compute the next release version BEFORE building so the
       # binaries embed it via env!("CARGO_PKG_VERSION"). Without this,
       # builds run against the still-stale Cargo.toml, semantic-release
