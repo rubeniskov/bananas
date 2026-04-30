@@ -46,12 +46,6 @@
       }
     ],
     [
-      "@semantic-release/exec",
-      {
-        "prepareCmd": "scripts/bump-cargo-version.sh ${nextRelease.version}"
-      }
-    ],
-    [
       "@semantic-release/github",
       {
         "assets": [

@@ -26,12 +26,14 @@ on:
   push:
     branches: [main]
 
-# One release at a time. Two pushes to main in quick succession queue
-# rather than race — semantic-release's tag/push step would explode
-# otherwise.
+# One release at a time. We cancel queued/in-flight runs when a new
+# push lands so the freshest commit always wins — without this, a long
+# Yocto bake from an older commit can finish, push a chore(release)
+# bump, and then a queued run on a stale checkout sees "behind remote"
+# and silently no-ops.
 concurrency:
   group: release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -117,6 +119,78 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-target-release-
 
+      # ─── Compute the next release version BEFORE building so the
+      # binaries embed it via env!("CARGO_PKG_VERSION"). Without this,
+      # builds run against the still-stale Cargo.toml, semantic-release
+      # bumps it after the build, and the published tarballs ship
+      # binaries that report `--version` one release behind the tag.
+      # The helper's InstallUpdate then refuses the swap with
+      # "extracted X reports version Y, expected Z".
+      #
+      # Setup Node early (was at the very end) so npx can run dry-run
+      # and the same toolchain serves the final publish step.
+      - name: Setup Node (for semantic-release)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install semantic-release + plugins
+        # conventional-changelog-conventionalcommits is a peer dep
+        # requested by both commit-analyzer's `preset: "conventionalcommits"`
+        # and release-notes-generator's `preset: "conventionalcommits"`.
+        # @semantic-release/exec is no longer in .releaserc.json (we do
+        # the bump in the workflow now) but stays installed in case
+        # we ever wire it back for a different prepare hook.
+        run: |
+          npm install -g \
+            semantic-release@22 \
+            @semantic-release/changelog@6 \
+            @semantic-release/exec@6 \
+            @semantic-release/git@10 \
+            @semantic-release/github@9 \
+            @semantic-release/commit-analyzer@11 \
+            @semantic-release/release-notes-generator@12 \
+            conventional-changelog-conventionalcommits@7
+
+      - name: Sync with origin/main
+        # semantic-release's analysis walks the actual git history; if
+        # the runner's checkout is behind a sibling release run's
+        # chore(release) commit, it'll bail with "local branch is
+        # behind remote". Pull once at the top so all downstream steps
+        # see the latest tip.
+        run: git pull --rebase origin main
+
+      - name: Compute next release version (dry-run)
+        id: nextver
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # `--dry-run` runs analyzeCommits + generateNotes only; it does
+        # NOT execute prepare hooks or push anything. We grep the next
+        # version out of stdout. If commit-analyzer decides nothing is
+        # releasable (no feat:/fix:/perf:/refactor: since the last tag),
+        # leave NEXT empty — downstream steps short-circuit and skip
+        # the bump + the publish step bails the same way.
+        run: |
+          set +e
+          out=$(semantic-release --dry-run --no-ci 2>&1)
+          set -e
+          echo "$out"
+          next=$(echo "$out" | grep -oE 'next release version is [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $5}' | head -1)
+          echo "next=${next}" >> "$GITHUB_OUTPUT"
+          if [ -n "$next" ]; then
+            echo "::notice::Next release will be v${next}"
+          else
+            echo "::notice::No releaseable commits since last tag — building at current Cargo.toml version"
+          fi
+
+      - name: Bump Cargo.toml + Cargo.lock to next release version
+        if: steps.nextver.outputs.next != ''
+        # Bumping BEFORE the build is the whole point of this dance.
+        # The script is idempotent — semantic-release's @semantic-release/git
+        # plugin will then commit the (already-bumped) Cargo.toml +
+        # Cargo.lock as part of its chore(release) commit at publish time.
+        run: scripts/bump-cargo-version.sh ${{ steps.nextver.outputs.next }}
+
       # ─── Build all the artifacts the release will publish ─────────
       - name: build-webadmin
         run: pixi run build-webadmin
@@ -192,39 +266,13 @@ jobs:
           ( cd dist && sha256sum *.tar.gz > SHA256SUMS )
           ls -la dist/
 
-      # ─── Run semantic-release ─────────────────────────────────────
-      - name: Setup Node (for semantic-release)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install semantic-release + plugins
-        # conventional-changelog-conventionalcommits is a peer dep
-        # requested by both commit-analyzer's `preset: "conventionalcommits"`
-        # and release-notes-generator's `preset: "conventionalcommits"`.
-        # Without it, analyzeCommits fails with MODULE_NOT_FOUND.
-        run: |
-          npm install -g \
-            semantic-release@22 \
-            @semantic-release/changelog@6 \
-            @semantic-release/exec@6 \
-            @semantic-release/git@10 \
-            @semantic-release/github@9 \
-            @semantic-release/commit-analyzer@11 \
-            @semantic-release/release-notes-generator@12 \
-            conventional-changelog-conventionalcommits@7
-
+      # ─── Publish ──────────────────────────────────────────────────
+      # semantic-release was already installed early (before the dry-run
+      # version computation), so this step just publishes. The bump
+      # script ran pre-build, so Cargo.toml + Cargo.lock are already at
+      # the target version in the working tree — @semantic-release/git
+      # commits them as part of the chore(release) commit it pushes.
       - name: semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Pull commits that landed during the (~25-min) Yocto bake so
-        # semantic-release isn't tripped by "local branch is behind
-        # remote, no release will be published". A sibling run's
-        # `chore(release): X.Y.Z [skip ci]` commit is the typical
-        # offender. The artifacts staged in dist/ are from this run's
-        # checkout, but the release tag covers every commit since the
-        # last tag — same shape semantic-release expects on a quiet
-        # branch.
-        run: |
-          git pull --rebase origin main
-          semantic-release
+        run: semantic-release
