@@ -38,6 +38,7 @@ use tokio::sync::RwLock;
 
 use crate::AppState;
 
+pub mod config_import;
 pub mod opkg;
 
 const HISTORY_CAP: usize = 100;

@@ -361,7 +361,15 @@ pub async fn fetch_config_toml() -> Result<String, ApiError> {
         .map_err(|e| ApiError::Other(e.to_string()))
 }
 
-pub async fn upload_config_toml(toml_body: &str) -> Result<ImportSummary, ApiError> {
+/// `POST /api/config` returns 202 Accepted with `{op_id}`. Caller
+/// subscribes to `/api/operations/{op_id}/log` for live progress and
+/// `/api/operations/{op_id}` (final state) for the structured summary.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportAccepted {
+    pub op_id: u64,
+}
+
+pub async fn upload_config_toml(toml_body: &str) -> Result<ImportAccepted, ApiError> {
     let resp = Request::post("/api/config")
         .header("content-type", "application/toml")
         .body(toml_body.to_string())
@@ -377,7 +385,83 @@ pub async fn upload_config_toml(toml_body: &str) -> Result<ImportSummary, ApiErr
         let txt = resp.text().await.unwrap_or_default();
         return Err(ApiError::Other(format!("HTTP {status}: {txt}")));
     }
-    resp.json::<ImportSummary>()
+    resp.json::<ImportAccepted>()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))
+}
+
+// --- Operations (unified job table) ---------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationKind {
+    OpkgUpgrade,
+    ConfigImport,
+    CloudSyncRun,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationStatus {
+    Running,
+    Success,
+    Failure,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct Operation {
+    pub id: u64,
+    pub kind: OperationKind,
+    pub status: OperationStatus,
+    pub label: String,
+    pub started_at: i64,
+    #[serde(default)]
+    pub finished_at: Option<i64>,
+    #[serde(default)]
+    pub output: String,
+    #[serde(default)]
+    pub progress: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OperationsList {
+    pub operations: Vec<Operation>,
+}
+
+pub async fn list_active_operations() -> Result<Vec<Operation>, ApiError> {
+    let resp = Request::get("/api/operations/active")
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    let list: OperationsList = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    Ok(list.operations)
+}
+
+pub async fn get_operation(op_id: u64) -> Result<Operation, ApiError> {
+    let resp = Request::get(&format!("/api/operations/{op_id}"))
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    resp.json::<Operation>()
         .await
         .map_err(|e| ApiError::Other(e.to_string()))
 }

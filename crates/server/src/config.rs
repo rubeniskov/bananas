@@ -49,7 +49,7 @@ pub struct ConfigBundle {
     pub system_toml: String,
 }
 
-fn default_version() -> u32 {
+pub fn default_version() -> u32 {
     1
 }
 
@@ -131,18 +131,61 @@ pub async fn export_config(State(state): State<AppState>) -> Response {
 }
 
 #[derive(Debug, Serialize)]
-struct ImportSummary {
-    ok: bool,
-    exports_written: usize,
-    fstab_written: usize,
-    users_created: usize,
-    users_skipped: usize,
-    cloud_accounts: usize,
-    cloud_syncs: usize,
-    notes: Vec<String>,
+pub struct ImportSummary {
+    pub ok: bool,
+    pub exports_written: usize,
+    pub fstab_written: usize,
+    pub users_created: usize,
+    pub users_skipped: usize,
+    pub cloud_accounts: usize,
+    pub cloud_syncs: usize,
+    pub notes: Vec<String>,
+}
+
+impl Default for ImportSummary {
+    fn default() -> Self {
+        // ok=true is the optimistic baseline — the runner flips it to
+        // false on the first step that errors. Avoids an "ok=false at
+        // start" gotcha for any new caller.
+        Self {
+            ok: true,
+            exports_written: 0,
+            fstab_written: 0,
+            users_created: 0,
+            users_skipped: 0,
+            cloud_accounts: 0,
+            cloud_syncs: 0,
+            notes: Vec::new(),
+        }
+    }
 }
 
 pub async fn import_config(State(state): State<AppState>, body: String) -> Response {
+    // POST is now async: parse + validate happen synchronously (so a
+    // bad bundle 400s immediately), the actual helper-driven apply
+    // runs as an OperationManager-tracked op so the SPA can resume
+    // progress UI across browser refreshes / server restarts.
+    match crate::operations::config_import::start(
+        state.operations.clone(),
+        (*state.helper_socket).clone(),
+        body,
+    )
+    .await
+    {
+        Ok(op_id) => (
+            StatusCode::ACCEPTED,
+            Json(json!({ "ok": true, "op_id": op_id })),
+        )
+            .into_response(),
+        Err((status, msg)) => (status, Json(json!({ "ok": false, "error": msg }))).into_response(),
+    }
+}
+
+#[allow(dead_code)]
+async fn legacy_import_config_inline(State(state): State<AppState>, body: String) -> Response {
+    // Kept for reference / quick rollback while the OperationManager
+    // migration soaks. Once the new path has shipped a release, drop
+    // this and the local ImportSummary helpers below.
     let bundle: ConfigBundle = match toml::from_str(&body) {
         Ok(b) => b,
         Err(e) => {
@@ -170,16 +213,7 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
             .into_response();
     }
 
-    let mut summary = ImportSummary {
-        ok: true,
-        exports_written: 0,
-        fstab_written: 0,
-        users_created: 0,
-        users_skipped: 0,
-        cloud_accounts: 0,
-        cloud_syncs: 0,
-        notes: Vec::new(),
-    };
+    let mut summary = ImportSummary::default();
 
     // ---- exports ---------------------------------------------------------
     let export_rows: Vec<exports::Row> = bundle

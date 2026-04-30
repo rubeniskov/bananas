@@ -185,6 +185,33 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     });
     let mut config_banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
     let mut reboot_confirm = use_signal(|| false);
+
+    // On mount: discover any in-flight ConfigImport op and reattach the
+    // busy overlay to it. This is the "refresh during import" path —
+    // without it, the SPA forgets the import is happening and the user
+    // sees Exports/Mounts/Users showing pre-import data even though
+    // the server is mid-write.
+    {
+        let auth_ctx = auth_ctx.clone();
+        use_effect(move || {
+            let mut auth_ctx = auth_ctx.clone();
+            spawn(async move {
+                match api::list_active_operations().await {
+                    Ok(ops) => {
+                        for op in ops {
+                            if matches!(op.kind, api::OperationKind::ConfigImport) {
+                                auth_ctx.busy.set(true);
+                                watch_config_import_op(op.id, config_banner, auth_ctx.clone());
+                                break;
+                            }
+                        }
+                    }
+                    Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                    Err(_) => {}
+                }
+            });
+        });
+    }
     // Dropdown that consolidates Save/Load config, Reboot, and Sign out
     // behind one menu trigger at the top-right. Closes on backdrop click
     // or after any of the actions fires.
@@ -242,47 +269,37 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
         let future = wasm_bindgen_futures::JsFuture::from(promise);
         // Reset the input so the same file can be picked again next time.
         input.set_value("");
-        // Flip the global busy flag so every page-level control disables
-        // and the BusyOverlay fades in. The flag clears in every match
-        // arm below — including errors — so a failed import doesn't
-        // strand the UI in a frozen state.
+        // Flip the global busy flag so every page-level control
+        // disables and the BusyOverlay fades in. The flag stays set
+        // until the OperationManager-tracked op transitions to a
+        // terminal status — see `watch_config_import_op` for the poll
+        // loop. A browser refresh while the op is in flight will
+        // re-discover it via /api/operations/active and resume the
+        // overlay (see use_effect at the top of this component).
         auth_ctx.busy.set(true);
         spawn(async move {
             match future.await {
                 Ok(val) => {
                     let text = val.as_string().unwrap_or_default();
                     match api::upload_config_toml(&text).await {
-                        Ok(summary) => {
-                            let mut msg = format!(
-                                "Imported: {} exports, {} fstab entries, {} users restored ({} skipped).",
-                                summary.exports_written,
-                                summary.fstab_written,
-                                summary.users_created,
-                                summary.users_skipped,
-                            );
-                            if !summary.notes.is_empty() {
-                                msg.push_str("\n\n");
-                                msg.push_str(&summary.notes.join("\n"));
-                            }
-                            let kind = if summary.ok {
-                                BannerKind::Ok
-                            } else {
-                                BannerKind::Err
-                            };
-                            config_banner.set(Some((kind, msg)));
-                            // Tell every page subscribing to the refresh
-                            // tick (Exports, Mounts, Users, Storage) to
-                            // re-fetch so the imported data is visible
-                            // without a manual hit on the Refresh button.
-                            auth_ctx.bump_refresh();
+                        Ok(accepted) => {
+                            watch_config_import_op(accepted.op_id, config_banner, auth_ctx.clone());
                         }
-                        Err(api::ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
-                        Err(e) => config_banner.set(Some((BannerKind::Err, e.to_string()))),
+                        Err(api::ApiError::Unauthorized) => {
+                            auth_ctx.busy.set(false);
+                            auth_ctx.signal_unauthorized();
+                        }
+                        Err(e) => {
+                            auth_ctx.busy.set(false);
+                            config_banner.set(Some((BannerKind::Err, e.to_string())));
+                        }
                     }
                 }
-                Err(_) => config_banner.set(Some((BannerKind::Err, "Could not read file".into()))),
+                Err(_) => {
+                    auth_ctx.busy.set(false);
+                    config_banner.set(Some((BannerKind::Err, "Could not read file".into())));
+                }
             }
-            auth_ctx.busy.set(false);
         });
     };
 
@@ -529,6 +546,112 @@ fn download_text(text: &str, mime: &str) -> Result<(), String> {
     document.body().ok_or("no body")?.remove_child(&anchor).ok();
     web_sys::Url::revoke_object_url(&url).ok();
     Ok(())
+}
+
+/// Poll the OperationManager-tracked ConfigImport op until it
+/// reaches a terminal status, then surface the structured summary as
+/// a banner and bump the page-refresh tick. Holds `auth_ctx.busy`
+/// at `true` for the duration so the BusyOverlay stays visible.
+///
+/// This is shared between the click-to-import path (kicks off a new
+/// op) and the on-mount discovery path (reattaches to one already in
+/// flight from a prior page load).
+fn watch_config_import_op(
+    op_id: u64,
+    mut config_banner: Signal<Option<(BannerKind, String)>>,
+    auth_ctx: AuthCtx,
+) {
+    let mut busy_signal = auth_ctx.busy;
+    spawn(async move {
+        const POLL_MS: i32 = 500;
+        loop {
+            match api::get_operation(op_id).await {
+                Ok(op) => {
+                    let terminal = !matches!(op.status, api::OperationStatus::Running);
+                    if terminal {
+                        let summary = parse_import_summary(&op.output);
+                        let kind = match (op.status.clone(), summary.as_ref()) {
+                            (api::OperationStatus::Success, _) => BannerKind::Ok,
+                            (_, Some(s)) if s.ok => BannerKind::Ok,
+                            _ => BannerKind::Err,
+                        };
+                        let msg = match summary {
+                            Some(s) => {
+                                let mut m = format!(
+                                    "Imported: {} exports, {} fstab entries, {} users restored ({} skipped).",
+                                    s.exports_written,
+                                    s.fstab_written,
+                                    s.users_created,
+                                    s.users_skipped,
+                                );
+                                if !s.notes.is_empty() {
+                                    m.push_str("\n\n");
+                                    m.push_str(&s.notes.join("\n"));
+                                }
+                                m
+                            }
+                            None => match op.status {
+                                api::OperationStatus::Cancelled => "Import cancelled.".into(),
+                                api::OperationStatus::Failure => {
+                                    "Import failed — see server logs.".into()
+                                }
+                                _ => "Import complete.".into(),
+                            },
+                        };
+                        config_banner.set(Some((kind, msg)));
+                        // Tell pages subscribing to the refresh tick
+                        // (Exports, Mounts, Users, Storage) to re-fetch
+                        // so the imported data is visible without a
+                        // manual refresh.
+                        auth_ctx.bump_refresh();
+                        busy_signal.set(false);
+                        return;
+                    }
+                }
+                Err(api::ApiError::Unauthorized) => {
+                    busy_signal.set(false);
+                    auth_ctx.signal_unauthorized();
+                    return;
+                }
+                Err(_) => {
+                    // Transient (server restart, network blip). Keep
+                    // polling — the op state is on disk in
+                    // /var/lib/bananas/operations.json.
+                }
+            }
+            sleep_ms(POLL_MS).await;
+        }
+    });
+}
+
+/// Parse the trailing `--- summary ---\n{json}` block the server
+/// appends to a ConfigImport op's output when it finishes. Returns
+/// None if the marker isn't present (e.g. interrupted / cancelled
+/// before the summary line was written).
+fn parse_import_summary(output: &str) -> Option<api::ImportSummary> {
+    let marker = "--- summary ---\n";
+    let (_head, tail) = output.rsplit_once(marker)?;
+    serde_json::from_str(tail.trim()).ok()
+}
+
+/// Cooperative sleep on the wasm runtime — `tokio::time::sleep` isn't
+/// available without the `time` feature on the wasm32 target.
+async fn sleep_ms(ms: i32) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(window) = web_sys::window() {
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+            });
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                cb.as_ref().unchecked_ref(),
+                ms,
+            );
+            cb.forget();
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 fn date_stamp() -> String {
