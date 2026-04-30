@@ -178,6 +178,7 @@ IMAGE_INSTALL += " \
     usbutils \
     i2c-tools \
     bananas-server \
+    bananas-webadmin \
     bananas-stats \
     bananas-config \
 "
