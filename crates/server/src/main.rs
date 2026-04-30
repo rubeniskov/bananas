@@ -43,7 +43,6 @@ mod storage;
 mod system;
 mod updates;
 mod users;
-mod version;
 use exports::{Opts, Row, Squash};
 use session::SessionKey;
 
@@ -56,8 +55,6 @@ pub struct AppState {
     pub live_bus: stats_ws::LiveBus,
     pub jobs: cloud_jobs::JobManager,
     pub storage_cache: storage::StorageCache,
-    pub versions: version::VersionCache,
-    pub updates: updates::UpdatesCache,
     pub install: updates::InstallState,
 }
 
@@ -113,8 +110,6 @@ async fn main() -> Result<()> {
         live_bus,
         jobs,
         storage_cache: storage::StorageCache::new(),
-        versions: version::VersionCache::new(),
-        updates: updates::UpdatesCache::new(),
         install: updates::InstallState::new(),
     };
 
