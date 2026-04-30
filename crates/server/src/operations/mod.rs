@@ -38,6 +38,8 @@ use tokio::sync::RwLock;
 
 use crate::AppState;
 
+pub mod opkg;
+
 const HISTORY_CAP: usize = 100;
 const SSE_POLL: Duration = Duration::from_millis(500);
 const INTERRUPTED_NOTE: &str = "\n[interrupted: server restart]";
@@ -131,19 +133,18 @@ pub struct OperationManager {
 
 impl OperationManager {
     /// Load the journal from disk (or start empty if missing /
-    /// unparseable). Any `Running` entry from a prior server lifetime
-    /// is flipped to `Failure` with an `[interrupted]` note appended —
-    /// the in-process task that owned it is gone and we can't honestly
-    /// claim it's still running. Off-server ops (opkg, cloud sync)
-    /// reinstate themselves via their handler's `reinstate` hook in a
-    /// later sequencing step.
+    /// unparseable). Running entries are kept as-is so per-kind
+    /// reinstaters can decide whether the op is genuinely still alive
+    /// (e.g. opkg's transient unit is still running on the helper
+    /// side) before any blanket flush. Callers MUST follow up with
+    /// `flush_orphan_running` after running per-kind reinstaters,
+    /// otherwise zombie Running ops will linger forever.
     pub async fn load(journal_path: PathBuf) -> Self {
         let entries = read_journal(&journal_path).await;
-        let now = unix_now();
         let mut next_id = 0u64;
         let mut order = std::collections::VecDeque::new();
         let mut jobs = HashMap::new();
-        for mut op in entries {
+        for op in entries {
             if matches!(op.kind, OperationKind::Unknown) {
                 continue;
             }
@@ -153,13 +154,6 @@ impl OperationManager {
             // next enqueue would skip one.
             if op.id > next_id {
                 next_id = op.id;
-            }
-            if op.status == OperationStatus::Running {
-                op.status = OperationStatus::Failure;
-                op.finished_at = Some(now);
-                if !op.output.ends_with(INTERRUPTED_NOTE) {
-                    op.output.push_str(INTERRUPTED_NOTE);
-                }
             }
             order.push_back(op.id);
             jobs.insert(op.id, op);
@@ -172,6 +166,56 @@ impl OperationManager {
             })),
             journal_path: Arc::new(journal_path),
         }
+    }
+
+    /// After per-kind reinstaters have had their chance, flip every
+    /// remaining `Running` op to `Failure` with the
+    /// `[interrupted: server restart]` note. Idempotent. Callers with
+    /// no per-kind reinstaters can call this immediately after `load`.
+    pub async fn flush_orphan_running(&self) {
+        let now = unix_now();
+        let to_flip: Vec<u64> = {
+            let inner = self.inner.read().await;
+            inner
+                .jobs
+                .iter()
+                .filter(|(_, op)| op.status == OperationStatus::Running)
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        if to_flip.is_empty() {
+            return;
+        }
+        {
+            let mut inner = self.inner.write().await;
+            for id in &to_flip {
+                if let Some(op) = inner.jobs.get_mut(id) {
+                    if op.status != OperationStatus::Running {
+                        continue;
+                    }
+                    op.status = OperationStatus::Failure;
+                    op.finished_at = Some(now);
+                    if !op.output.ends_with(INTERRUPTED_NOTE) {
+                        op.output.push_str(INTERRUPTED_NOTE);
+                    }
+                }
+            }
+        }
+        self.write_journal().await;
+    }
+
+    /// Find the most recent Running op of the given kind. Used by
+    /// per-kind reinstaters to locate the journal entry they should
+    /// reattach to.
+    pub async fn most_recent_running_of(&self, kind: OperationKind) -> Option<OperationState> {
+        let inner = self.inner.read().await;
+        inner
+            .order
+            .iter()
+            .rev()
+            .filter_map(|id| inner.jobs.get(id))
+            .find(|op| op.kind == kind && op.status == OperationStatus::Running)
+            .cloned()
     }
 
     /// Reserve a fresh id and insert the op as `Running`. Returns the
@@ -514,7 +558,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reload_marks_running_as_failure_with_interrupt_note() {
+    async fn flush_orphan_running_marks_running_as_failure_with_interrupt_note() {
         let (_td, p) = temp_journal();
         // First lifetime: enqueue an op and don't finish it.
         let mgr1 = OperationManager::load(p.clone()).await;
@@ -527,14 +571,51 @@ mod tests {
             .await;
         mgr1.append_output(id, "applying exports\n").await;
 
-        // Second lifetime: load. Running entry should flip to Failure.
+        // Second lifetime: load alone leaves Running as-is so per-kind
+        // reinstaters can decide. flush_orphan_running then flips the
+        // ones nobody claimed.
         let mgr2 = OperationManager::load(p).await;
+        assert_eq!(mgr2.get(id).await.unwrap().status, OperationStatus::Running);
+        mgr2.flush_orphan_running().await;
+
         let op = mgr2.get(id).await.unwrap();
         assert_eq!(op.status, OperationStatus::Failure);
         assert!(op.finished_at.is_some());
         assert!(op.output.ends_with(INTERRUPTED_NOTE));
         // Original log preserved.
         assert!(op.output.contains("applying exports"));
+    }
+
+    #[tokio::test]
+    async fn most_recent_running_of_finds_match() {
+        let (_td, p) = temp_journal();
+        let mgr = OperationManager::load(p).await;
+        let _old = mgr
+            .enqueue(
+                OperationKind::OpkgUpgrade,
+                "old".into(),
+                serde_json::json!({}),
+            )
+            .await;
+        mgr.finish(_old, OperationStatus::Success, None).await;
+        let new = mgr
+            .enqueue(
+                OperationKind::OpkgUpgrade,
+                "new".into(),
+                serde_json::json!({}),
+            )
+            .await;
+        let found = mgr
+            .most_recent_running_of(OperationKind::OpkgUpgrade)
+            .await
+            .unwrap();
+        assert_eq!(found.id, new);
+        // No Running ConfigImport → None.
+        assert!(
+            mgr.most_recent_running_of(OperationKind::ConfigImport)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

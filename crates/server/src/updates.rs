@@ -1,17 +1,23 @@
 //! opkg-backed update endpoints.
 //!
-//! The server is a thin proxy onto `bananas-helper`'s opkg surface.
-//! It owns no install state of its own — that all lives behind the
-//! helper, on disk in `/var/lib/bananas-helper/opkg.log`. This is
-//! deliberate: the server gets restarted as part of the upgrade it
-//! initiated, so any in-process state would be lost. Polling the
-//! helper instead means the SSE stream resumes naturally after the
-//! restart.
+//! Now backed by the unified `OperationManager` (`crates/server/src/operations`).
+//! The webadmin's *Upgrade* button goes through `POST /api/updates/install`,
+//! which calls `operations::opkg::start` to:
+//!   1. validate package names (must start with `bananas-`)
+//!   2. tell the helper to spawn the transient `bananas-opkg-upgrade.service`
+//!   3. register an `OpkgUpgrade` op in the manager
+//!   4. spawn a background watcher that polls the helper for log delta
+//!
+//! `GET /api/updates/status` is kept as a back-compat shim for SPA
+//! bundles cached in browsers; it just locates the latest OpkgUpgrade
+//! op and tails it via `/api/operations/{id}/log`. New clients should
+//! use the operations endpoints directly.
 //!
 //!   GET  /api/version          — installed `bananas-*` packages
 //!   GET  /api/updates/check    — upgradable `bananas-*` packages
 //!   POST /api/updates/install  — kick off `opkg upgrade <packages>`
 //!   GET  /api/updates/status   — SSE stream of the active install
+//!                                (legacy shim → operations/{id}/log)
 //!
 //! Filtering is on `bananas-*` prefix: opkg's view of the system
 //! includes ~1000 base-OS packages (libc, busybox, …) that the
@@ -29,7 +35,7 @@ use bananas_helper::{Command as HelperCommand, Response as HelperResponse};
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 
-use crate::AppState;
+use crate::{AppState, operations};
 
 /// Only packages whose name starts with this prefix are exposed via
 /// the API. Keeps the SPA's view focused on what BanaNAS itself
@@ -133,9 +139,9 @@ pub async fn get_updates_check(
 
 // ─── POST /api/updates/install + SSE stream ─────────────────────────
 
-/// SSE event payload. Phase is one of `install` (mid-stream log line),
-/// `done` (final OK), `error` (final failure). The webadmin matches on
-/// these strings to decide when to close the modal.
+/// SSE event payload for the legacy `/api/updates/status` shim. Phase
+/// is one of `install` (mid-stream log line), `done`, `error`. The
+/// webadmin still matches these strings to drive the install modal.
 #[derive(Debug, Clone, Serialize)]
 pub struct LogLine {
     pub seq: u64,
@@ -151,121 +157,83 @@ pub struct UpgradeRequest {
     pub packages: Vec<String>,
 }
 
-/// Helper status payload — mirrors `bananas_helper::opkg::UpgradeStatus`
-/// without dragging the helper crate's serde shape into the server
-/// surface. State strings come from the helper unchanged.
-#[derive(Debug, Deserialize)]
-struct UpgradeStatus {
-    state: String,
-    log: String,
-    log_offset: u64,
-    #[serde(default)]
-    exit_code: Option<i32>,
+#[derive(Debug, Serialize)]
+pub struct InstallAccepted {
+    /// New clients can subscribe to `/api/operations/{op_id}/log`.
+    /// Old clients ignore this field.
+    pub op_id: u64,
 }
 
 pub async fn post_updates_install(
     State(state): State<AppState>,
     Json(req): Json<UpgradeRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    if req.packages.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "no packages specified".to_string()));
-    }
-    for p in &req.packages {
-        if !p.starts_with(PACKAGE_PREFIX) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("package {p:?} is not in the {PACKAGE_PREFIX}* allowlist"),
-            ));
-        }
-    }
-
-    let cmd = HelperCommand::OpkgUpgrade {
-        packages: req.packages.clone(),
-    };
-    match bananas_helper::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, .. }) => Ok(StatusCode::ACCEPTED),
-        Ok(HelperResponse { error, .. }) => Err((
-            StatusCode::CONFLICT,
-            error.unwrap_or_else(|| "helper rejected upgrade".into()),
-        )),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}"))),
-    }
+) -> Result<(StatusCode, Json<InstallAccepted>), (StatusCode, String)> {
+    let op_id = operations::opkg::start(
+        state.operations.clone(),
+        (*state.helper_socket).clone(),
+        req.packages,
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(InstallAccepted { op_id })))
 }
 
+/// Legacy SSE shim. Locates the latest OpkgUpgrade op and emits its
+/// log incrementally + the terminal close event in the same shape the
+/// previous handler used. New webadmin builds bypass this entirely
+/// and subscribe to `/api/operations/{id}/log`.
 pub async fn get_updates_status(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let manager = state.operations.clone();
     let stream = async_stream::stream! {
-        let mut since: u64 = 0;
         let mut seq: u64 = 0;
-        let socket = state.helper_socket.clone();
+        let mut sent_len: usize = 0;
+
+        // Find the op to tail. If none ever ran, emit a terminal error.
+        let op_id = match operations::opkg::latest(&manager).await {
+            Some(op) => op.id,
+            None => {
+                yield emit(&mut seq, "error", "no upgrade has been started".into());
+                yield close_event("error");
+                return;
+            }
+        };
 
         loop {
-            let cmd = HelperCommand::OpkgUpgradeStatus { since };
-            let status = match bananas_helper::call(&socket, &cmd).await {
-                Ok(HelperResponse { ok: true, output, .. }) => {
-                    match serde_json::from_str::<UpgradeStatus>(&output) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            yield emit(&mut seq, "error", format!("malformed helper status: {e}"));
-                            yield close_event("error");
-                            break;
-                        }
-                    }
-                }
-                Ok(HelperResponse { error, .. }) => {
-                    // Likely transient: helper is restarting too. Keep
-                    // polling — the webadmin's higher-level retry
-                    // bound covers the case where it never comes back.
-                    yield keepalive_comment();
-                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
-                    let _ = error;
-                    continue;
-                }
-                Err(e) => {
-                    yield keepalive_comment();
-                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
-                    tracing::debug!(?e, "helper unreachable during status poll, retrying");
-                    continue;
-                }
+            let op = match manager.get(op_id).await {
+                Some(o) => o,
+                None => break,
             };
-
-            since = status.log_offset;
-
-            for line in status.log.lines() {
-                if line.is_empty() {
-                    continue;
+            if op.output.len() > sent_len {
+                let chunk = &op.output[sent_len..];
+                sent_len = op.output.len();
+                for line in chunk.lines() {
+                    if line.is_empty() || line.starts_with("[bananas-opkg-exit=") {
+                        continue;
+                    }
+                    yield emit(&mut seq, "install", line.to_string());
                 }
-                if line.starts_with("[bananas-opkg-exit=") {
-                    // Sentinel from the wrapper script — don't surface to the UI.
-                    continue;
-                }
-                yield emit(&mut seq, "install", line.to_string());
             }
-
-            match status.state.as_str() {
-                "done" => {
-                    yield emit(&mut seq, "done", "Upgrade complete.".to_string());
+            match op.status {
+                crate::operations::OperationStatus::Running => {
+                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+                }
+                crate::operations::OperationStatus::Success => {
+                    yield emit(&mut seq, "done", "Upgrade complete.".into());
                     yield close_event("ok");
                     break;
                 }
-                "failed" => {
-                    let detail = status
-                        .exit_code
-                        .map(|c| format!("opkg exited {c}"))
-                        .unwrap_or_else(|| "opkg failed".to_string());
-                    yield emit(&mut seq, "error", detail);
+                crate::operations::OperationStatus::Failure
+                | crate::operations::OperationStatus::Cancelled => {
+                    let tail = op
+                        .output
+                        .lines()
+                        .last()
+                        .filter(|l| !l.starts_with("[bananas-opkg-exit="))
+                        .unwrap_or("upgrade failed");
+                    yield emit(&mut seq, "error", tail.to_string());
                     yield close_event("error");
                     break;
-                }
-                "idle" => {
-                    yield emit(&mut seq, "error", "no upgrade in progress".to_string());
-                    yield close_event("error");
-                    break;
-                }
-                _ => {
-                    // "active" — keep polling for new log content
-                    tokio::time::sleep(STATUS_POLL_INTERVAL).await;
                 }
             }
         }
@@ -288,12 +256,6 @@ fn emit(seq: &mut u64, phase: &'static str, text: String) -> Result<Event, Infal
 
 fn close_event(payload: &'static str) -> Result<Event, Infallible> {
     Ok(Event::default().event("close").data(payload))
-}
-
-fn keepalive_comment() -> Result<Event, Infallible> {
-    // SSE comment line — keeps the connection warm without delivering
-    // a message to onmessage. Fine for opaque retry windows.
-    Ok(Event::default().comment("retry"))
 }
 
 // ─── helpers ────────────────────────────────────────────────────────

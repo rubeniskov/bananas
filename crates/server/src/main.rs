@@ -103,6 +103,13 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "/var/lib/bananas/operations.json".into());
     let operations = operations::OperationManager::load(operations_journal).await;
+    // Per-kind reinstaters: ask the helper if any opkg upgrade is
+    // still in flight from a previous server lifetime. If yes, the
+    // matching journal entry is reattached with a fresh log watcher.
+    operations::opkg::reinstate(&operations, &helper_socket).await;
+    // Flush any Running entry no reinstater claimed. After this point,
+    // the only Running ops are ones genuinely backed by live work.
+    operations.flush_orphan_running().await;
 
     let state = AppState {
         exports_path: Arc::new(
