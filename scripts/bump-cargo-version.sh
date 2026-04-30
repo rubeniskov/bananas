@@ -25,10 +25,15 @@ awk -v ver="$ver" '
 mv Cargo.toml.tmp Cargo.toml
 
 # Refresh Cargo.lock so the workspace member entries get the new version.
-# `cargo update -w --offline` updates only workspace member entries from the
-# manifests we just edited; it does not touch external crates.io packages
-# and does not need network.
-cargo update -w --offline
+# `cargo update -w` updates only workspace member entries from the
+# manifests we just edited; it leaves external crates.io packages
+# pinned at their existing Cargo.lock versions. We don't pass --offline
+# even though the workspace-only update should be a local operation —
+# cargo's resolver still wants the registry index loaded to verify
+# version constraints on the dep graph, and the CI runner's cache
+# may not have every transitive crate (especially for a new dep added
+# in this commit). Hitting crates.io once per release is cheap.
+cargo update -w
 
 # Single source of truth for Yocto recipe PV. Read at parse time by
 # layers/meta-bananas/recipes-bsp/bananas-version.inc. Writing this in
