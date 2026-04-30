@@ -4,7 +4,7 @@ exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vend
 resolver = "3"
 
 [workspace.package]
-version = "1.3.0"
+version = "1.4.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["rubeniskov <me@rubeniskov.com>"]

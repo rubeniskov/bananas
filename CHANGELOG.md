@@ -2,6 +2,21 @@
 
 All notable changes to BanaNAS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and entries are derived from [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.4.0](https://github.com/rubeniskov/bananas/compare/v1.3.0...v1.4.0) (2026-04-30)
+
+
+### 🚀 Features
+
+* **config:** route config import through OperationManager ([3deda31](https://github.com/rubeniskov/bananas/commit/3deda319f30e4007c497c0bf4c35b9659ae6aee9))
+* **server:** OperationManager skeleton + /api/operations endpoints ([514d9bf](https://github.com/rubeniskov/bananas/commit/514d9bf337391600aa7710262668178192042913))
+* **updates:** route opkg upgrade through OperationManager ([3041de7](https://github.com/rubeniskov/bananas/commit/3041de7e1586c9c00ee654bbe07ca4283b172c87))
+
+
+### 🐛 Bug Fixes
+
+* **feed:** drop bananapro arch from customfeeds.conf ([6df8ca0](https://github.com/rubeniskov/bananas/commit/6df8ca0246c00dcb7fcb39bfd375d7d1fb6fb0cf))
+* **updates:** detach opkg from helper cgroup, resume SSE across restart ([1fa8940](https://github.com/rubeniskov/bananas/commit/1fa89406bf2cf71bd2895eb5eb21c6fbae41e6fa))
+
 ## [1.3.0](https://github.com/rubeniskov/bananas/compare/v1.2.0...v1.3.0) (2026-04-30)
 
 
