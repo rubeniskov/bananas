@@ -49,7 +49,7 @@
       "@semantic-release/github",
       {
         "assets": [
-          { "path": "dist/bananas-image-armv7.tar.gz", "label": "🍌 SD-card image (bananapro, dd-able after extract)" },
+          { "path": "dist/bananas-image-armv7.tar.gz", "label": "SD-card image (bananapro, dd-able after extract)" },
           { "path": "dist/bananas-server-armv7.tar.gz", "label": "bananas-server + helper (armv7)" },
           { "path": "dist/bananas-stats-armv7.tar.gz", "label": "bananas-stats (armv7)" },
           { "path": "dist/bananas-dashboard-armv7.tar.gz", "label": "bananas-dashboard (armv7)" },
