@@ -63,6 +63,16 @@ async fn main() -> Result<()> {
         );
     }
 
+    // Make sure the in-place update staging + work dirs exist with
+    // root:bananas 2775 BEFORE any frontend (server, bananas-config)
+    // tries to write to them. Otherwise whichever caller hits the
+    // dispatch first creates the dir with their own ownership: e.g.
+    // bananas-config running as root via SSH leaves a root:root 0755
+    // staging dir that the bananas-user server can't write into. The
+    // SGID bit on the dir means new files inherit the bananas group
+    // automatically.
+    ensure_update_dirs().await;
+
     tracing::info!(
         socket=%socket_path.display(),
         exports=%exports_path.display(),
@@ -759,6 +769,41 @@ fn lookup_group_gid(name: &str) -> Option<u32> {
         }
     }
     None
+}
+
+/// Create /var/lib/bananas/updates/{staging,work} with root:bananas 2775
+/// at helper startup so any frontend (server, bananas-config) can stage
+/// tarballs there. Without this, whoever creates the dir first dictates
+/// the ownership — bananas-config running as root via SSH leaves a
+/// root:root 0755 staging dir that the bananas-user server can't write
+/// into, and a fresh-flashed image needs the dirs to exist anyway.
+///
+/// The SGID bit (the leading 2 in 2775) makes new files inherit the
+/// bananas group, so the perms stay correct even when bananas-config
+/// (root-uid) and the server (bananas-uid) take turns writing tarballs.
+async fn ensure_update_dirs() {
+    use std::os::unix::fs::PermissionsExt;
+    let staging_root = std::env::var_os("BANANAS_UPDATES_STAGING_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/bananas/updates/staging"));
+    let work_root = std::env::var_os("BANANAS_UPDATES_WORK_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/bananas/updates/work"));
+    let bananas_gid = lookup_group_gid("bananas");
+    for dir in [&staging_root, &work_root] {
+        if let Err(e) = fs::create_dir_all(dir).await {
+            tracing::warn!(path=%dir.display(), error=%e, "creating update dir");
+            continue;
+        }
+        if let Err(e) = fs::set_permissions(dir, std::fs::Permissions::from_mode(0o2775)).await {
+            tracing::warn!(path=%dir.display(), error=%e, "chmod 2775 update dir");
+        }
+        if let Some(gid) = bananas_gid {
+            if let Err(e) = std::os::unix::fs::chown(dir, Some(0), Some(gid)) {
+                tracing::warn!(path=%dir.display(), error=%e, "chown root:bananas");
+            }
+        }
+    }
 }
 
 // --- User management ------------------------------------------------------
