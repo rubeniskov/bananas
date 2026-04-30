@@ -104,13 +104,22 @@ jobs:
         with:
           targets: wasm32-unknown-unknown,armv7-unknown-linux-gnueabihf
 
+      # Cache keyed on **/Cargo.toml (deps + version constraints), NOT
+      # Cargo.lock. The lock file gets rewritten by bump-cargo-version.sh
+      # on every release (workspace member version + lockfile metadata),
+      # which means a Cargo.lock-keyed primary key NEVER hits — the
+      # cache only restores via the restore-keys fallback. Since dep
+      # versions in the manifests are what actually drive what cargo
+      # has to (re)compile, hashing Cargo.toml is the right primary
+      # signal: stable across releases that don't add deps. cargo
+      # itself reconciles any lockfile drift from the restored target/.
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
@@ -118,7 +127,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-target-release-
 
