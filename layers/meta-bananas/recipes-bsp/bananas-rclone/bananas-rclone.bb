@@ -7,6 +7,14 @@ binary is statically linked Go so no system runtime deps are required."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
+# PV sourced from <repo>/assets/version.txt — see comment in
+# bananas-server.bb. The version reflects the BanaNAS release that
+# carries this rclone vendored copy, NOT rclone's upstream version
+# (which is pinned by `pixi run setup-rclone-arm`). Operators may
+# see no-op upgrades on releases that don't bump rclone — accepted
+# trade-off for v1; refine if it becomes noisy.
+require recipes-bsp/bananas-version.inc
+
 # Pull the prebuilt binary from serve/bin/ (staged by the
 # `setup-rclone-arm` pixi task — version pin + sha256 verify is on
 # the pixi side; once the bytes land in serve/bin/ the recipe just

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Update [workspace.package].version in Cargo.toml + refresh Cargo.lock to
-# match. Invoked by @semantic-release/exec on every release so the binaries
-# bake the right version via env!("CARGO_PKG_VERSION").
+# match, and also write the version into assets/version.txt so the Yocto
+# recipes' `require recipes-bsp/bananas-version.inc` picks it up. Invoked
+# by .github/workflows/release.yml on every release so the binaries bake
+# the right version via env!("CARGO_PKG_VERSION") AND the published .ipk
+# files carry the matching PV (otherwise opkg sees no upgrade).
 #
 # Usage: bump-cargo-version.sh <version>
 #   e.g. bump-cargo-version.sh 1.2.0
@@ -27,4 +30,9 @@ mv Cargo.toml.tmp Cargo.toml
 # and does not need network.
 cargo update -w --offline
 
-echo "Bumped Cargo.toml + Cargo.lock to $ver"
+# Single source of truth for Yocto recipe PV. Read at parse time by
+# layers/meta-bananas/recipes-bsp/bananas-version.inc. Writing this in
+# the same script keeps Cargo + .ipk versions in lockstep.
+echo "$ver" > assets/version.txt
+
+echo "Bumped Cargo.toml + Cargo.lock + assets/version.txt to $ver"

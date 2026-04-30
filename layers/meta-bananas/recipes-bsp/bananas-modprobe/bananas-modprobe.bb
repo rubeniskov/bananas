@@ -9,6 +9,10 @@ gigabit Ethernet covers all NAS traffic; the WiFi chip is dead weight."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
+# PV sourced from <repo>/assets/version.txt — see comment in
+# bananas-server.bb for the rationale.
+require recipes-bsp/bananas-version.inc
+
 SRC_URI = "file://blacklist-brcmfmac.conf"
 
 S = "${WORKDIR}"
