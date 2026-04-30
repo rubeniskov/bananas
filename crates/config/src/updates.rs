@@ -214,7 +214,13 @@ fn parse_shasums(body: &str) -> HashMap<String, String> {
 fn semver_lt(a: &str, b: &str) -> bool {
     let parts = |s: &str| -> Vec<u64> {
         s.split('.')
-            .map(|p| p.split('-').next().unwrap_or("").parse::<u64>().unwrap_or(0))
+            .map(|p| {
+                p.split('-')
+                    .next()
+                    .unwrap_or("")
+                    .parse::<u64>()
+                    .unwrap_or(0)
+            })
             .collect()
     };
     let av = parts(a);

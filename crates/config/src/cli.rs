@@ -31,16 +31,11 @@ pub async fn status(socket: &Path) -> Result<()> {
         ("dashboard", Some("bananas-dashboard.service")),
         ("webadmin", None),
     ] {
-        let installed = versions
-            .get(*component)
-            .map(|s| s.as_str())
-            .unwrap_or("—");
+        let installed = versions.get(*component).map(|s| s.as_str()).unwrap_or("—");
         let unit_state = unit
             .and_then(|u| units.get(u).cloned())
             .unwrap_or_else(|| "n/a".to_string());
-        println!(
-            "  {component:<15} {installed:<14} {unit_state}"
-        );
+        println!("  {component:<15} {installed:<14} {unit_state}");
     }
     Ok(())
 }
@@ -136,9 +131,9 @@ pub async fn update_install(socket: &Path, component_name: &str) -> Result<()> {
         "stats" => Component::Stats,
         "dashboard" => Component::Dashboard,
         "webadmin" => Component::Webadmin,
-        "server" | "helper" => bail!(
-            "self-update for `{component_name}` is not yet supported (deferred to v2)"
-        ),
+        "server" | "helper" => {
+            bail!("self-update for `{component_name}` is not yet supported (deferred to v2)")
+        }
         other => bail!("unknown component {other:?}"),
     };
     let report = updates::check(socket).await?;
@@ -161,7 +156,9 @@ pub async fn update_install(socket: &Path, component_name: &str) -> Result<()> {
         .context("download")?;
     println!("  ✓ downloaded → {}", staged.display());
     println!("  ✓ verifying sha256...");
-    updates::verify_sha(&staged, sha256).await.context("sha256")?;
+    updates::verify_sha(&staged, sha256)
+        .await
+        .context("sha256")?;
     println!("  ✓ sha256 ok");
     println!("  → handing off to helper for atomic install...");
     let resp = bananas_helper::call(
@@ -176,7 +173,10 @@ pub async fn update_install(socket: &Path, component_name: &str) -> Result<()> {
     .await
     .context("calling helper")?;
     if !resp.ok {
-        bail!(resp.error.unwrap_or_else(|| "helper refused install".into()));
+        bail!(
+            resp.error
+                .unwrap_or_else(|| "helper refused install".into())
+        );
     }
     println!("{}", resp.output.trim_end());
     println!();

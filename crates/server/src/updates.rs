@@ -231,9 +231,7 @@ pub async fn get_updates_check(
     })
 }
 
-pub async fn get_version(
-    State(state): State<AppState>,
-) -> Json<crate::version::InstalledVersions> {
+pub async fn get_version(State(state): State<AppState>) -> Json<crate::version::InstalledVersions> {
     Json(state.versions.current(&state.helper_socket).await)
 }
 
@@ -396,10 +394,7 @@ pub async fn post_updates_install(
             if !a.finished {
                 return Err((
                     StatusCode::CONFLICT,
-                    format!(
-                        "install already in flight: {} {}",
-                        a.component, a.version
-                    ),
+                    format!("install already in flight: {} {}", a.component, a.version),
                 ));
             }
         }
@@ -587,11 +582,7 @@ async fn run_install(
     }
 }
 
-async fn download(
-    client: &reqwest::Client,
-    url: &str,
-    dest: &std::path::Path,
-) -> Result<()> {
+async fn download(client: &reqwest::Client, url: &str, dest: &std::path::Path) -> Result<()> {
     let resp = client
         .get(url)
         .send()

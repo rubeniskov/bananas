@@ -102,7 +102,9 @@ async fn main() -> Result<()> {
         Cmd::Status => cli::status(&socket).await,
         Cmd::Tz { zone } => cli::timezone(&socket, zone.as_deref()).await,
         Cmd::Reboot { yes } => cli::reboot(&socket, yes).await,
-        Cmd::Update { sub: UpdateCmd::Check } => cli::update_check(&socket).await,
+        Cmd::Update {
+            sub: UpdateCmd::Check,
+        } => cli::update_check(&socket).await,
         Cmd::Update {
             sub: UpdateCmd::Install { component },
         } => cli::update_install(&socket, &component).await,

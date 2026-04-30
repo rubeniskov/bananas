@@ -28,3 +28,7 @@ tar.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# install::tests share process-global env vars (BANANAS_UPDATES_STAGING_DIR
+# etc) — running them in parallel races. serial_test guards them with a
+# per-test mutex so cargo test's default --test-threads=N still works.
+serial_test = "3"

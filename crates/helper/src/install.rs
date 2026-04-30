@@ -106,7 +106,10 @@ fn target_for(component: Component) -> Result<Target> {
         // binary can't restart itself the same way). Step 7+8 lift this
         // restriction.
         Component::Server | Component::Helper => {
-            bail!("in-place install for `{}` not yet supported", component.as_str())
+            bail!(
+                "in-place install for `{}` not yet supported",
+                component.as_str()
+            )
         }
     })
 }
@@ -151,7 +154,14 @@ pub async fn install_update(
     if target.is_webadmin {
         install_webadmin(&work_dir, &paths.webadmin_dir, &mut log)?;
     } else {
-        install_binaries(&target, &work_dir, &paths.bin_dir, expected_version, &mut log).await?;
+        install_binaries(
+            &target,
+            &work_dir,
+            &paths.bin_dir,
+            expected_version,
+            &mut log,
+        )
+        .await?;
     }
 
     // versions.toml after on-disk swap, before systemctl restart, so a
@@ -174,7 +184,10 @@ pub async fn install_update(
                 Ok(out) => log.push_str(&format!("ok\n{out}")),
                 Err(e) => {
                     log.push_str(&format!("FAILED: {e}\n"));
-                    bail!("install of {} succeeded but {unit} failed to restart: {e}\n--- log ---\n{log}", component.as_str());
+                    bail!(
+                        "install of {} succeeded but {unit} failed to restart: {e}\n--- log ---\n{log}",
+                        component.as_str()
+                    );
                 }
             }
         }
@@ -407,9 +420,8 @@ fn install_webadmin(work_dir: &Path, install_dir: &Path, log: &mut String) -> Re
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     if install_dir.exists() {
-        std::fs::rename(install_dir, &bak).with_context(|| {
-            format!("renaming {} → {}", install_dir.display(), bak.display())
-        })?;
+        std::fs::rename(install_dir, &bak)
+            .with_context(|| format!("renaming {} → {}", install_dir.display(), bak.display()))?;
     }
     if let Err(e) = std::fs::rename(work_dir, install_dir) {
         // Restore on failure.
@@ -521,7 +533,11 @@ mod tests {
         let p = work.join(name);
         let mut f = File::create(&p).unwrap();
         writeln!(f, "#!/bin/sh").unwrap();
-        writeln!(f, "if [ \"$1\" = \"--version\" ]; then echo \"{name} {version}\"; exit 0; fi").unwrap();
+        writeln!(
+            f,
+            "if [ \"$1\" = \"--version\" ]; then echo \"{name} {version}\"; exit 0; fi"
+        )
+        .unwrap();
         writeln!(f, "echo \"<unused>\"").unwrap();
         drop(f);
         use std::os::unix::fs::PermissionsExt;
@@ -583,6 +599,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(install_env)]
     async fn installs_stats_binary_end_to_end() {
         let (_td, staging) = setup_env();
         // Build a fake tarball matching the bananas-stats layout.
@@ -592,14 +609,9 @@ mod tests {
         pack_tarball(src.path(), &tarball);
         let sha = sha256_of(&tarball);
 
-        let log = install_update(
-            Component::Stats,
-            tarball.to_str().unwrap(),
-            "1.2.3",
-            &sha,
-        )
-        .await
-        .unwrap();
+        let log = install_update(Component::Stats, tarball.to_str().unwrap(), "1.2.3", &sha)
+            .await
+            .unwrap();
         assert!(log.contains("bananas-stats --version → 1.2.3"));
         assert!(log.contains("stats installed at 1.2.3"));
 
@@ -614,6 +626,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(install_env)]
     async fn refuses_sha_mismatch() {
         let (_td, staging) = setup_env();
         let src = tempfile::tempdir().unwrap();
@@ -633,6 +646,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(install_env)]
     async fn refuses_version_mismatch() {
         let (_td, staging) = setup_env();
         let src = tempfile::tempdir().unwrap();
@@ -641,19 +655,15 @@ mod tests {
         let tarball = staging.join("bananas-stats-armv7.tar.gz");
         pack_tarball(src.path(), &tarball);
         let sha = sha256_of(&tarball);
-        let result = install_update(
-            Component::Stats,
-            tarball.to_str().unwrap(),
-            "9.9.9",
-            &sha,
-        )
-        .await;
+        let result =
+            install_update(Component::Stats, tarball.to_str().unwrap(), "9.9.9", &sha).await;
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("reports version"), "got: {err}");
     }
 
     #[tokio::test]
+    #[serial_test::serial(install_env)]
     async fn rejects_path_outside_staging() {
         let (_td, _staging) = setup_env();
         // Put the tarball somewhere else; make sure we can't escape.
@@ -663,29 +673,25 @@ mod tests {
         let tarball = elsewhere.path().join("bananas-stats-armv7.tar.gz");
         pack_tarball(src.path(), &tarball);
         let sha = sha256_of(&tarball);
-        let result = install_update(
-            Component::Stats,
-            tarball.to_str().unwrap(),
-            "1.2.3",
-            &sha,
-        )
-        .await;
+        let result =
+            install_update(Component::Stats, tarball.to_str().unwrap(), "1.2.3", &sha).await;
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("outside"), "got: {err}");
     }
 
     #[tokio::test]
+    #[serial_test::serial(install_env)]
     async fn rejects_unsupported_component() {
         let (_td, _staging) = setup_env();
-        let result =
-            install_update(Component::Server, "/tmp/whatever.tar.gz", "1.2.3", "00").await;
+        let result = install_update(Component::Server, "/tmp/whatever.tar.gz", "1.2.3", "00").await;
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("not yet supported"), "got: {err}");
     }
 
     #[tokio::test]
+    #[serial_test::serial(install_env)]
     async fn installs_webadmin_directory() {
         let (_td, staging) = setup_env();
         // Webadmin tarball: index.html + assets/foo.js at the root.
@@ -705,7 +711,9 @@ mod tests {
         .await
         .unwrap();
         assert!(log.contains("webadmin installed at 1.2.3"));
-        let webadmin_dir: PathBuf = std::env::var("BANANAS_INSTALL_WEBADMIN_DIR").unwrap().into();
+        let webadmin_dir: PathBuf = std::env::var("BANANAS_INSTALL_WEBADMIN_DIR")
+            .unwrap()
+            .into();
         assert!(webadmin_dir.join("index.html").is_file());
         assert!(webadmin_dir.join("assets/foo.js").is_file());
     }

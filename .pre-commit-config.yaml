@@ -47,7 +47,7 @@ repos:
         language: system
         # Match the CI invocation in .github/workflows/ci.yml so pre-push
         # and CI agree on what a clean build looks like.
-        entry: bash -c 'cargo clippy --workspace --exclude bananas-ui --exclude bananas-dashboard'
+        entry: bash -c 'cargo clippy --workspace --exclude bananas-webadmin --exclude bananas-dashboard'
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust]
@@ -55,7 +55,7 @@ repos:
       - id: cargo-test
         name: cargo test (host crates, no-fail-fast)
         language: system
-        entry: bash -c 'cargo test --workspace --exclude bananas-ui --exclude bananas-dashboard --no-fail-fast'
+        entry: bash -c 'cargo test --workspace --exclude bananas-webadmin --exclude bananas-dashboard --no-fail-fast'
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust]
@@ -63,7 +63,7 @@ repos:
       - id: cargo-check-wasm
         name: cargo check (wasm SPA)
         language: system
-        entry: bash -c 'cargo check -p bananas-ui --target wasm32-unknown-unknown'
+        entry: bash -c 'cargo check -p bananas-webadmin --target wasm32-unknown-unknown'
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust]

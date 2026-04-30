@@ -20,7 +20,7 @@ use bananas_helper::Command as HelperCommand;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     Terminal,
@@ -170,10 +170,8 @@ async fn handle_tab_key(socket: &Path, state: &mut AppState, key: event::KeyEven
                         state.flash = Some((true, format!("Timezone set to {}.", state.timezone)));
                     }
                     Ok(r) => {
-                        state.flash = Some((
-                            false,
-                            r.error.unwrap_or_else(|| "helper refused".into()),
-                        ));
+                        state.flash =
+                            Some((false, r.error.unwrap_or_else(|| "helper refused".into())));
                     }
                     Err(e) => state.flash = Some((false, format!("helper unreachable: {e}"))),
                 }
@@ -200,10 +198,8 @@ async fn handle_tab_key(socket: &Path, state: &mut AppState, key: event::KeyEven
                             Some((true, "Reboot triggered. Connection will drop.".into()));
                     }
                     Ok(r) => {
-                        state.flash = Some((
-                            false,
-                            r.error.unwrap_or_else(|| "helper refused".into()),
-                        ));
+                        state.flash =
+                            Some((false, r.error.unwrap_or_else(|| "helper refused".into())));
                     }
                     Err(e) => state.flash = Some((false, format!("helper unreachable: {e}"))),
                 }
@@ -229,7 +225,11 @@ fn render(f: &mut ratatui::Frame, state: &AppState) {
         .collect();
     let tabs = Tabs::new(titles)
         .select(state.tab.unwrap_or(Tab::Status).index())
-        .block(Block::default().title("bananas-config").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("bananas-config")
+                .borders(Borders::ALL),
+        )
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -259,8 +259,14 @@ fn render(f: &mut ratatui::Frame, state: &AppState) {
 
 fn render_status(f: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let header = Line::from(vec![
-        Span::styled("Component        ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled("Installed     ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Component        ",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Installed     ",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Service", Style::default().add_modifier(Modifier::BOLD)),
     ]);
     let mut items: Vec<ListItem> = vec![ListItem::new(header)];
@@ -293,8 +299,11 @@ fn render_status(f: &mut ratatui::Frame, area: Rect, state: &AppState) {
         ])));
     }
 
-    let list = List::new(items)
-        .block(Block::default().title(" Status (press r to refresh) ").borders(Borders::ALL));
+    let list = List::new(items).block(
+        Block::default()
+            .title(" Status (press r to refresh) ")
+            .borders(Borders::ALL),
+    );
     f.render_widget(list, area);
 }
 
