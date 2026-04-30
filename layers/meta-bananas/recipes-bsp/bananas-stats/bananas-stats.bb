@@ -1,14 +1,14 @@
 SUMMARY = "BanaNAS stats sampler daemon"
 DESCRIPTION = "Reads /proc + /sys + statvfs once per second and persists \
 CPU/mem/network/disk-I/O/partition rows into /var/lib/bananas/stats.db \
-(SQLite WAL). Both bananas-server (web admin /api/stats/*) and \
+(SQLite WAL). Both bananas-webadmin (web admin /api/stats/*) and \
 bananas-dashboard (LCD UI) consume this DB read-only."
 
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 # PV sourced from <repo>/assets/version.txt — see comment in
-# bananas-server.bb for the rationale.
+# bananas-webadmin.bb for the rationale.
 require recipes-bsp/bananas-version.inc
 
 inherit systemd
@@ -28,7 +28,7 @@ INSANE_SKIP:${PN} += "arch already-stripped"
 SYSTEMD_SERVICE:${PN} = "bananas-stats.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
-# bananas user/group already exist via the bananas-server recipe's
+# bananas user/group already exist via the bananas-webadmin recipe's
 # USERADD step; we don't redeclare them here.
 
 do_compile[noexec] = "1"
@@ -52,4 +52,4 @@ FILES:${PN} += "${bindir}/bananas-stats \
 # Mark the config as a CONFFILE so package-management upgrades don't
 # silently overwrite operator edits.
 CONFFILES:${PN} += "${sysconfdir}/bananas/stats.toml"
-RDEPENDS:${PN} += "bananas-server"
+RDEPENDS:${PN} += "bananas-webadmin"

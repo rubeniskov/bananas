@@ -544,6 +544,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bananas-router"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "bananas-stats"
 version = "1.4.0"
 dependencies = [

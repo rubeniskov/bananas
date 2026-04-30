@@ -1,6 +1,6 @@
 # Override meta-poky's /etc/motd ("WARNING: Poky is a reference Yocto Project
 # distribution…") with an empty file. The BanaNAS welcome banner lives in
-# /etc/profile.d/bananas-motd.sh (installed by bananas-server.bb), so the
+# /etc/profile.d/bananas-motd.sh (installed by bananas-webadmin.bb), so the
 # file-level motd does not need to print anything itself.
 #
 # FILESEXTRAPATHS:prepend wins the lookup race against

@@ -178,7 +178,7 @@ depends-on = ["setup-dx"]
 # rusqlite-bundled (pulled in transitively via bananas-stats). Without
 # this, libsqlite3-sys's build script dies with `unknown CPU: 'haswell'`.
 [tasks.build-webadmin-arm]
-cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-webadmin -p bananas-engine --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin target/armv7-unknown-linux-gnueabihf/release/bananas-engine serve/bin/'"
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-webadmin -p bananas-engine -p bananas-router --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin target/armv7-unknown-linux-gnueabihf/release/bananas-engine target/armv7-unknown-linux-gnueabihf/release/bananas-router serve/bin/'"
 
 # `build-stats-arm`: cross-compile bananas-stats (the sampler daemon)
 # for armv7 via cargo-zigbuild. Pure-Rust deps + bundled rusqlite, so no

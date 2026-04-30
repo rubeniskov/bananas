@@ -8,7 +8,7 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 # PV sourced from <repo>/assets/version.txt — see comment in
-# bananas-server.bb for the rationale.
+# bananas-webadmin.bb for the rationale.
 require recipes-bsp/bananas-version.inc
 
 # No systemd unit — bananas-config is invoked interactively (or scripted)
@@ -25,7 +25,7 @@ COMPATIBLE_MACHINE = "(bananapro)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 
-# bananas user/group already exist via the bananas-server recipe's
+# bananas user/group already exist via the bananas-webadmin recipe's
 # USERADD step. The TUI requires `bananas` group membership for the
 # helper socket; root works too.
 

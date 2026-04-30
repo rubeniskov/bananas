@@ -1,0 +1,24 @@
+[Unit]
+Description=BanaNAS path-based reverse-proxy gateway (port 8080)
+# Has to come up after network so the public TCP listener binds. Doesn't
+# need any specific extension to be up — startup logs missing manifests
+# but keeps serving (with 404s) so a bad manifest never bricks :8080.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bananas
+Group=bananas
+ExecStart=/usr/bin/bananas-router
+Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
+Environment=BANANAS_EXTENSIONS_DIR=/etc/bananas/extensions.d
+# Reload re-reads the manifest dir so freshly opkg-installed
+# extensions (which drop a new .toml under extensions.d/) become
+# reachable without a hard restart.
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

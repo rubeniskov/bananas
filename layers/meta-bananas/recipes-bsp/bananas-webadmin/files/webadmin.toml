@@ -1,0 +1,7 @@
+# BanaNAS web admin — core extension manifest read by bananas-router.
+# Declares the catch-all prefix "/" so any path not claimed by another
+# extension (e.g. bananas-cloud's /api/cloud) lands here.
+id = "webadmin"
+label = "BanaNAS"
+socket = "/run/bananas/webadmin.sock"
+prefixes = ["/"]

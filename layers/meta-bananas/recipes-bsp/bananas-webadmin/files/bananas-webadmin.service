@@ -1,7 +1,9 @@
 [Unit]
-Description=BanaNAS web admin (NFS exports UI on :8080)
-After=network-online.target bananas-engine.service
-Wants=network-online.target
+Description=BanaNAS core web admin daemon (Unix socket — proxied by bananas-router)
+# No network dep: this daemon listens on /run/bananas/webadmin.sock; the
+# public TCP port is owned by bananas-router, which has its own
+# After=network-online.target.
+After=local-fs.target bananas-engine.service
 Requires=bananas-engine.service
 
 [Service]
@@ -13,8 +15,16 @@ ExecStart=/usr/bin/bananas-webadmin
 # mode 0700. Cheapest place to stash the persistent HMAC session key.
 StateDirectory=bananas
 StateDirectoryMode=0700
+# Shared with bananas-engine + bananas-router. Preserve across stops so
+# /run/bananas/engine.sock (owned by bananas-engine) doesn't disappear
+# when *this* unit restarts.
+RuntimeDirectory=bananas
+RuntimeDirectoryPreserve=yes
 Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
-Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
+# Listen on a Unix socket — the public TCP port is owned by bananas-router,
+# which reverse-proxies path prefixes to the relevant extension daemon
+# (this one for "/").
+Environment=BANANAS_WEBADMIN_SOCKET=/run/bananas/webadmin.sock
 Environment=BANANAS_WEBADMIN_DIR=/usr/share/bananas/webadmin
 Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
 Restart=on-failure

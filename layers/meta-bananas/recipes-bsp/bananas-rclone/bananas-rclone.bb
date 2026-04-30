@@ -1,6 +1,6 @@
 SUMMARY = "rclone (vendored prebuilt) for cloud sync"
 DESCRIPTION = "Ships the upstream rclone armv7 binary at /usr/bin/rclone. \
-Used by bananas-server's /api/cloud/syncs/<idx>/run handler to push, \
+Used by bananas-webadmin's /api/cloud/syncs/<idx>/run handler to push, \
 pull, or bisync directories against configured cloud accounts. The \
 binary is statically linked Go so no system runtime deps are required."
 
@@ -8,7 +8,7 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 # PV sourced from <repo>/assets/version.txt — see comment in
-# bananas-server.bb. The version reflects the BanaNAS release that
+# bananas-webadmin.bb. The version reflects the BanaNAS release that
 # carries this rclone vendored copy, NOT rclone's upstream version
 # (which is pinned by `pixi run setup-rclone-arm`). Operators may
 # see no-op upgrades on releases that don't bump rclone — accepted

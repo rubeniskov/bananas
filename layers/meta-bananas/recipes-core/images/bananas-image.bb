@@ -177,7 +177,7 @@ IMAGE_INSTALL += " \
     avahi-utils \
     usbutils \
     i2c-tools \
-    bananas-server \
+    bananas-router \
     bananas-webadmin \
     bananas-stats \
     bananas-config \

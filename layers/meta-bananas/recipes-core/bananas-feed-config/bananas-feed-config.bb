@@ -7,7 +7,7 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 # PV sourced from <repo>/assets/version.txt — see comment in
-# bananas-server.bb. The feed config doesn't change between releases
+# bananas-webadmin.bb. The feed config doesn't change between releases
 # (the URLs are stable), but tracking the workspace version keeps
 # opkg's metadata honest on inspection.
 require recipes-bsp/bananas-version.inc

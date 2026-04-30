@@ -278,12 +278,37 @@ async fn main() -> Result<()> {
         }))
         .layer(TraceLayer::new_for_http());
 
-    let addr: SocketAddr = std::env::var("BANANAS_LISTEN_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:8080".into())
-        .parse()?;
-    tracing::info!(%addr, ui=%ui_dir.display(), "listening");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // Listen on a Unix socket if BANANAS_WEBADMIN_SOCKET is set; otherwise
+    // fall back to a TCP listener. The plugin-daemon model expects this
+    // process to be reached only via bananas-router (over Unix), so the
+    // Unix path is the production wiring; TCP stays as an escape hatch
+    // for local dev or rolling out the router separately.
+    if let Some(sock) = std::env::var_os("BANANAS_WEBADMIN_SOCKET") {
+        let path = PathBuf::from(sock);
+        if path.exists() {
+            // systemd shouldn't leave a stale socket behind, but stripped
+            // crashes can. Removing-then-binding keeps the socket honest.
+            std::fs::remove_file(&path).ok();
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let listener = tokio::net::UnixListener::bind(&path)?;
+        // 0660 with the socket owned by the bananas user → router (also
+        // running as bananas) can connect; root can too. No outside
+        // process has access via filesystem permissions.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
+        tracing::info!(socket = %path.display(), ui = %ui_dir.display(), "listening (unix)");
+        axum::serve(listener, app).await?;
+    } else {
+        let addr: SocketAddr = std::env::var("BANANAS_LISTEN_ADDR")
+            .unwrap_or_else(|_| "0.0.0.0:8080".into())
+            .parse()?;
+        tracing::info!(%addr, ui=%ui_dir.display(), "listening (tcp)");
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
+    }
     Ok(())
 }
 

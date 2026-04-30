@@ -1,5 +1,5 @@
 [Unit]
-Description=BanaNAS root engine (privileged ops for bananas-server: exports, fstab, users, services, opkg, …)
+Description=BanaNAS root engine (privileged ops for bananas-webadmin: exports, fstab, users, services, opkg, …)
 # Engine is a Unix-socket daemon — talks only to the local server crate
 # over /run/bananas/engine.sock. No network, no DNS. Don't wait for
 # network-online.target; that adds 5–10 s of boot for nothing.

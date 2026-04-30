@@ -28,7 +28,8 @@ SRC_URI = "file://bananas-engine.service \
            file://bananas-webadmin.service \
            file://bananas-webadmin \
            file://bananas-engine \
-           file://bananas-motd.sh"
+           file://bananas-motd.sh \
+           file://webadmin.toml"
 
 S = "${WORKDIR}"
 
@@ -50,7 +51,7 @@ SYSTEMD_AUTO_ENABLE = "enable"
 # also installs the SPA bundle. Splitting the SPA into its own package
 # means SPA-only updates skip the daemon restart (ServeDir re-stats
 # files per request).
-RDEPENDS:${PN} += "bananas-webadmin-ui"
+RDEPENDS:${PN} += "bananas-webadmin-ui bananas-router"
 
 USERADD_PACKAGES = "${PN}"
 # `bananas`: the unprivileged service user.
@@ -78,6 +79,12 @@ do_install() {
     install -d ${D}${sysconfdir}/profile.d
     install -m 0644 ${WORKDIR}/bananas-motd.sh ${D}${sysconfdir}/profile.d/bananas-motd.sh
 
+    # Extension manifest — declares the catch-all "/" prefix so
+    # bananas-router routes everything not claimed by another extension
+    # to this daemon over /run/bananas/webadmin.sock.
+    install -d ${D}${sysconfdir}/bananas/extensions.d
+    install -m 0644 ${WORKDIR}/webadmin.toml ${D}${sysconfdir}/bananas/extensions.d/webadmin.toml
+
     # Persistent state dir — bananas-webadmin.service has StateDirectory=bananas,
     # so systemd creates /var/lib/bananas (mode 0700, owned by the bananas
     # user) on the first start. We don't ship the dir in the package itself.
@@ -87,4 +94,5 @@ FILES:${PN} += "${bindir}/bananas-webadmin \
                 ${bindir}/bananas-engine \
                 ${systemd_system_unitdir}/bananas-engine.service \
                 ${systemd_system_unitdir}/bananas-webadmin.service \
-                ${sysconfdir}/profile.d/bananas-motd.sh"
+                ${sysconfdir}/profile.d/bananas-motd.sh \
+                ${sysconfdir}/bananas/extensions.d/webadmin.toml"
