@@ -855,6 +855,51 @@ code {
   background: color-mix(in srgb, var(--warn) 14%, var(--bg));
   color: var(--warn);
 }
+/* Cloud-run status badge variants. `running` is yellow (work in
+ * flight), `ok` is green (success), `err` is red (failed). */
+.badge.running {
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg));
+  color: var(--warn);
+}
+.badge.ok {
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg));
+  color: var(--ok);
+}
+.badge.err {
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg));
+  color: var(--danger);
+}
+
+/* Inline button that looks like a link — used for the run-id
+ * cell in the cloud Recent runs table that opens the per-run
+ * log modal. */
+button.linklike {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font: inherit;
+}
+button.linklike:hover { text-decoration: underline; }
+
+/* Run log modal — full rclone stdout/stderr in a scrolling pre.
+ * Sized so the modal stays usable on narrow viewports. */
+.modal.run-log-modal { max-width: 900px; }
+pre.run-log {
+  font: 12px/1.4 ui-monospace, monospace;
+  background: var(--bg-soft);
+  color: var(--text);
+  padding: .8em 1em;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .badge.sys {
   background: var(--bg-soft);
   color: var(--text-soft);

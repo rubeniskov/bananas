@@ -43,6 +43,7 @@ pub fn CloudPage() -> Element {
     let mut account_form: Signal<Option<AccountFormMode>> = use_signal(|| None);
     let mut sync_form: Signal<Option<SyncFormMode>> = use_signal(|| None);
     let mut pending_delete: Signal<Option<PendingDelete>> = use_signal(|| None);
+    let mut log_modal: Signal<Option<api::CloudJob>> = use_signal(|| None);
 
     use_effect(move || {
         let _ = tick();
@@ -310,7 +311,8 @@ pub fn CloudPage() -> Element {
                                         Err(e) => banner.set(Some((BannerKind::Err, e.to_string()))),
                                     }
                                 });
-                            }
+                            },
+                            on_show_log: move |job: api::CloudJob| log_modal.set(Some(job)),
                         }
                     }
                 }
@@ -344,6 +346,13 @@ pub fn CloudPage() -> Element {
                 },
                 on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
                 on_unauthorized: move |_| auth_ctx.signal_unauthorized()
+            }
+        }
+
+        if let Some(job) = log_modal() {
+            RunLogModal {
+                job: job,
+                on_close: move |_| log_modal.set(None),
             }
         }
 
@@ -526,6 +535,7 @@ fn SyncRow(props: SyncRowProps) -> Element {
 struct RunRowProps {
     job: api::CloudJob,
     on_cancel: EventHandler<usize>,
+    on_show_log: EventHandler<api::CloudJob>,
 }
 
 #[component]
@@ -545,9 +555,18 @@ fn RunRow(props: RunRowProps) -> Element {
     let is_running = j.status == api::CloudJobStatus::Running;
     let sync_idx = j.sync_idx;
     let progress = j.progress;
+    let job_for_log = j.clone();
     rsx! {
         tr {
-            td { code { "#{j.id}" } }
+            td {
+                button {
+                    class: "linklike",
+                    r#type: "button",
+                    "data-tip": "Show the rclone output captured for this run.",
+                    onclick: move |_| props.on_show_log.call(job_for_log.clone()),
+                    code { "#{j.id}" }
+                }
+            }
             td { span { class: "{status_class}", "{j.status.label()}" } }
             td { code { "{started}" } }
             // Finished cell doubles as the live-progress slot while the
@@ -575,6 +594,51 @@ fn RunRow(props: RunRowProps) -> Element {
                             onclick: move |_| props.on_cancel.call(sync_idx),
                             Icon { name: "x" }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Run-log modal
+
+#[derive(Props, Clone, PartialEq)]
+struct RunLogModalProps {
+    job: api::CloudJob,
+    on_close: EventHandler<()>,
+}
+
+#[component]
+fn RunLogModal(props: RunLogModalProps) -> Element {
+    let j = &props.job;
+    let title = format!("Run #{} — {}", j.id, j.status.label());
+    let body = if j.output.trim().is_empty() {
+        "(no output captured for this run)".to_string()
+    } else {
+        j.output.clone()
+    };
+    rsx! {
+        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
+            div {
+                class: "modal form-modal run-log-modal",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "modal-header",
+                    h3 { "{title}" }
+                    button {
+                        class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        Icon { name: "x" }
+                    }
+                }
+                div { class: "modal-body form-modal-body",
+                    pre { class: "run-log", "{body}" }
+                }
+                div { class: "modal-footer",
+                    button {
+                        class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        "Close"
                     }
                 }
             }
