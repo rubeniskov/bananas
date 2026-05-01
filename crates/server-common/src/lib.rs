@@ -13,6 +13,8 @@
 //! them — until then, code stays in its origin daemon to keep the
 //! shared surface narrow.
 
+pub mod manifest;
 pub mod session;
 
+pub use manifest::{Manifest, load_all, match_prefix};
 pub use session::{COOKIE_NAME, Session, SessionKey, extract_cookie};

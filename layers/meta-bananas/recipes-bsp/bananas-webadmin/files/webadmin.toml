@@ -1,7 +1,12 @@
-# BanaNAS web admin — core extension manifest read by bananas-router.
-# Declares the catch-all prefix "/" so any path not claimed by another
-# extension (e.g. bananas-cloud's /api/cloud) lands here.
+# bananas-webadmin self-loop manifest — read by bananas-router so
+# webadmin's own /api endpoints (login, me, users, exports, …) can
+# be reached through the same `webadmin TCP → router → webadmin
+# Unix sock` path that plugin /api/* requests follow. The router
+# uses longest-prefix-match on api_prefix; cloud's "/api/cloud"
+# (10 chars) beats webadmin's "/api" (4 chars) for cloud paths,
+# so this catch-all only handles the leftovers (i.e. webadmin's
+# actual API surface).
 id = "webadmin"
 label = "BanaNAS"
 socket = "/run/bananas/webadmin.sock"
-prefixes = ["/"]
+api_prefix = "/api"

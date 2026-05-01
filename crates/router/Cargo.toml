@@ -9,17 +9,13 @@ license.workspace = true
 [dependencies]
 tokio.workspace = true
 axum.workspace = true
-serde.workspace = true
-toml.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+bananas-server-common.workspace = true
 # Direct hyper for client-side connections to extension daemons. axum
 # already pulls these transitively for the server side; declaring them
 # here keeps the API stable + lets us use http1::handshake directly.
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
-
-[dev-dependencies]
-tempfile = "3"

@@ -55,6 +55,11 @@ bananas-server-common.workspace = true
 futures-util.workspace = true
 async-stream.workspace = true
 include_dir = "0.7"
+# Direct hyper for the Unix-socket sub-proxy in src/proxy.rs (forwards
+# /api/* to bananas-router and /assets/<id>/* to plugin daemons).
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 
 # SPA-only — pulled in only when target = wasm32-unknown-unknown.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

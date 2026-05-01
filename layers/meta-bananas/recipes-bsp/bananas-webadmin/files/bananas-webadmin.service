@@ -1,9 +1,11 @@
 [Unit]
-Description=BanaNAS core web admin daemon (Unix socket — proxied by bananas-router)
-# No network dep: this daemon listens on /run/bananas/webadmin.sock; the
-# public TCP port is owned by bananas-router, which has its own
-# After=network-online.target.
-After=local-fs.target bananas-engine.service
+Description=BanaNAS web admin (public TCP face + internal API daemon)
+# Needs network up for the TCP listener, and bananas-engine for the
+# privileged-op socket. Plugin daemons (cloud, future) are reached
+# via bananas-router's Unix socket — no ordering dep here, since a
+# missing plugin just produces 404s on the asset proxy.
+After=network-online.target local-fs.target bananas-engine.service
+Wants=network-online.target
 Requires=bananas-engine.service
 
 [Service]
@@ -21,11 +23,9 @@ StateDirectoryMode=0700
 RuntimeDirectory=bananas
 RuntimeDirectoryPreserve=yes
 Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
-# Listen on a Unix socket — the public TCP port is owned by bananas-router,
-# which reverse-proxies path prefixes to the relevant extension daemon
-# (this one for "/").
+Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
 Environment=BANANAS_WEBADMIN_SOCKET=/run/bananas/webadmin.sock
-Environment=BANANAS_WEBADMIN_DIR=/usr/share/bananas/webadmin
+Environment=BANANAS_ROUTER_SOCKET=/run/bananas/router.sock
 Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
 Restart=on-failure
 RestartSec=2

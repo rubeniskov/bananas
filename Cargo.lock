@@ -580,13 +580,11 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-server-common",
  "http-body-util",
  "hyper",
  "hyper-util",
- "serde",
- "tempfile",
  "tokio",
- "toml 1.1.2+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
 ]
@@ -599,7 +597,10 @@ dependencies = [
  "base64",
  "hmac",
  "rand 0.9.4",
+ "serde",
  "sha2",
+ "tempfile",
+ "toml 1.1.2+spec-1.1.0",
  "tracing",
 ]
 
@@ -641,6 +642,9 @@ dependencies = [
  "gloo-net",
  "gloo-timers",
  "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "include_dir",
  "js-sys",
  "libc",

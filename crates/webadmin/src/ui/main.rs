@@ -189,9 +189,9 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     // Installed extensions (read once on mount). The Cloud / future
     // plugin tabs render only when the matching manifest is present in
     // /etc/bananas/extensions.d/, so a lean image without bananas-cloud
-    // installed shows no Cloud tab at all. We keep the full Extension
-    // records (not just ids) so the MFE loader can read each plugin's
-    // `spa_path` to discover its bundle.
+    // installed shows no Cloud tab at all. The MFE loader queries each
+    // plugin's `/api/<id>/__mfe_entry` for its content-hashed entry
+    // script, so we only need id + label here.
     let mut extensions: Signal<Vec<api::Extension>> = use_signal(Vec::new);
     {
         use_effect(move || {
@@ -212,7 +212,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
 
     // Trigger an MFE load on first activation of a plugin tab. Memoized
     // via `is_loaded`/`mfe_state` so subsequent activations are a no-op.
-    let mut activate_plugin = move |id: String, spa_path: String| {
+    let mut activate_plugin = move |id: String| {
         if mfe::is_loaded(&id) {
             mfe_state.write().insert(id, Ok(()));
             return;
@@ -221,7 +221,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
             return;
         }
         spawn(async move {
-            let result = mfe::load(&id, &spa_path).await;
+            let result = mfe::load(&id).await;
             mfe_state.write().insert(id, result);
         });
     };
@@ -242,8 +242,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
             .find(|e| e.id.as_str() == "cloud")
             .cloned();
         if let Some(ext) = cloud_ext {
-            let spa = ext.spa_path.clone().unwrap_or_else(|| "/cloud".to_string());
-            activate_plugin(ext.id.clone(), spa);
+            activate_plugin(ext.id.clone());
         }
     });
 
@@ -394,11 +393,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                                 icon: "cloud",
                                 active: page() == Page::Cloud,
                                 on_click: move |_| {
-                                    let spa = ext
-                                        .spa_path
-                                        .clone()
-                                        .unwrap_or_else(|| "/cloud".to_string());
-                                    activate_plugin(ext.id.clone(), spa);
+                                    activate_plugin(ext.id.clone());
                                     page.set(Page::Cloud);
                                 },
                             }
@@ -612,12 +607,8 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                                                         .find(|e| e.id.as_str() == "cloud")
                                                         .cloned()
                                                     {
-                                                        let spa = ext
-                                                            .spa_path
-                                                            .clone()
-                                                            .unwrap_or_else(|| "/cloud".to_string());
                                                         mfe_state.write().remove("cloud");
-                                                        activate_plugin(ext.id.clone(), spa);
+                                                        activate_plugin(ext.id.clone());
                                                     }
                                                 },
                                                 "Retry"

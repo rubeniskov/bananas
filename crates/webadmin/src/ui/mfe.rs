@@ -1,33 +1,35 @@
 //! Microfrontend dynamic-loader for plugin SPAs.
 //!
-//! Each plugin (bananas-cloud today, others later) ships its own wasm
-//! SPA bundle, served by its daemon at `<spa_path>/`. The webadmin
-//! shell composes them into a single page at runtime instead of full-
-//! page navigating to `/cloud/`. The pattern is the Rust+Dioxus
-//! version of single-spa / Module Federation: the host discovers
-//! plugins, loads each plugin's bundle on demand, and the plugin's
-//! Dioxus runtime mounts into a host-owned div.
+//! The host shell composes plugin SPAs into a single page at
+//! runtime instead of full-page navigating to a per-plugin URL.
+//! Pattern: the Rust+Dioxus version of single-spa / Module
+//! Federation — host discovers plugins, fetches each one's
+//! content-hashed entry script via JSON handshake, injects the
+//! `<script type="module">` tag, and the plugin's Dioxus runtime
+//! mounts into a host-owned div.
 //!
 //! Sequence (first activation of a plugin tab):
 //! 1. Shell renders an empty `<div id="<id>-mfe-root">`.
-//! 2. Shell fetches `<spa_path>/index.html` to find the bundle's JS
-//!    shim URL — dx-cli emits a content-hashed filename so we can't
-//!    hardcode it.
-//! 3. Shell sets `window.__bananas_mfe_root = "<id>-mfe-root"` so the
-//!    plugin's `main()` knows where to mount (defaults to `"main"`
-//!    for standalone access at `/cloud/`).
+//! 2. Shell fetches `/api/<id>/__mfe_entry` — auth-gated JSON
+//!    handshake on the plugin daemon. The response is `{"entry":
+//!    "/assets/<id>/<hash>.js"}`. The URL is in webadmin's public
+//!    namespace; the plugin daemon's Dioxus.toml `base_path`
+//!    pre-baked it into the embedded index.html.
+//! 3. Shell sets `window.__bananas_mfe_root = "<id>-mfe-root"` so
+//!    the plugin's `main()` knows where to mount (defaults to
+//!    `"main"` for standalone dev access).
 //! 4. Shell appends `<script type="module" src="...">` to `<head>`.
 //!    The shim resolves its companion `.wasm` via `import.meta.url`
-//!    (cloud-ui's `Dioxus.toml` sets `base_path = "/cloud"` so the
-//!    relative URL lands on the right path).
-//! 5. The plugin's wasm runs, `main()` mounts its Dioxus app into
-//!    the shell-provided div. Two Dioxus runtimes coexist in one
+//!    relative to the script URL.
+//! 5. Plugin wasm runs, `main()` mounts its Dioxus app into the
+//!    shell-provided div. Two Dioxus runtimes coexist in one
 //!    document, sharing cookie / theme attribute / location.
 //!
-//! Subsequent activations: the script tag is already in the document
-//! (`is_loaded` returns true) — we skip discovery entirely and the
-//! shell just toggles the mount div's `display:none`.
+//! Subsequent activations: the `<script>` tag is already in the
+//! document (`is_loaded` returns true) — we skip the handshake
+//! and the shell just toggles the mount div's `display:none`.
 
+use serde::Deserialize;
 use wasm_bindgen::JsValue;
 
 /// DOM id of the mount div the shell renders for `plugin_id`. The
@@ -51,11 +53,17 @@ pub fn is_loaded(plugin_id: &str) -> bool {
     matches!(document.query_selector(&selector), Ok(Some(_)))
 }
 
-/// Fetch `<spa_path>/index.html`, extract the first
-/// `<script type="module" ...>` tag's `src` attribute, and resolve it
-/// to an absolute URL the shell can inject.
-pub async fn discover_entry(spa_path: &str) -> Result<String, String> {
-    let url = format!("{}/index.html", spa_path.trim_end_matches('/'));
+#[derive(Deserialize)]
+struct MfeEntry {
+    entry: String,
+}
+
+/// Fetch `/api/<plugin_id>/__mfe_entry`, return the `entry` field.
+/// The response shape is `{"entry": "/assets/<id>/<hash>.js"}` and
+/// the URL is in webadmin's public namespace, ready to drop into a
+/// `<script src>` attribute.
+pub async fn discover_entry(plugin_id: &str) -> Result<String, String> {
+    let url = format!("/api/{plugin_id}/__mfe_entry");
     let resp = gloo_net::http::Request::get(&url)
         .send()
         .await
@@ -63,50 +71,14 @@ pub async fn discover_entry(spa_path: &str) -> Result<String, String> {
     if !resp.ok() {
         return Err(format!("{url} returned HTTP {}", resp.status()));
     }
-    let html = resp.text().await.map_err(|e| e.to_string())?;
-    extract_module_src(&html, spa_path)
-        .ok_or_else(|| format!("no <script type=\"module\"> found in {url}"))
-}
-
-/// Scan `html` for the first `<script ... type="module" ... src="...">`
-/// tag and return its src resolved against `spa_path` (so a relative
-/// `./assets/foo.js` becomes `/cloud/assets/foo.js`).
-///
-/// Plain string scanning rather than a real HTML parser — dx-cli's
-/// emitted index.html is small and deterministic. If dx-cli ever
-/// changes the shape this returns None and the loader fails fast with
-/// a recognizable error, rather than silently mis-parsing.
-fn extract_module_src(html: &str, spa_path: &str) -> Option<String> {
-    let mut cursor = 0usize;
-    while cursor < html.len() {
-        let rel = html[cursor..].find("<script")?;
-        let tag_start = cursor + rel;
-        let close = html[tag_start..].find('>')?;
-        let tag = &html[tag_start..tag_start + close];
-        let is_module = tag.contains("type=\"module\"") || tag.contains("type='module'");
-        if is_module {
-            for needle in ["src=\"", "src='"] {
-                if let Some(pos) = tag.find(needle) {
-                    let after = &tag[pos + needle.len()..];
-                    let quote = needle.chars().last().unwrap();
-                    if let Some(end) = after.find(quote) {
-                        return Some(resolve_url(&after[..end], spa_path));
-                    }
-                }
-            }
-        }
-        cursor = tag_start + close + 1;
+    let body: MfeEntry = resp
+        .json()
+        .await
+        .map_err(|e| format!("{url} JSON parse: {e}"))?;
+    if body.entry.is_empty() {
+        return Err(format!("{url} returned empty entry"));
     }
-    None
-}
-
-fn resolve_url(src: &str, spa_path: &str) -> String {
-    if src.starts_with('/') || src.starts_with("http://") || src.starts_with("https://") {
-        src.to_string()
-    } else {
-        let trimmed = src.trim_start_matches("./");
-        format!("{}/{}", spa_path.trim_end_matches('/'), trimmed)
-    }
+    Ok(body.entry)
 }
 
 /// Set the global mount target and append the plugin's JS shim to
@@ -152,73 +124,17 @@ pub fn inject(plugin_id: &str, entry_url: &str) -> Result<(), String> {
 /// One-shot load: discover the entry, inject the script. No-op when
 /// the plugin is already loaded. Caller is responsible for rendering
 /// the mount div (so the plugin's `main()` finds it on boot).
-pub async fn load(plugin_id: &str, spa_path: &str) -> Result<(), String> {
+pub async fn load(plugin_id: &str) -> Result<(), String> {
     if is_loaded(plugin_id) {
         return Ok(());
     }
-    let entry = discover_entry(spa_path).await?;
+    let entry = discover_entry(plugin_id).await?;
     inject(plugin_id, &entry)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn extracts_module_src_double_quoted() {
-        let html = r#"<!doctype html><html><body>
-            <div id="main"></div>
-            <script type="module" src="/cloud/assets/bananas-cloud-ui-deadbeef.js"></script>
-        </body></html>"#;
-        assert_eq!(
-            extract_module_src(html, "/cloud").as_deref(),
-            Some("/cloud/assets/bananas-cloud-ui-deadbeef.js")
-        );
-    }
-
-    #[test]
-    fn extracts_module_src_single_quoted() {
-        let html = "<script type='module' src='./assets/foo.js'></script>";
-        assert_eq!(
-            extract_module_src(html, "/cloud").as_deref(),
-            Some("/cloud/assets/foo.js")
-        );
-    }
-
-    #[test]
-    fn ignores_non_module_scripts() {
-        let html = r#"
-            <script src="/legacy/old.js"></script>
-            <script type="module" src="/cloud/assets/right.js"></script>
-        "#;
-        assert_eq!(
-            extract_module_src(html, "/cloud").as_deref(),
-            Some("/cloud/assets/right.js")
-        );
-    }
-
-    #[test]
-    fn missing_module_returns_none() {
-        let html = "<script src=\"/legacy/old.js\"></script>";
-        assert!(extract_module_src(html, "/cloud").is_none());
-    }
-
-    #[test]
-    fn resolves_relative_against_spa_path() {
-        assert_eq!(
-            resolve_url("assets/foo.js", "/cloud"),
-            "/cloud/assets/foo.js"
-        );
-        assert_eq!(
-            resolve_url("./assets/foo.js", "/cloud/"),
-            "/cloud/assets/foo.js"
-        );
-        assert_eq!(resolve_url("/abs/foo.js", "/cloud"), "/abs/foo.js");
-        assert_eq!(
-            resolve_url("https://cdn/foo.js", "/cloud"),
-            "https://cdn/foo.js"
-        );
-    }
 
     #[test]
     fn mount_id_format() {

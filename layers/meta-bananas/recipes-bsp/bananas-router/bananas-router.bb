@@ -12,7 +12,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 require recipes-bsp/bananas-version.inc
 
-inherit systemd useradd
+inherit systemd
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
 SRC_URI = "file://bananas-router.service \

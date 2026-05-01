@@ -1,21 +1,16 @@
-//! Serve the cloud SPA bundle from bytes embedded into this binary.
+//! Serve the cloud SPA's static assets from bytes embedded into
+//! this binary. **Strict asset lookup only** — `index.html` is
+//! never publicly served. Webadmin owns THE single document root;
+//! this daemon answers only `GET /assets/cloud/<rest>` requests
+//! that webadmin sub-proxies over the Unix socket.
 //!
-//! Replaces the old `tower_http::ServeDir::new(/usr/share/bananas/
-//! cloud-ui).precompressed_br().precompressed_gzip()` setup. The
-//! daemon's `build.rs` writes the dist tree to `$OUT_DIR/ui/` (built
-//! by `dx build` and pre-compressed with brotli + gzip companions);
-//! `include_dir!` snapshots the whole tree into the binary at compile
-//! time. The handler below picks the right variant based on the
-//! incoming `Accept-Encoding` header — same negotiation behaviour
-//! ServeDir provided.
-//!
-//! Two responsibilities:
-//!  - **/cloud/assets/<hash>.<ext>** lookups: exact-path match in the
-//!    embedded tree, with `.br` / `.gz` companion preference. Tagged
-//!    `Cache-Control: public, max-age=31536000, immutable` because
-//!    dx-cli emits content-hashed filenames.
-//!  - **SPA fallback**: any path that doesn't match (e.g. /cloud/, a
-//!    deep-link) returns `index.html`, also accept-encoding-negotiated.
+//! The daemon's `build.rs` writes the dx-emitted dist tree to
+//! `$OUT_DIR/ui/` (with `.br` and `.gz` companions); `include_dir!`
+//! snapshots the tree into the binary at compile time. The serve
+//! handler picks the right encoding variant from `Accept-Encoding`
+//! exactly the way `tower_http::ServeDir.precompressed_*()` would.
+
+use std::sync::LazyLock;
 
 use axum::{
     body::Body,
@@ -30,27 +25,52 @@ use include_dir::{Dir, include_dir};
 /// expands.
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
-/// Cache header for assets — content-hashed filenames are immutable,
-/// so we pin them in the browser cache for a year. index.html itself
-/// uses a short cache so SPA upgrades roll out promptly.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
-const NO_CACHE: &str = "no-cache";
 
-/// Serve `<rest>` from the embedded UI tree, with content-encoding
-/// negotiation. Falls back to `index.html` for SPA routes (anything
-/// not matching a literal asset path).
+/// The MFE entry script URL — extracted from the embedded
+/// `index.html` once on first read. Returned by the
+/// `/api/cloud/__mfe_entry` JSON endpoint so the host SPA's MFE
+/// loader knows which content-hashed JS shim to inject.
 ///
-/// Caller is responsible for stripping the daemon's mount prefix
-/// (`/cloud/`) so `rest` is relative to the SPA's own root (e.g.
-/// `assets/main-<hash>.css` or `index.html`).
+/// Dioxus.toml's `base_path = "/assets/cloud"` causes dx to emit
+/// `<script type="module" src="/assets/cloud/bananas-cloud-ui-<hash>.js">`,
+/// which is the public URL exactly — webadmin sub-proxies that
+/// path back to this daemon's socket where the embedded tree
+/// serves the actual bytes.
+pub static MFE_ENTRY: LazyLock<String> = LazyLock::new(|| {
+    let html = UI
+        .get_file("index.html")
+        .expect("embedded UI tree missing index.html — build.rs ran but produced no SPA")
+        .contents_utf8()
+        .expect("embedded index.html is not valid UTF-8");
+    extract_module_src(html)
+        .expect("no <script type=\"module\" src=\"…\"> in embedded cloud-ui index.html")
+});
+
+/// Serve `<rest>` from the embedded UI tree. The caller hands us
+/// the request path with the `/assets/cloud/` prefix already
+/// stripped, so `rest` looks like:
+///  - `assets/bananas-cloud-ui-<hash>.js` (dx emits hashed files
+///    under its own `assets/` subdir; combined with our
+///    `base_path = "/assets/cloud"`, the public URL becomes
+///    `/assets/cloud/assets/<hash>.js`)
+///  - `wasm/bananas-cloud-ui_bg.wasm` (older dx layout)
+///  - `main.css` (top-level static asset)
+///
+/// Strict semantics:
+///  - Looks up `<rest>` verbatim in the embedded tree (rooted at
+///    dx's `public/`).
+///  - **Refuses to serve `index.html`** — that file exists in the
+///    tree but is consumed only by `MFE_ENTRY` extraction; it's
+///    never publicly returned.
+///  - Picks the best encoding variant the client accepts.
+///  - Returns 404 for any other miss. No SPA fallback; webadmin
+///    owns all HTML payloads.
 pub fn serve(rest: &str, req: &Request) -> Response {
-    // Empty / trailing-slash → index.html (SPA root).
     let cleaned = rest.trim_start_matches('/');
-    let lookup_path = if cleaned.is_empty() {
-        "index.html"
-    } else {
-        cleaned
-    };
+    if cleaned.is_empty() || cleaned == "index.html" || cleaned.ends_with("/index.html") {
+        return not_found("not a public asset path");
+    }
 
     let accept = req
         .headers()
@@ -58,34 +78,20 @@ pub fn serve(rest: &str, req: &Request) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if let Some(resp) = pick(lookup_path, accept, /*is_index=*/ false) {
-        return resp;
-    }
-
-    // SPA fallback — deep links like `/` (with hash routes) end up
-    // here when no exact asset matches. We DON'T fall back for paths
-    // under `assets/` though: those are content-hashed by dx, so a
-    // miss is genuine breakage and should surface as 404 rather than
-    // silently serving HTML the browser will choke on parsing as JS.
-    if lookup_path.starts_with("assets/") {
-        return not_found(&format!("asset not found in embedded UI: {lookup_path}"));
-    }
-    pick("index.html", accept, /*is_index=*/ true)
-        .unwrap_or_else(|| not_found("cloud-ui bundle is empty — build.rs may have failed"))
+    pick(cleaned, accept)
+        .unwrap_or_else(|| not_found(&format!("asset not found in embedded UI: {cleaned}")))
 }
 
 /// Try the .br / .gz / raw variants in that order, returning the
-/// first the client accepts. `is_index` toggles caching: index.html
-/// gets `no-cache` so updates land on next refresh; everything else
-/// (content-hashed assets) gets `immutable`.
-fn pick(path: &str, accept: &str, is_index: bool) -> Option<Response> {
+/// first the client accepts. All assets are content-hashed so the
+/// response always carries the immutable cache directive.
+fn pick(path: &str, accept: &str) -> Option<Response> {
     if accept.split(',').any(|tok| tok.trim().starts_with("br")) {
         if let Some(file) = UI.get_file(format!("{path}.br")) {
             return Some(build_response(
                 file.contents(),
                 Some("br"),
                 content_type_for(path),
-                is_index,
             ));
         }
     }
@@ -95,31 +101,24 @@ fn pick(path: &str, accept: &str, is_index: bool) -> Option<Response> {
                 file.contents(),
                 Some("gzip"),
                 content_type_for(path),
-                is_index,
             ));
         }
     }
     UI.get_file(path)
-        .map(|file| build_response(file.contents(), None, content_type_for(path), is_index))
+        .map(|file| build_response(file.contents(), None, content_type_for(path)))
 }
 
 fn build_response(
     bytes: &'static [u8],
     encoding: Option<&'static str>,
     content_type: &'static str,
-    is_index: bool,
 ) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
-        .header(
-            header::CACHE_CONTROL,
-            if is_index { NO_CACHE } else { IMMUTABLE },
-        );
+        .header(header::CACHE_CONTROL, IMMUTABLE);
     if let Some(enc) = encoding {
         builder = builder.header(header::CONTENT_ENCODING, HeaderValue::from_static(enc));
-        // Tell intermediaries that content varies on Accept-Encoding
-        // so they don't serve a brotli payload to a gzip-only client.
         builder = builder.header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     }
     builder.body(Body::from(bytes)).expect("response builder")
@@ -149,5 +148,79 @@ fn content_type_for(path: &str) -> &'static str {
         "woff" => "font/woff",
         "ttf" => "font/ttf",
         _ => "application/octet-stream",
+    }
+}
+
+/// Plain-string scan of `html` for the first
+/// `<script type="module" ... src="...">` tag and return its src.
+/// dx-cli's emitted index.html is small and deterministic, so a
+/// real HTML parser is overkill. The src we extract is the *full*
+/// public URL (Dioxus.toml's `base_path` already prefixed it with
+/// `/assets/cloud/`); we return it as-is.
+fn extract_module_src(html: &str) -> Option<String> {
+    let mut cursor = 0usize;
+    while cursor < html.len() {
+        let rel = html[cursor..].find("<script")?;
+        let tag_start = cursor + rel;
+        let close = html[tag_start..].find('>')?;
+        let tag = &html[tag_start..tag_start + close];
+        let is_module = tag.contains("type=\"module\"") || tag.contains("type='module'");
+        if is_module {
+            for needle in ["src=\"", "src='"] {
+                if let Some(pos) = tag.find(needle) {
+                    let after = &tag[pos + needle.len()..];
+                    let quote = needle.chars().last().unwrap();
+                    if let Some(end) = after.find(quote) {
+                        return Some(after[..end].to_string());
+                    }
+                }
+            }
+        }
+        cursor = tag_start + close + 1;
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_module_src_double_quoted() {
+        let html = r#"<!doctype html><html><body>
+            <div id="main"></div>
+            <script type="module" src="/assets/cloud/bananas-cloud-ui-deadbeef.js"></script>
+        </body></html>"#;
+        assert_eq!(
+            extract_module_src(html).as_deref(),
+            Some("/assets/cloud/bananas-cloud-ui-deadbeef.js")
+        );
+    }
+
+    #[test]
+    fn extracts_module_src_single_quoted() {
+        let html = "<script type='module' src='/assets/cloud/foo.js'></script>";
+        assert_eq!(
+            extract_module_src(html).as_deref(),
+            Some("/assets/cloud/foo.js")
+        );
+    }
+
+    #[test]
+    fn ignores_non_module_scripts() {
+        let html = r#"
+            <script src="/legacy/old.js"></script>
+            <script type="module" src="/assets/cloud/right.js"></script>
+        "#;
+        assert_eq!(
+            extract_module_src(html).as_deref(),
+            Some("/assets/cloud/right.js")
+        );
+    }
+
+    #[test]
+    fn missing_module_returns_none() {
+        let html = "<script src=\"/legacy/old.js\"></script>";
+        assert!(extract_module_src(html).is_none());
     }
 }

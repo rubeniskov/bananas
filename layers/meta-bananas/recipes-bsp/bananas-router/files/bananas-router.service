@@ -1,24 +1,27 @@
 [Unit]
-Description=BanaNAS path-based reverse-proxy gateway (port 8080)
-# Has to come up after network so the public TCP listener binds. Doesn't
-# need any specific extension to be up — startup logs missing manifests
-# but keeps serving (with 404s) so a bad manifest never bricks :8080.
+Description=BanaNAS internal API gateway (Unix socket)
+# Doesn't need any specific extension to be up — startup logs missing
+# manifests but keeps serving (with 404s) so a bad manifest never
+# bricks the API surface. The public TCP listener belongs to
+# bananas-webadmin; this daemon only listens on /run/bananas/router.sock.
 After=network-online.target
 Wants=network-online.target
+RuntimeDirectory=bananas
+RuntimeDirectoryMode=0755
 
 [Service]
 Type=simple
 User=bananas
 Group=bananas
 ExecStart=/usr/bin/bananas-router
-Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
+Environment=BANANAS_ROUTER_SOCKET=/run/bananas/router.sock
 Environment=BANANAS_EXTENSIONS_DIR=/etc/bananas/extensions.d
 # Manifest changes (opkg install/remove of an extension package)
-# require a hard restart for now: the postinst of each extension
-# package issues `systemctl restart bananas-router.service`. Adding
-# SIGHUP-driven re-read in the binary is a small follow-up; for the
-# first version, the restart cost (~50 ms) is negligible vs the
-# correctness win of the simpler model.
+# require a hard restart: the postinst of each extension package
+# issues `systemctl restart bananas-router.service`. Restart is
+# cheap (~50 ms); the correctness win over SIGHUP-driven re-read
+# is keeping the manifest table immutable for the lifetime of a
+# single process.
 Restart=on-failure
 RestartSec=2
 

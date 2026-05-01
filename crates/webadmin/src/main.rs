@@ -1,15 +1,20 @@
-//! bananas-webadmin — JSON API + static SPA host.
+//! bananas-webadmin — public TCP face + internal API daemon.
 //!
-//! Routes:
-//!   GET    /api/exports        → list rows
-//!   POST   /api/exports        → add a row (JSON body)
-//!   DELETE /api/exports/{idx}  → remove a row by index
-//!   GET    /api/browse?path=…  → directory listing for the path picker
-//!   GET    /api/healthz        → liveness
+//! Two listeners on the same process:
 //!
-//! Everything else is served by the Dioxus Web bundle in
-//! `BANANAS_WEBADMIN_DIR` (defaults to /usr/share/bananas/webadmin),
-//! with SPA-style fallback to index.html so client-side routes resolve.
+//!  - **Public TCP** (`:8080`) handles every browser-facing path:
+//!    serves the embedded host SPA at `/` and `/assets/*`, sub-proxies
+//!    `/assets/<plugin_id>/*` to plugin daemons over Unix socket, and
+//!    sub-proxies `/api/*` to `bananas-router`. No business logic here.
+//!  - **Internal Unix** (`/run/bananas/webadmin.sock`) handles
+//!    webadmin's own /api endpoints (login, me, users, exports, …).
+//!    Reached only via the router's catch-all `api_prefix = "/api"`,
+//!    which the public TCP layer hits via the proxy.
+//!
+//! The single public origin means: ONE `index.html` ever leaves the
+//! router publicly, plugin SPAs are composed inline at runtime via
+//! the MFE loader, and `bananas-router` is an internal-only API
+//! gateway that no browser ever connects to directly.
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -20,7 +25,7 @@ use axum::{
     http::StatusCode,
     middleware::from_fn_with_state,
     response::IntoResponse,
-    routing::{delete, get, post, put},
+    routing::{any, delete, get, post, put},
 };
 use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
@@ -36,6 +41,7 @@ mod extensions;
 mod fstab;
 mod operations;
 mod permissions;
+mod proxy;
 mod service_config;
 mod stats;
 mod stats_ws;
@@ -43,8 +49,33 @@ mod storage;
 mod system;
 mod updates;
 mod users;
-use bananas_server_common::SessionKey;
+use bananas_server_common::{Manifest, SessionKey, load_all};
 use exports::{Opts, Row, Squash};
+
+/// Map of plugin id → daemon Unix socket. Built once at startup
+/// from `/etc/bananas/extensions.d/`. `/assets/<id>/*` requests
+/// look up the socket here and 404 if `<id>` isn't a known
+/// plugin. `bananas-webadmin`'s own manifest is excluded from this
+/// map (it's not an asset-providing plugin; its assets are the
+/// embedded host SPA, served from `/assets/<file>` directly).
+#[derive(Clone, Default)]
+pub struct PluginAssetMap(Arc<std::collections::HashMap<String, PathBuf>>);
+
+impl PluginAssetMap {
+    fn from_manifests(manifests: &[Manifest], own_id: &str) -> Self {
+        let mut by_id = std::collections::HashMap::new();
+        for m in manifests {
+            if m.id == own_id {
+                continue;
+            }
+            by_id.insert(m.id.clone(), m.socket.clone());
+        }
+        PluginAssetMap(Arc::new(by_id))
+    }
+    fn get(&self, id: &str) -> Option<&PathBuf> {
+        self.0.get(id)
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -124,6 +155,24 @@ async fn main() -> Result<()> {
     // Skips silently if /etc/bananas/system.toml already has a tz set.
     system::spawn_first_boot_geoip(state.clone());
 
+    // Read the manifest dir to build the plugin asset map and the
+    // router socket path. `bananas-router` reads the same dir; we
+    // keep our own snapshot so /assets/<id>/* requests don't have
+    // to round-trip to the router for socket lookup.
+    let manifests_dir: PathBuf = std::env::var_os("BANANAS_EXTENSIONS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/etc/bananas/extensions.d".into());
+    let manifests = load_all(&manifests_dir);
+    let asset_map = PluginAssetMap::from_manifests(&manifests, "webadmin");
+    let router_socket: PathBuf = std::env::var_os("BANANAS_ROUTER_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/router.sock".into());
+    tracing::info!(
+        plugins = asset_map.0.len(),
+        router = %router_socket.display(),
+        "asset proxy map ready"
+    );
+
     // Public endpoints (login + healthz) and auth-required endpoints share
     // the same /api router. The middleware below permits the public ones
     // and 401s everything else without a valid session cookie.
@@ -184,49 +233,101 @@ async fn main() -> Result<()> {
         .route_layer(from_fn_with_state(state.clone(), auth::require_session))
         .with_state(state);
 
-    // Serve the SPA bundle from bytes embedded in this binary.
-    // `build.rs` ran `dx build --bin bananas-webadmin-ui` and staged
-    // the output (with .br / .gz companions) under $OUT_DIR/ui/, which
-    // `embedded.rs` pulls in via include_dir!. Asset URLs that hit
-    // the embedded tree directly get an immutable Cache-Control;
-    // SPA deep-links fall back to index.html (no-cache).
-    let app = Router::new()
+    // Internal app — bound to the Unix socket. Holds webadmin's own
+    // /api/* handlers (login, me, exports, …); the public TCP listener
+    // never invokes these directly, only via sub-proxy through
+    // bananas-router's catch-all api_prefix="/api".
+    let internal_app = Router::new()
         .nest("/api", api)
+        .layer(TraceLayer::new_for_http());
+
+    // Public app — bound to TCP. No business logic; only static asset
+    // serving + sub-proxies. Order matters: more-specific routes
+    // (`/assets/<id>/*`, `/api/*`) are registered before the broad
+    // `/assets/*` and the SPA-fallback so axum's matcher hits them
+    // first.
+    let proxy_state = ProxyState {
+        router_socket: Arc::new(router_socket),
+        asset_map,
+    };
+    let public_app = Router::new()
+        // Plugin static assets — sub-proxied to the right plugin
+        // daemon's Unix socket. Path is forwarded verbatim, including
+        // the `/assets/<id>/` prefix, because each plugin's daemon
+        // routes its own `/assets/<id>/{*rest}` handler.
+        .route(
+            "/assets/{plugin_id}/{*rest}",
+            any(plugin_asset_proxy).with_state(proxy_state.clone()),
+        )
+        // Every /api/* path goes through bananas-router. Even
+        // webadmin's own /api/login lands here on the public side
+        // and self-loops back via the router's catch-all to
+        // webadmin's Unix socket.
+        .route(
+            "/api/{*rest}",
+            any(api_proxy).with_state(proxy_state.clone()),
+        )
+        .route("/api", any(api_proxy).with_state(proxy_state))
+        // Everything else is the embedded host SPA: bare `/`,
+        // `/assets/<host-file>`, deep-link SPA paths.
         .fallback(get(serve_ui))
         .layer(TraceLayer::new_for_http());
 
-    // Listen on a Unix socket if BANANAS_WEBADMIN_SOCKET is set; otherwise
-    // fall back to a TCP listener. The plugin-daemon model expects this
-    // process to be reached only via bananas-router (over Unix), so the
-    // Unix path is the production wiring; TCP stays as an escape hatch
-    // for local dev or rolling out the router separately.
-    if let Some(sock) = std::env::var_os("BANANAS_WEBADMIN_SOCKET") {
-        let path = PathBuf::from(sock);
-        if path.exists() {
-            // systemd shouldn't leave a stale socket behind, but stripped
-            // crashes can. Removing-then-binding keeps the socket honest.
-            std::fs::remove_file(&path).ok();
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        let listener = tokio::net::UnixListener::bind(&path)?;
-        // 0660 with the socket owned by the bananas user → router (also
-        // running as bananas) can connect; root can too. No outside
-        // process has access via filesystem permissions.
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
-        tracing::info!(socket = %path.display(), "listening (unix)");
-        axum::serve(listener, app).await?;
-    } else {
-        let addr: SocketAddr = std::env::var("BANANAS_LISTEN_ADDR")
-            .unwrap_or_else(|_| "0.0.0.0:8080".into())
-            .parse()?;
-        tracing::info!(%addr, "listening (tcp)");
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+    // Both listeners run concurrently; tokio::try_join surfaces
+    // either one's error. Public TCP is `0.0.0.0:8080`; the public
+    // app is the only daemon a browser ever connects to.
+    let socket_path: PathBuf = std::env::var_os("BANANAS_WEBADMIN_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/webadmin.sock".into());
+    if socket_path.exists() {
+        std::fs::remove_file(&socket_path).ok();
     }
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let unix_listener = tokio::net::UnixListener::bind(&socket_path)?;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o660))?;
+    tracing::info!(socket = %socket_path.display(), "internal API listener (unix)");
+
+    let addr: SocketAddr = std::env::var("BANANAS_LISTEN_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:8080".into())
+        .parse()?;
+    let tcp_listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!(%addr, "public listener (tcp)");
+
+    let unix_fut = axum::serve(unix_listener, internal_app);
+    let tcp_fut = axum::serve(tcp_listener, public_app);
+    tokio::try_join!(unix_fut.into_future(), tcp_fut.into_future())?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct ProxyState {
+    router_socket: Arc<PathBuf>,
+    asset_map: PluginAssetMap,
+}
+
+async fn api_proxy(
+    State(state): State<ProxyState>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    proxy::proxy_to_unix(&state.router_socket, req).await
+}
+
+async fn plugin_asset_proxy(
+    State(state): State<ProxyState>,
+    Path((plugin_id, _rest)): Path<(String, String)>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    let Some(socket) = state.asset_map.get(&plugin_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown plugin '{plugin_id}'"),
+        )
+            .into_response();
+    };
+    proxy::proxy_to_unix(socket, req).await
 }
 
 // --- /api/exports -----------------------------------------------------------

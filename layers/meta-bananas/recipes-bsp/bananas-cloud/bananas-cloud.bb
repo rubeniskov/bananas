@@ -1,10 +1,11 @@
 SUMMARY = "BanaNAS cloud-sync plugin (rclone-driven push/pull/bisync)"
-DESCRIPTION = "Optional plugin daemon that owns /api/cloud/* and /cloud/* \
-behind bananas-router. Manages cloud accounts (Drive, Dropbox, OneDrive, \
-S3, WebDAV, FTP), schedules cron-driven syncs, and dispatches each run \
-to bananas-engine for the privileged rclone exec. Pulls bananas-rclone \
-in via Depends so a single `opkg install bananas-cloud` brings up the \
-full feature; the default image ships none of this. Cross-built by \
+DESCRIPTION = "Optional plugin daemon answering /api/cloud/* (via \
+bananas-router) and /assets/cloud/* (via bananas-webadmin sub-proxy). \
+Manages cloud accounts (Drive, Dropbox, OneDrive, S3, WebDAV, FTP), \
+schedules cron-driven syncs, and dispatches each run to bananas-engine \
+for the privileged rclone exec. Pulls bananas-rclone in via Depends so \
+a single `opkg install bananas-cloud` brings up the full feature; the \
+default image ships none of this. Cross-built by \
 `pixi run build-webadmin-arm` into serve/bin/bananas-cloud."
 
 LICENSE = "MIT"
@@ -32,11 +33,14 @@ SYSTEMD_AUTO_ENABLE = "enable"
 #   bananas-rclone — provides /usr/bin/rclone the engine shells out to
 #                    for every sync run. Without it, RunCloudSync exits
 #                    with a structured "rclone not installed" error.
-#   bananas-router — owns :8080 and proxies /api/cloud/* + /cloud/* here
-#                    via the manifest this package drops at install time.
-#   bananas-webadmin — issues the session cookies this daemon validates.
+#   bananas-router — Unix-socket API gateway; reads the manifest this
+#                    package drops at install time to route /api/cloud/*
+#                    here.
+#   bananas-webadmin — owns the public TCP port :8080 and sub-proxies
+#                      /assets/cloud/* to this daemon's socket. Also
+#                      issues the session cookies this daemon validates.
 #
-# The cloud SPA is now embedded directly in this binary via include_dir!
+# The cloud SPA is embedded directly in this binary via include_dir!
 # (see crates/cloud/build.rs + src/embedded.rs); the separate
 # bananas-cloud-ui IPK was retired in v1.5.
 RDEPENDS:${PN} += "bananas-rclone bananas-router bananas-webadmin"
@@ -51,24 +55,28 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/bananas-cloud.service ${D}${systemd_system_unitdir}/
 
-    # Extension manifest — bananas-router reads this on
-    # `systemctl reload bananas-router` to learn this daemon owns
-    # /api/cloud/* and /cloud/* paths.
+    # Extension manifest — bananas-router reads it for API routing
+    # (/api/cloud/* → this daemon's socket); bananas-webadmin reads
+    # it to populate its plugin-asset map (/assets/cloud/* → same
+    # socket). Both daemons re-read the dir on restart.
     install -d ${D}${sysconfdir}/bananas/extensions.d
     install -m 0644 ${WORKDIR}/cloud.toml ${D}${sysconfdir}/bananas/extensions.d/cloud.toml
 }
 
-# Restart bananas-router after install/remove so the manifest table
-# is rebuilt with the new/dropped manifest. ~50 ms downtime.
+# Restart both manifest-reading daemons after install/remove so
+# their tables include / drop this plugin. ~50 ms downtime per
+# daemon.
 pkg_postinst:${PN}() {
     if [ -z "$D" ]; then
         systemctl restart bananas-router.service 2>/dev/null || true
+        systemctl restart bananas-webadmin.service 2>/dev/null || true
     fi
 }
 
 pkg_postrm:${PN}() {
     if [ -z "$D" ]; then
         systemctl restart bananas-router.service 2>/dev/null || true
+        systemctl restart bananas-webadmin.service 2>/dev/null || true
     fi
 }
 

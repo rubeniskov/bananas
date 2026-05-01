@@ -48,9 +48,11 @@ SYSTEMD_SERVICE:${PN} = "bananas-engine.service bananas-webadmin.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 # The HTTP daemon now serves the SPA from bytes embedded directly in
-# its binary via include_dir!, so there's no separate -ui package to
-# RDEPENDS on any more. The router still proxies the public TCP port
-# down to this daemon's Unix socket.
+# its binary via include_dir!. It's the public TCP face on :8080;
+# bananas-router runs alongside on a Unix socket and handles only
+# /api/* (sub-proxied by webadmin) by manifest prefix. RDEPENDS the
+# router because webadmin's own /api endpoints are reached through
+# it via the catch-all "api_prefix = /api" self-loop manifest.
 RDEPENDS:${PN} += "bananas-router"
 
 USERADD_PACKAGES = "${PN}"
@@ -79,9 +81,9 @@ do_install() {
     install -d ${D}${sysconfdir}/profile.d
     install -m 0644 ${WORKDIR}/bananas-motd.sh ${D}${sysconfdir}/profile.d/bananas-motd.sh
 
-    # Extension manifest — declares the catch-all "/" prefix so
-    # bananas-router routes everything not claimed by another extension
-    # to this daemon over /run/bananas/webadmin.sock.
+    # Extension manifest — declares the catch-all "/api" api_prefix
+    # so bananas-router self-loops back to this daemon's Unix socket
+    # for /api requests not claimed by another plugin (cloud, etc.).
     install -d ${D}${sysconfdir}/bananas/extensions.d
     install -m 0644 ${WORKDIR}/webadmin.toml ${D}${sysconfdir}/bananas/extensions.d/webadmin.toml
 

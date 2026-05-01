@@ -1,18 +1,22 @@
-//! `/api/extensions` — discovery surface for the SPA.
+//! `/api/extensions` — discovery surface for the host SPA.
 //!
-//! Mirrors what `bananas-router` reads at startup, so the SPA can
-//! decide which optional plugin tabs to render. We re-read the dir
-//! per request because installs/uninstalls happen at runtime via opkg
-//! and the SPA needs to see the current truth (caching means the
-//! Cloud tab would lag a hot install).
+//! Returns the list of installed plugins so the SPA can render
+//! their nav tabs and decide when to fire the MFE loader. We
+//! re-read the manifest dir per request because installs/uninstalls
+//! happen at runtime via opkg; caching would mean the Cloud tab
+//! lags a hot install. The dir is small (one file per plugin),
+//! and the request itself is rare (once per page load).
 //!
-//! The router's per-startup-load is fine because it doesn't refresh
-//! often; the SPA's poll is rare (once per page load, sometimes a
-//! periodic check). Either way the directory is small.
+//! The response is intentionally minimal: just `id` + `label`.
+//! Asset URLs are computed by the host as `/assets/<id>/…` and
+//! the entry script is discovered per-plugin via the daemon's
+//! own `/api/<id>/__mfe_entry` JSON endpoint — there's nothing
+//! plugin-specific to surface here beyond the rendering hint.
 
 use std::path::PathBuf;
 
 use axum::Json;
+use bananas_server_common::load_all;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,10 +24,6 @@ pub struct Extension {
     pub id: String,
     #[serde(default)]
     pub label: Option<String>,
-    /// Path the SPA's nav tab should jump to when clicked. Optional —
-    /// not every extension has UI.
-    #[serde(default)]
-    pub spa_path: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -31,41 +31,20 @@ pub struct ListResponse {
     pub extensions: Vec<Extension>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ManifestOnDisk {
-    id: String,
-    #[serde(default)]
-    label: Option<String>,
-    #[serde(default)]
-    spa_path: Option<String>,
-}
-
 pub async fn list_extensions() -> Json<ListResponse> {
     let dir: PathBuf = std::env::var_os("BANANAS_EXTENSIONS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/etc/bananas/extensions.d".into());
-    let mut out = Vec::new();
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return Json(ListResponse { extensions: out }),
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("toml") {
-            continue;
-        }
-        let body = match std::fs::read_to_string(&p) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        if let Ok(m) = toml::from_str::<ManifestOnDisk>(&body) {
-            out.push(Extension {
-                id: m.id,
-                label: m.label,
-                spa_path: m.spa_path,
-            });
-        }
-    }
+    let mut out: Vec<Extension> = load_all(&dir)
+        .into_iter()
+        // Webadmin's own manifest is for router self-loop wiring;
+        // it's not a plugin the SPA renders a nav tab for.
+        .filter(|m| m.id != "webadmin")
+        .map(|m| Extension {
+            id: m.id,
+            label: m.label,
+        })
+        .collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Json(ListResponse { extensions: out })
 }
@@ -75,15 +54,21 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn lists_only_toml_files() {
+    async fn lists_only_plugin_manifests() {
         let td = tempfile::tempdir().unwrap();
         std::fs::write(
             td.path().join("cloud.toml"),
             r#"id = "cloud"
 label = "Cloud sync"
-spa_path = "/cloud"
 socket = "/run/bananas/cloud.sock"
-prefixes = ["/api/cloud"]"#,
+api_prefix = "/api/cloud""#,
+        )
+        .unwrap();
+        std::fs::write(
+            td.path().join("webadmin.toml"),
+            r#"id = "webadmin"
+socket = "/run/bananas/webadmin.sock"
+api_prefix = "/api""#,
         )
         .unwrap();
         std::fs::write(td.path().join("README"), "ignore me").unwrap();
@@ -94,9 +79,10 @@ prefixes = ["/api/cloud"]"#,
             std::env::set_var("BANANAS_EXTENSIONS_DIR", td.path());
         }
         let resp = list_extensions().await;
+        // webadmin filtered out, only cloud surfaces
         assert_eq!(resp.0.extensions.len(), 1);
         assert_eq!(resp.0.extensions[0].id, "cloud");
-        assert_eq!(resp.0.extensions[0].spa_path.as_deref(), Some("/cloud"));
+        assert_eq!(resp.0.extensions[0].label.as_deref(), Some("Cloud sync"));
     }
 
     #[tokio::test]

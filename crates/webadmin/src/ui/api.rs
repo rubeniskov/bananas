@@ -342,16 +342,15 @@ pub struct ImportSummary {
 
 // --- Extensions discovery -----------------------------------------------
 
-/// One installed extension. Mirrors the manifest the router reads.
+/// One installed extension. The MFE loader queries
+/// `/api/<id>/__mfe_entry` for the content-hashed entry script, so
+/// we only carry id + label here.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Extension {
     pub id: String,
     #[serde(default)]
     #[allow(dead_code)]
     pub label: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub spa_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

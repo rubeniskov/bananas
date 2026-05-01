@@ -1,34 +1,35 @@
 //! bananas-cloud — optional plugin daemon for cloud-sync.
 //!
-//! Owns the `/api/cloud/*` and `/cloud/*` paths. Reached only via
-//! `bananas-router`'s reverse proxy on the public TCP port; this
-//! daemon listens on `/run/bananas/cloud.sock`. Validates session
-//! cookies locally using the same `session.key` that
-//! `bananas-webadmin` issues — both daemons are in the same trust
-//! domain (run as the `bananas` user, share /var/lib/bananas/).
+//! Listens only on `/run/bananas/cloud.sock`. Two URL spaces it
+//! answers:
+//!  - `/api/cloud/*` — auth-gated JSON API (forwarded by
+//!    bananas-router from webadmin's public TCP).
+//!  - `/assets/cloud/*` — strict asset lookup against the bytes
+//!    embedded via `include_dir!` (forwarded by webadmin's
+//!    plugin-asset sub-proxy, also over Unix socket).
 //!
-//! Talks to `bananas-engine` over `/run/bananas/engine.sock` for the
-//! one privileged op cloud needs (`RunCloudSync` invokes rclone as a
-//! subprocess of the engine, not of this daemon).
+//! There is no public-facing SPA fallback. The host webadmin owns
+//! THE single `index.html`; the cloud SPA is composed inline at
+//! runtime via the MFE loader, which discovers this daemon's
+//! content-hashed entry script through `/api/cloud/__mfe_entry`.
 //!
-//! Step 4 of the plugin migration: this binary BUILDS but is not yet
-//! shipped via Yocto. The webadmin still has its own copies of cloud
-//! routes (`crates/webadmin/src/cloud.rs` + `cloud_jobs.rs`); this
-//! daemon is a parallel implementation that will take over once
-//! step 5 ships the IPK and step 6 drops the duplicates.
+//! Validates session cookies locally using the same `session.key`
+//! that bananas-webadmin issues — both daemons share the bananas
+//! service user and `/var/lib/bananas/`.
 
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    Router,
-    extract::Request,
+    Json, Router,
+    extract::{Path, Request},
     http::StatusCode,
     middleware::{Next, from_fn_with_state},
     response::Response,
     routing::{get, post, put},
 };
 use bananas_server_common::{Session, SessionKey, extract_cookie};
+use serde_json::json;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -94,18 +95,24 @@ async fn main() -> Result<()> {
         .route("/cloud/syncs/{idx}/cancel", post(cloud::cancel_sync))
         .route("/cloud/runs", get(cloud::list_runs))
         .route("/cloud/runs/{job_id}", get(cloud::get_run))
+        // The MFE entry handshake: returns the content-hashed JS
+        // shim URL that the host webadmin's loader injects as a
+        // <script type="module"> tag. Auth-gated like every other
+        // /api/cloud/* route, so unauthenticated visitors can't
+        // even enumerate which plugins are installed.
+        .route("/cloud/__mfe_entry", get(mfe_entry))
         .route_layer(from_fn_with_state(state.clone(), require_session))
         .with_state(state);
 
-    // Serve the cloud SPA bundle at /cloud/* from bytes embedded in
-    // this binary. `build.rs` ran `dx build --bin bananas-cloud-ui`
-    // and staged the output under $OUT_DIR/ui/, which `embedded.rs`
-    // pulls in via `include_dir!`. Asset URLs that hit the embedded
-    // tree directly get an immutable Cache-Control; SPA deep-links
-    // fall back to index.html (no-cache).
+    // Asset handler — webadmin sub-proxies /assets/cloud/<rest>
+    // verbatim to this daemon's socket. `embedded::serve` does a
+    // strict include_dir lookup; index.html is never served, only
+    // content-hashed asset files. No auth gate here: the bytes are
+    // public (compiled wasm + JS shim), and the host SPA can't
+    // discover the URL without a session anyway.
     let app = Router::new()
         .nest("/api", api)
-        .fallback(get(serve_ui))
+        .route("/assets/cloud/{*rest}", get(serve_asset))
         .layer(TraceLayer::new_for_http());
 
     // Always Unix socket — the public TCP port is owned by
@@ -130,17 +137,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Fallback handler — anything not matched by `/api/*` falls through
-/// here, which means it's a static-asset or SPA-route request.
-/// bananas-router forwards the path verbatim, so we see the full
-/// `/cloud/...` URL; strip that mount prefix before consulting the
-/// embedded tree (dx-cli emits assets at `assets/<hash>.{js,wasm,…}`
-/// without the `/cloud/` prefix — that prefix only lives in the URL
-/// strings written into index.html).
-async fn serve_ui(req: Request) -> Response {
-    let path = req.uri().path().to_string();
-    let rest = path.strip_prefix("/cloud").unwrap_or(path.as_str());
-    embedded::serve(rest, &req)
+/// `/api/cloud/__mfe_entry` handler — returns the content-hashed
+/// JS shim URL the host webadmin injects to load this plugin's
+/// SPA. The URL is in webadmin's public namespace
+/// (`/assets/cloud/<hash>.js`) because Dioxus.toml's `base_path`
+/// is configured to that prefix; the host SPA can use the value
+/// verbatim as a `<script src>`.
+async fn mfe_entry() -> Json<serde_json::Value> {
+    Json(json!({ "entry": &*embedded::MFE_ENTRY }))
+}
+
+/// `/assets/cloud/{*rest}` handler — webadmin sub-proxies asset
+/// requests over our Unix socket. `embedded::serve` does a strict
+/// include_dir lookup against the dx-built tree.
+async fn serve_asset(Path(rest): Path<String>, req: Request) -> Response {
+    embedded::serve(&rest, &req)
 }
 
 /// Auth middleware — same shape as bananas-webadmin's
