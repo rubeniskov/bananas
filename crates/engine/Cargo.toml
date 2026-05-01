@@ -30,3 +30,8 @@ tempfile = "3"
 # parallel races on the env var. serial_test guards them with a
 # per-test mutex so cargo test's default --test-threads=N still works.
 serial_test = "3"
+# tests/auth.rs hashes test passwords for `/etc/shadow` ($6$ SHA-512).
+# main.rs already pulls sha-crypt in via [dependencies], but the
+# integration tests link the lib crate (not the bin), so we re-add
+# it here.
+sha-crypt.workspace = true

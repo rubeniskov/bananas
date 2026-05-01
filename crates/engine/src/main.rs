@@ -40,6 +40,16 @@ async fn main() -> Result<()> {
     let exports_path: PathBuf = std::env::var_os("BANANAS_EXPORTS_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/etc/exports".into());
+    // /etc/shadow path. Configurable via env so the test harness can
+    // point engine at a tmpdir shadow file without needing root and
+    // without touching the real system file. Defaults to /etc/shadow
+    // for production; the verify_shadow_password path is the only
+    // current consumer (other shadow-touching paths still hardcode
+    // the system path because they delegate to chpasswd / useradd
+    // which always write to /etc/shadow).
+    let shadow_path: PathBuf = std::env::var_os("BANANAS_SHADOW_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/etc/shadow".into());
 
     if socket_path.exists() {
         fs::remove_file(&socket_path).await.ok();
@@ -66,8 +76,14 @@ async fn main() -> Result<()> {
     tracing::info!(
         socket=%socket_path.display(),
         exports=%exports_path.display(),
+        shadow=%shadow_path.display(),
         "bananas-engine listening"
     );
+
+    let cx = Cx {
+        exports: exports_path,
+        shadow: shadow_path,
+    };
 
     loop {
         let (stream, _) = match listener.accept().await {
@@ -77,23 +93,33 @@ async fn main() -> Result<()> {
                 continue;
             }
         };
-        let exports_path = exports_path.clone();
+        let cx = cx.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(stream, &exports_path).await {
+            if let Err(e) = handle(stream, &cx).await {
                 tracing::error!(error=%e, "request handler failed");
             }
         });
     }
 }
 
-async fn handle(stream: UnixStream, exports_path: &Path) -> Result<()> {
+/// Per-request context holding the on-disk paths the helper reads
+/// or writes during a command. Tests redirect these to a tmpdir so
+/// they can exercise the auth path without root privileges or
+/// touching the real /etc/shadow.
+#[derive(Clone)]
+struct Cx {
+    exports: PathBuf,
+    shadow: PathBuf,
+}
+
+async fn handle(stream: UnixStream, cx: &Cx) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
     reader.read_line(&mut line).await?;
 
     let response = match serde_json::from_str::<Command>(line.trim()) {
-        Ok(cmd) => dispatch(cmd, exports_path).await,
+        Ok(cmd) => dispatch(cmd, cx).await,
         Err(e) => Response::err(format!("bad command: {e}"), String::new()),
     };
 
@@ -103,9 +129,9 @@ async fn handle(stream: UnixStream, exports_path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
+async fn dispatch(cmd: Command, cx: &Cx) -> Response {
     match cmd {
-        Command::WriteExports { content } => match write_exports(&content, exports_path).await {
+        Command::WriteExports { content } => match write_exports(&content, &cx.exports).await {
             Ok(out) => Response::ok(out),
             Err(e) => Response::err(e.to_string(), String::new()),
         },
@@ -164,7 +190,7 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             old_password,
             new_password,
         } => {
-            match change_own_password(&username, &old_password, &new_password).await {
+            match change_own_password(&username, &old_password, &new_password, &cx.shadow).await {
                 Ok(()) => Response::ok(format!("password rotated for {username}")),
                 // Same redaction rule as authenticate — bury the specific
                 // reason behind a single "invalid credentials" so we don't
@@ -272,7 +298,7 @@ async fn dispatch(cmd: Command, exports_path: &Path) -> Response {
             // Passing it through is what lets the UI swap into the "set
             // new password" form on first sign-in.
             const GENERIC_FAIL: &str = "invalid credentials";
-            match authenticate(&username, &password).await {
+            match authenticate(&username, &password, &cx.shadow).await {
                 Ok(()) => Response::ok(format!("authenticated {username}")),
                 Err(e) => {
                     let msg = e.to_string();
@@ -607,12 +633,13 @@ fn validate_exports(content: &str) -> Result<()> {
 /// as a wrong password.
 const ADMIN_GROUP: &str = "bananas-admin";
 
-/// Verify `password` against the hash stored for `username` in /etc/shadow,
-/// then check that the user is authorized (root or a member of
-/// `bananas-admin`). Only `$6$` (SHA-512) hashes are accepted — that's what
-/// the BanaNAS image produces via `mkpasswd -m sha-512`.
-async fn authenticate(username: &str, password: &str) -> Result<()> {
-    let entry = verify_shadow_password(username, password).await?;
+/// Verify `password` against the hash stored for `username` in
+/// `shadow_path` (default `/etc/shadow`), then check that the user
+/// is authorized (root or a member of `bananas-admin`). Only `$6$`
+/// (SHA-512) hashes are accepted — that's what the BanaNAS image
+/// produces via `mkpasswd -m sha-512`.
+async fn authenticate(username: &str, password: &str, shadow_path: &Path) -> Result<()> {
+    let entry = verify_shadow_password(username, password, shadow_path).await?;
 
     // The shadow file's third field is "days since 1970-01-01 of the last
     // password change". `0` is the magic value `chage -d 0` writes — PAM
@@ -638,21 +665,28 @@ struct ShadowEntry {
     lastchg_zero: bool,
 }
 
-/// Verify `password` against the hash stored for `username` in /etc/shadow.
-/// Returns the parsed shadow row on success so callers can also inspect
-/// the expiry field. Used by both `authenticate` and `change_own_password`
-/// — the latter wants to accept the password even when expired so the
-/// user can rotate it.
-async fn verify_shadow_password(username: &str, password: &str) -> Result<ShadowEntry> {
+/// Verify `password` against the hash stored for `username` in
+/// `shadow_path`. Returns the parsed shadow row on success so callers
+/// can also inspect the expiry field. Used by both `authenticate` and
+/// `change_own_password` — the latter wants to accept the password
+/// even when expired so the user can rotate it.
+async fn verify_shadow_password(
+    username: &str,
+    password: &str,
+    shadow_path: &Path,
+) -> Result<ShadowEntry> {
     if username.is_empty() || username.contains(':') || username.contains('\n') {
         anyhow::bail!("malformed username");
     }
     if password.is_empty() {
         anyhow::bail!("empty password");
     }
-    let shadow = fs::read_to_string("/etc/shadow")
-        .await
-        .context("reading /etc/shadow (helper must run as root)")?;
+    let shadow = fs::read_to_string(shadow_path).await.with_context(|| {
+        format!(
+            "reading {} (helper must run as root)",
+            shadow_path.display()
+        )
+    })?;
 
     let (hash, lastchg) = shadow
         .lines()
@@ -694,9 +728,14 @@ async fn verify_shadow_password(username: &str, password: &str) -> Result<Shadow
 /// they know the current password. After `chpasswd` succeeds, `chage`
 /// stamps lastchg with today's day count, which clears the
 /// `password_expired` state for future logins.
-async fn change_own_password(username: &str, old_password: &str, new_password: &str) -> Result<()> {
+async fn change_own_password(
+    username: &str,
+    old_password: &str,
+    new_password: &str,
+    shadow_path: &Path,
+) -> Result<()> {
     // Same shape-check as authenticate, plus the new-password rules.
-    let _ = verify_shadow_password(username, old_password).await?;
+    let _ = verify_shadow_password(username, old_password, shadow_path).await?;
     if !valid_name(username) {
         anyhow::bail!("invalid username");
     }
