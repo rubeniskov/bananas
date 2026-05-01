@@ -340,6 +340,46 @@ pub struct ImportSummary {
     pub notes: Vec<String>,
 }
 
+// --- Extensions discovery -----------------------------------------------
+
+/// One installed extension. Mirrors the manifest the router reads.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Extension {
+    pub id: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub label: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub spa_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ExtensionsResponse {
+    extensions: Vec<Extension>,
+}
+
+/// Fetch the list of installed extensions. Used by the SPA to gate
+/// optional nav tabs (Cloud, future plugins) on whether the matching
+/// IPK is installed.
+pub async fn list_extensions() -> Result<Vec<Extension>, ApiError> {
+    let resp = Request::get("/api/extensions")
+        .send()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    if resp.status() == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !resp.ok() {
+        return Err(ApiError::Other(format!("HTTP {}", resp.status())));
+    }
+    let parsed: ExtensionsResponse = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::Other(e.to_string()))?;
+    Ok(parsed.extensions)
+}
+
 /// Fetch /api/config — the response body is the raw TOML (Content-Type
 /// `application/toml`). Caller is responsible for triggering the file
 /// download.

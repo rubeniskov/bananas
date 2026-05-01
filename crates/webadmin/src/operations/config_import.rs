@@ -246,11 +246,19 @@ async fn run_import(
         }
     };
     if !cloud_toml.is_empty() {
-        log!(
-            "Restoring cloud config ({} account(s), {} sync(s))…",
-            bundle.cloud.accounts.len(),
-            bundle.cloud.syncs.len()
-        );
+        let accounts_count = bundle
+            .cloud
+            .get("accounts")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let syncs_count = bundle
+            .cloud
+            .get("syncs")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        log!("Restoring cloud config ({accounts_count} account(s), {syncs_count} sync(s))…");
         match bananas_engine::call(
             &helper_socket,
             &HelperCommand::WriteServiceConfig {
@@ -261,8 +269,8 @@ async fn run_import(
         .await
         {
             Ok(HelperResponse { ok: true, .. }) => {
-                summary.cloud_accounts = bundle.cloud.accounts.len();
-                summary.cloud_syncs = bundle.cloud.syncs.len();
+                summary.cloud_accounts = accounts_count;
+                summary.cloud_syncs = syncs_count;
                 log!("  → cloud config written");
             }
             Ok(HelperResponse { error, output, .. }) => {

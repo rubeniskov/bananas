@@ -186,6 +186,21 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     let mut config_banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
     let mut reboot_confirm = use_signal(|| false);
 
+    // Installed extensions (read once on mount). The Cloud / future
+    // plugin tabs render only when the matching manifest is present in
+    // /etc/bananas/extensions.d/, so a lean image without bananas-cloud
+    // installed shows no Cloud tab at all.
+    let mut extensions: Signal<Vec<String>> = use_signal(Vec::new);
+    {
+        use_effect(move || {
+            spawn(async move {
+                if let Ok(list) = api::list_extensions().await {
+                    extensions.set(list.into_iter().map(|e| e.id).collect());
+                }
+            });
+        });
+    }
+
     // On mount: discover any in-flight ConfigImport op and reattach the
     // busy overlay to it. This is the "refresh during import" path —
     // without it, the SPA forgets the import is happening and the user
@@ -315,8 +330,10 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     on_click: move |_| page.set(Page::Storage) }
                 NavTab { label: "Users", icon: "users", active: page() == Page::Users,
                     on_click: move |_| page.set(Page::Users) }
-                NavTab { label: "Cloud", icon: "cloud", active: page() == Page::Cloud,
-                    on_click: move |_| page.set(Page::Cloud) }
+                if extensions.read().iter().any(|id| id == "cloud") {
+                    NavTab { label: "Cloud", icon: "cloud", active: page() == Page::Cloud,
+                        on_click: move |_| page.set(Page::Cloud) }
+                }
                 NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
                     on_click: move |_| page.set(Page::Settings) }
                 NavTab { label: "Updates", icon: "package", active: page() == Page::Updates,

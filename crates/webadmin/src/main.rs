@@ -28,11 +28,10 @@ use serde_json::json;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
 mod auth;
-mod cloud;
-mod cloud_jobs;
 mod config;
 mod dirs;
 mod exports;
+mod extensions;
 mod fstab;
 mod operations;
 mod permissions;
@@ -53,7 +52,6 @@ pub struct AppState {
     pub session_key: Arc<SessionKey>,
     pub stats: stats::StatsState,
     pub live_bus: stats_ws::LiveBus,
-    pub jobs: cloud_jobs::JobManager,
     pub storage_cache: storage::StorageCache,
     pub operations: operations::OperationManager,
 }
@@ -95,9 +93,6 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
-    let jobs = cloud_jobs::JobManager::new();
-    cloud_jobs::spawn_scheduler(jobs.clone(), helper_socket.clone());
-
     let operations_journal: PathBuf = std::env::var_os("BANANAS_OPERATIONS_JOURNAL")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/var/lib/bananas/operations.json".into());
@@ -120,7 +115,6 @@ async fn main() -> Result<()> {
         session_key: Arc::new(session_key),
         stats: stats_state,
         live_bus,
-        jobs,
         storage_cache: storage::StorageCache::new(),
         operations,
     };
@@ -187,30 +181,13 @@ async fn main() -> Result<()> {
         .route("/users/{username}", delete(users::delete))
         .route("/users/{username}/password", put(users::set_password))
         .route("/users/{username}/admin", put(users::set_admin))
-        .route("/cloud/providers", get(cloud::providers))
-        .route(
-            "/cloud/accounts",
-            get(cloud::list_accounts).post(cloud::add_account),
-        )
-        .route(
-            "/cloud/accounts/{name}",
-            put(cloud::update_account).delete(cloud::delete_account),
-        )
-        .route("/cloud/syncs", get(cloud::list_syncs).post(cloud::add_sync))
-        .route(
-            "/cloud/syncs/{idx}",
-            put(cloud::update_sync).delete(cloud::delete_sync),
-        )
-        .route("/cloud/syncs/{idx}/run", post(cloud::run_sync))
-        .route("/cloud/syncs/{idx}/cancel", post(cloud::cancel_sync))
         .route("/system/reboot", post(post_reboot))
         .route("/mkdir", post(post_mkdir))
         .route("/version", get(updates::get_version))
         .route("/updates/check", get(updates::get_updates_check))
         .route("/updates/install", post(updates::post_updates_install))
         .route("/updates/status", get(updates::get_updates_status))
-        .route("/cloud/runs", get(cloud::list_runs))
-        .route("/cloud/runs/{job_id}", get(cloud::get_run))
+        .route("/extensions", get(extensions::list_extensions))
         .route("/operations", get(operations::list))
         .route("/operations/active", get(operations::list_active))
         .route("/operations/{id}", get(operations::get_one))

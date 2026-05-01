@@ -33,12 +33,12 @@ pub struct ConfigBundle {
     #[serde(default)]
     pub users: Vec<UserEntry>,
     /// Cloud-sync accounts + sync entries from /etc/bananas/cloud.toml.
-    /// Persisted in the bundle so a fresh image's "Load config" call
-    /// fully restores the operator's setup, including OAuth tokens. Treat
-    /// the bundle as sensitive — anyone with the token can act as the
-    /// account on the configured provider.
-    #[serde(default)]
-    pub cloud: crate::cloud::CloudConfig,
+    /// Stored as an opaque TOML table — the cloud daemon (if installed)
+    /// owns the schema; webadmin only round-trips the section so a
+    /// "Save config / Load config" preserves the cloud config across
+    /// reflashes even when bananas-cloud isn't installed yet.
+    #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
+    pub cloud: toml::Table,
     /// Raw TOML of /etc/bananas/dashboard.toml (LCD UI appearance +
     /// refresh cadence). Stored verbatim instead of parsed so the
     /// schema can grow without a bundle-version bump every time.
@@ -181,280 +181,6 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
     }
 }
 
-#[allow(dead_code)]
-async fn legacy_import_config_inline(State(state): State<AppState>, body: String) -> Response {
-    // Kept for reference / quick rollback while the OperationManager
-    // migration soaks. Once the new path has shipped a release, drop
-    // this and the local ImportSummary helpers below.
-    let bundle: ConfigBundle = match toml::from_str(&body) {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "ok": false,
-                    "error": format!("invalid TOML: {e}"),
-                })),
-            )
-                .into_response();
-        }
-    };
-    if bundle.version > default_version() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "ok": false,
-                "error": format!(
-                    "unsupported config version {} (this server understands up to {})",
-                    bundle.version, default_version()
-                ),
-            })),
-        )
-            .into_response();
-    }
-
-    let mut summary = ImportSummary::default();
-
-    // ---- exports ---------------------------------------------------------
-    let export_rows: Vec<exports::Row> = bundle
-        .exports
-        .iter()
-        .map(|e| exports::Row {
-            path: e.path.clone(),
-            host: e.host.clone(),
-            options: e.options.clone(),
-        })
-        .collect();
-    let exports_content = exports::serialize(&export_rows);
-    match bananas_engine::call(
-        &state.helper_socket,
-        &Command::WriteExports {
-            content: exports_content,
-        },
-    )
-    .await
-    {
-        Ok(HelperResponse { ok: true, .. }) => {
-            summary.exports_written = export_rows.len();
-        }
-        Ok(HelperResponse { error, output, .. }) => {
-            summary.ok = false;
-            summary.notes.push(format!(
-                "exports: {}\n{}",
-                error.unwrap_or_else(|| "helper rejected exports".into()),
-                output
-            ));
-        }
-        Err(e) => {
-            summary.ok = false;
-            summary
-                .notes
-                .push(format!("exports: helper unreachable: {e}"));
-        }
-    }
-
-    // ---- fstab -----------------------------------------------------------
-    // Bundle entries are user-managed mounts only — defensively drop
-    // anything that would shadow a protected system mount, even if a
-    // hand-edited TOML tried to sneak one in.
-    let bundle_rows: Vec<fstab::Row> = bundle
-        .fstab
-        .iter()
-        .filter(|e| !fstab::is_protected_target(&e.mountpoint, &e.fstype, &e.source))
-        .map(|e| fstab::Row {
-            source: e.source.clone(),
-            mountpoint: e.mountpoint.clone(),
-            fstype: e.fstype.clone(),
-            options: e.options.clone(),
-            dump: e.dump,
-            pass: e.pass,
-        })
-        .collect();
-
-    // Preserve the comment header AND every on-disk protected row (so
-    // restoring a backup never blows away `/`, `/proc`, etc., even though
-    // those rows are intentionally absent from the bundle).
-    let raw_fstab = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
-    let mut header = String::new();
-    for line in raw_fstab.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with('#') {
-            header.push_str(line);
-            header.push('\n');
-        } else {
-            break;
-        }
-    }
-    let protected_rows: Vec<fstab::Row> = fstab::rows(&raw_fstab)
-        .into_iter()
-        .filter(fstab::is_protected)
-        .collect();
-    let bundle_count = bundle_rows.len();
-    let mut fstab_rows = protected_rows;
-    fstab_rows.extend(bundle_rows);
-    let fstab_content = format!("{}{}", header, fstab::serialize(&fstab_rows));
-    match bananas_engine::call(
-        &state.helper_socket,
-        &Command::WriteFstab {
-            content: fstab_content,
-        },
-    )
-    .await
-    {
-        Ok(HelperResponse { ok: true, .. }) => {
-            summary.fstab_written = bundle_count;
-        }
-        Ok(HelperResponse { error, output, .. }) => {
-            summary.ok = false;
-            summary.notes.push(format!(
-                "fstab: {}\n{}",
-                error.unwrap_or_else(|| "helper rejected fstab".into()),
-                output
-            ));
-        }
-        Err(e) => {
-            summary.ok = false;
-            summary
-                .notes
-                .push(format!("fstab: helper unreachable: {e}"));
-        }
-    }
-
-    // ---- users -----------------------------------------------------------
-    // Each entry with a password_hash gets recreated via CreateUser
-    // (password_is_hash=true). Entries without a hash are skipped because
-    // the helper requires *some* credential to set on /etc/shadow.
-    for entry in &bundle.users {
-        let Some(hash) = &entry.password_hash else {
-            summary.users_skipped += 1;
-            summary.notes.push(format!(
-                "{}: skipped (no password_hash in backup)",
-                entry.username
-            ));
-            continue;
-        };
-        let cmd = Command::CreateUser {
-            username: entry.username.clone(),
-            password: hash.clone(),
-            full_name: entry.full_name.clone(),
-            admin: entry.admin,
-            password_is_hash: true,
-        };
-        match bananas_engine::call(&state.helper_socket, &cmd).await {
-            Ok(HelperResponse { ok: true, .. }) => summary.users_created += 1,
-            Ok(HelperResponse { error, .. }) => {
-                summary.users_skipped += 1;
-                summary.notes.push(format!(
-                    "{}: {}",
-                    entry.username,
-                    error.unwrap_or_else(|| "helper rejected create".into())
-                ));
-            }
-            Err(e) => {
-                summary.ok = false;
-                summary.users_skipped += 1;
-                summary
-                    .notes
-                    .push(format!("{}: helper unreachable: {e}", entry.username));
-            }
-        }
-    }
-
-    // ---- cloud -----------------------------------------------------------
-    // Replace the on-disk cloud.toml with the bundle's section. The
-    // server has no live state to invalidate (it reads cloud.toml on
-    // every /api/cloud/* call), so write-and-done is sufficient.
-    let cloud_toml = match toml::to_string_pretty(&bundle.cloud) {
-        Ok(s) => s,
-        Err(e) => {
-            summary.ok = false;
-            summary.notes.push(format!("cloud: serialize failed: {e}"));
-            String::new()
-        }
-    };
-    if !cloud_toml.is_empty() {
-        match bananas_engine::call(
-            &state.helper_socket,
-            &Command::WriteServiceConfig {
-                name: "cloud".into(),
-                content: cloud_toml,
-            },
-        )
-        .await
-        {
-            Ok(HelperResponse { ok: true, .. }) => {
-                summary.cloud_accounts = bundle.cloud.accounts.len();
-                summary.cloud_syncs = bundle.cloud.syncs.len();
-            }
-            Ok(HelperResponse { error, output, .. }) => {
-                summary.ok = false;
-                summary.notes.push(format!(
-                    "cloud: {}\n{}",
-                    error.unwrap_or_else(|| "helper rejected cloud".into()),
-                    output
-                ));
-            }
-            Err(e) => {
-                summary.ok = false;
-                summary
-                    .notes
-                    .push(format!("cloud: helper unreachable: {e}"));
-            }
-        }
-    }
-
-    // ---- dashboard / system raw configs ---------------------------------
-    // Stored verbatim in the bundle; restored verbatim. No parsing on
-    // either end so the schema can evolve without breaking older
-    // bundles. Empty strings = "this section wasn't in the backup",
-    // skip rather than nuking the on-disk file.
-    if !bundle.dashboard_toml.trim().is_empty() {
-        if let Err(note) =
-            write_service_toml(&state, "dashboard", bundle.dashboard_toml.clone()).await
-        {
-            summary.ok = false;
-            summary.notes.push(note);
-        } else {
-            summary.notes.push("dashboard.toml restored".into());
-        }
-    }
-    if !bundle.system_toml.trim().is_empty() {
-        if let Err(note) = write_service_toml(&state, "system", bundle.system_toml.clone()).await {
-            summary.ok = false;
-            summary.notes.push(note);
-        } else {
-            summary.notes.push("system.toml restored".into());
-        }
-    }
-
-    let status = if summary.ok {
-        StatusCode::OK
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-    };
-    (status, Json(summary)).into_response()
-}
-
-async fn write_service_toml(state: &AppState, name: &str, content: String) -> Result<(), String> {
-    match bananas_engine::call(
-        &state.helper_socket,
-        &Command::WriteServiceConfig {
-            name: name.into(),
-            content,
-        },
-    )
-    .await
-    {
-        Ok(HelperResponse { ok: true, .. }) => Ok(()),
-        Ok(HelperResponse { error, output, .. }) => Err(format!(
-            "{name}: {}\n{}",
-            error.unwrap_or_else(|| format!("helper rejected {name}")),
-            output
-        )),
-        Err(e) => Err(format!("{name}: helper unreachable: {e}")),
-    }
-}
-
 async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
     let exports_raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
     let exports_rows = exports::rows(&exports_raw)
@@ -513,12 +239,12 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
             ok: true, output, ..
         }) => {
             if output.trim().is_empty() {
-                crate::cloud::CloudConfig::default()
+                toml::Table::new()
             } else {
-                toml::from_str(&output).unwrap_or_default()
+                toml::from_str::<toml::Table>(&output).unwrap_or_default()
             }
         }
-        _ => crate::cloud::CloudConfig::default(),
+        _ => toml::Table::new(),
     };
 
     let dashboard_toml = read_service_toml(state, "dashboard").await;

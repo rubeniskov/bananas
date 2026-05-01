@@ -212,12 +212,12 @@ IMAGE_INSTALL += " \
     bananas-modprobe \
 "
 
-# Cloud sync runtime: ships /usr/bin/rclone (vendored prebuilt armv7
-# binary). Pulled by the helper's RunCloudSync command when the operator
-# clicks "Run now" in the Cloud tab.
-IMAGE_INSTALL += " \
-    bananas-rclone \
-"
+# Cloud sync is OPTIONAL — operators who want it run
+# `opkg install bananas-cloud`, which Depends on bananas-rclone +
+# bananas-webadmin and drops the manifest that lights up the Cloud
+# tab in the SPA. The default image stays lean (~56 MB smaller —
+# rclone alone is a hefty Go binary). Don't pull bananas-rclone or
+# bananas-cloud into IMAGE_INSTALL here.
 
 # LCD dashboard (Slint app on /dev/fb0 via DRM/KMS). Pulls bananas-stats
 # + the runtime libs (fontconfig + udev + xkbcommon + libinput) in as

@@ -13,10 +13,12 @@ Group=bananas
 ExecStart=/usr/bin/bananas-router
 Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
 Environment=BANANAS_EXTENSIONS_DIR=/etc/bananas/extensions.d
-# Reload re-reads the manifest dir so freshly opkg-installed
-# extensions (which drop a new .toml under extensions.d/) become
-# reachable without a hard restart.
-ExecReload=/bin/kill -HUP $MAINPID
+# Manifest changes (opkg install/remove of an extension package)
+# require a hard restart for now: the postinst of each extension
+# package issues `systemctl restart bananas-router.service`. Adding
+# SIGHUP-driven re-read in the binary is a small follow-up; for the
+# first version, the restart cost (~50 ms) is negligible vs the
+# correctness win of the simpler model.
 Restart=on-failure
 RestartSec=2
 

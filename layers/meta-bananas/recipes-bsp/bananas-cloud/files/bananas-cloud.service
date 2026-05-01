@@ -1,0 +1,27 @@
+[Unit]
+Description=BanaNAS cloud-sync plugin daemon
+After=local-fs.target bananas-engine.service
+Requires=bananas-engine.service
+
+[Service]
+Type=simple
+User=bananas
+Group=bananas
+ExecStart=/usr/bin/bananas-cloud
+# Shared with bananas-engine + bananas-router + bananas-webadmin.
+# Preserve so the engine/webadmin sockets in /run/bananas/ aren't
+# ripped out from under them when this unit cycles.
+RuntimeDirectory=bananas
+RuntimeDirectoryPreserve=yes
+# Same StateDirectory as bananas-webadmin so the shared session.key
+# is reachable. Both daemons run as the `bananas` user.
+StateDirectory=bananas
+StateDirectoryMode=0700
+Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
+Environment=BANANAS_CLOUD_SOCKET=/run/bananas/cloud.sock
+Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

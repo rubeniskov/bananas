@@ -1,0 +1,9 @@
+# bananas-cloud — extension manifest read by bananas-router on startup.
+# Declares the path prefixes this daemon owns; longest-prefix-match in
+# the router routes /api/cloud/* and /cloud/* here over the Unix
+# socket. The core webadmin's "/" catch-all picks up everything else.
+id = "cloud"
+label = "Cloud sync"
+socket = "/run/bananas/cloud.sock"
+prefixes = ["/api/cloud", "/cloud"]
+spa_path = "/cloud"
