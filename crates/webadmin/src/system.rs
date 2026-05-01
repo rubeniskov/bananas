@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::AppState;
-use crate::stats::{err_400, err_500};
+use crate::errors::{err_400, err_500};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]

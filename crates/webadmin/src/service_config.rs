@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::AppState;
-use crate::stats::{err_400, err_500};
+use crate::errors::{err_400, err_500};
 
 /// Read the named config file via the helper. `default_toml` is rendered
 /// when the on-disk file is missing or empty so the UI editor always
@@ -67,35 +67,10 @@ pub async fn write(state: &AppState, name: &'static str, content: String) -> Res
     }
 }
 
-/// GET handler for /api/dashboard/config.
-pub async fn get_dashboard(State(state): State<AppState>) -> Response {
-    read(&state, "dashboard", default_dashboard_toml).await
-}
-
-/// PUT handler for /api/dashboard/config.
-pub async fn put_dashboard(State(state): State<AppState>, Json(req): Json<PutConfig>) -> Response {
-    write(&state, "dashboard", req.config).await
-}
-
-fn default_dashboard_toml() -> String {
-    // Flat schema — dashboard.toml owns only render-side fields plus
-    // the live-socket subscribe path. No subsections; the file is the
-    // dashboard config in its entirety.
-    let cfg = serde_json::json!({
-        "width": 800u32,
-        "height": 480u32,
-        "title": "bananas-dashboard",
-        "theme": "auto",
-        "spark_window": 60u32,
-        "refresh_ms": 2000u32,
-        "socket": "/run/bananas/stats.sock",
-    });
-    let body = toml::to_string_pretty(&cfg).unwrap_or_default();
-    format!(
-        "# /etc/bananas/dashboard.toml — bananas-dashboard appearance + socket subscribe path.\n\
-         # Sampler-side fields live in stats.toml.\n\n{body}"
-    )
-}
+// /api/dashboard/config moved to bananas-dashboard-web in
+// commit 7. The `read`/`write` helpers below still serve
+// /api/system/config (system.toml is host-level config that
+// stays on webadmin).
 
 /// GET handler for /api/system/config.
 pub async fn get_system(State(state): State<AppState>) -> Response {

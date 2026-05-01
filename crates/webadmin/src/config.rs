@@ -193,7 +193,11 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
 }
 
 async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
-    let exports_raw = std::fs::read_to_string(&*state.exports_path).unwrap_or_default();
+    // Read the canonical /etc/exports + /etc/fstab paths directly;
+    // the per-feature plugins own their own writes via
+    // bananas-engine, but the host's config-export bundle still
+    // needs to slurp the rows for the TOML dump.
+    let exports_raw = std::fs::read_to_string("/etc/exports").unwrap_or_default();
     let exports_rows = exports::rows(&exports_raw)
         .into_iter()
         .map(|r| ExportEntry {
