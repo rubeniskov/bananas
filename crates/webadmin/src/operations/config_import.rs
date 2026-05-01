@@ -272,6 +272,20 @@ async fn run_import(
                 summary.cloud_accounts = accounts_count;
                 summary.cloud_syncs = syncs_count;
                 log!("  → cloud config written");
+                // Install-to-activate hint: if the operator imported a
+                // bundle with a cloud section but bananas-cloud isn't
+                // installed yet, the file is preserved on disk for a
+                // future `opkg install bananas-cloud` to pick up — but
+                // /api/cloud/* will 404 until that install lands.
+                // Surface the hint in the import summary so the
+                // operator isn't surprised.
+                if !cloud_extension_installed() {
+                    let hint = "cloud config preserved on disk; run \
+                         `opkg install bananas-cloud` to activate"
+                        .to_string();
+                    log!("  → {hint}");
+                    summary.notes.push(hint);
+                }
             }
             Ok(HelperResponse { error, output, .. }) => {
                 summary.ok = false;
@@ -365,4 +379,15 @@ async fn write_service_toml(
         )),
         Err(e) => Err(format!("{name}: helper unreachable: {e}")),
     }
+}
+
+/// Quick filesystem probe — does /etc/bananas/extensions.d/cloud.toml
+/// exist? bananas-cloud's IPK drops it on install and removes it on
+/// uninstall, so this is the canonical "is the cloud plugin
+/// installed?" check. Cheap (one `stat`); no helper round-trip.
+fn cloud_extension_installed() -> bool {
+    let dir: std::path::PathBuf = std::env::var_os("BANANAS_EXTENSIONS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/etc/bananas/extensions.d".into());
+    dir.join("cloud.toml").exists()
 }

@@ -49,8 +49,20 @@ pub struct ConfigBundle {
     pub system_toml: String,
 }
 
+/// Current bundle schema version.
+///
+/// v2 (May 2026): the `cloud` section is an opaque toml::Table that
+/// bananas-webadmin round-trips without parsing; bananas-cloud (when
+/// installed) is the only consumer that knows the schema. Imports
+/// preserve the section even when bananas-cloud is absent so a
+/// reflash → "Save config" → "Load config" cycle keeps cloud
+/// accounts + tokens warm for a future `opkg install bananas-cloud`.
+///
+/// v1 bundles still parse cleanly because the `cloud` field's
+/// internal layout was always wrapped under a `[cloud]` table key —
+/// only the deserializer's Rust type changed.
 pub fn default_version() -> u32 {
-    1
+    2
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,7 +263,7 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
     let system_toml = read_service_toml(state, "system").await;
 
     Ok(ConfigBundle {
-        version: 1,
+        version: default_version(),
         exports: exports_rows,
         fstab: fstab_rows,
         users,
