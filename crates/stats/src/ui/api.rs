@@ -791,60 +791,61 @@ pub async fn fetch_net_range(iface: &str, window: &str) -> Result<Vec<NetSeriesP
     Ok(env.points)
 }
 
-/// Live-snapshot websocket. Wraps gloo-net's `WebSocket` with a small
-/// `next_snapshot()` so callers don't have to know about the framing.
+/// Live-snapshot stream. Replaces the previous `gloo_net::WebSocket`
+/// path with a server-streaming gRPC-Web RPC (`bananas.stats.v1.
+/// StatsService::Live`) carried over `tonic-web-wasm-client`.
+///
+/// The server still emits the same JSON-encoded `StatsSnapshot`
+/// (wrapped in a `LiveSnapshot { snapshot_json }` message) — the
+/// SPA-side parse stays `serde_json::from_str::<StatsSnapshot>`
+/// until the proto sub-types catch up in PR-5.
 pub struct StatsWs {
-    inner: gloo_net::websocket::futures::WebSocket,
+    inner: tonic::Streaming<bananas_proto::stats::v1::LiveSnapshot>,
 }
 
 impl StatsWs {
-    /// Returns the next decoded snapshot, or `None` if the socket
+    /// Returns the next decoded snapshot, or `None` if the stream
     /// closes / errors. Caller is expected to back off and reopen.
     pub async fn next_snapshot(&mut self) -> Option<StatsSnapshot> {
-        use futures::StreamExt;
-        use gloo_net::websocket::Message;
         loop {
-            match self.inner.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    match serde_json::from_str::<StatsSnapshot>(&text) {
-                        Ok(snap) => return Some(snap),
-                        Err(e) => {
-                            tracing::warn!(?e, "stats ws: bad payload");
-                            // Skip and wait for the next one.
-                        }
+            match self.inner.message().await {
+                Ok(Some(msg)) => match serde_json::from_str::<StatsSnapshot>(&msg.snapshot_json) {
+                    Ok(snap) => return Some(snap),
+                    Err(e) => {
+                        tracing::warn!(?e, "stats live: bad payload");
                     }
-                }
-                Some(Ok(Message::Bytes(_))) => {
-                    // Server only sends text frames.
-                }
-                Some(Err(e)) => {
-                    tracing::warn!(?e, "stats ws: error");
+                },
+                Ok(None) => return None,
+                Err(e) => {
+                    tracing::warn!(?e, "stats live: stream error");
                     return None;
                 }
-                None => return None,
             }
         }
     }
 }
 
-/// Open the stats websocket relative to the document's origin
-/// (so http→ws / https→wss).
-pub fn open_stats_ws() -> Result<StatsWs, ApiError> {
+/// Open the live-snapshot gRPC-Web stream relative to the document's
+/// origin. `tonic-web-wasm-client` issues a POST to
+/// `/api/grpc/bananas.stats.v1.StatsService/Live` with the right
+/// gRPC-Web framing; webadmin's tonic-web layer translates and
+/// dispatches to `webadmin::grpc::StatsSvc::live`.
+pub async fn open_stats_ws() -> Result<StatsWs, ApiError> {
+    use bananas_proto::stats::v1::{LiveRequest, stats_service_client::StatsServiceClient};
+
     let location = web_sys::window()
-        .and_then(|w| w.location().host().ok())
-        .ok_or_else(|| ApiError::Other("no window.location.host".into()))?;
-    let proto = web_sys::window()
-        .and_then(|w| w.location().protocol().ok())
-        .unwrap_or_else(|| "http:".into());
-    let ws_proto = if proto.starts_with("https") {
-        "wss"
-    } else {
-        "ws"
-    };
-    let url = format!("{ws_proto}://{location}/api/stats/live");
-    let inner = gloo_net::websocket::futures::WebSocket::open(&url)
-        .map_err(|e| ApiError::Other(format!("ws open: {e}")))?;
-    Ok(StatsWs { inner })
+        .and_then(|w| w.location().origin().ok())
+        .ok_or_else(|| ApiError::Other("no window.location.origin".into()))?;
+    let base = format!("{location}/api/grpc");
+    let client = tonic_web_wasm_client::Client::new(base);
+    let mut grpc = StatsServiceClient::new(client);
+    let resp = grpc
+        .live(LiveRequest::default())
+        .await
+        .map_err(|e| ApiError::Other(format!("stats live open: {e}")))?;
+    Ok(StatsWs {
+        inner: resp.into_inner(),
+    })
 }
 
 pub async fn fetch_disk_range(

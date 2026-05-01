@@ -5,16 +5,28 @@
 //! `tonic_web::GrpcWebLayer` translates that into a normal gRPC
 //! request that flows through the standard tonic service router.
 //!
-//! At PR-1 we host a single trivial `HealthService::Check` RPC —
-//! the SPA's gRPC-Web round-trip probe. Real plugin services
-//! (cloud, stats, …) move in subsequent PRs and will live in
-//! their own daemons; webadmin keeps just the host-level RPCs
-//! (auth, version, system, …) once the rest are migrated.
+//! Today this hosts:
+//! - `bananas.health.v1.HealthService::Check` — round-trip probe.
+//! - `bananas.stats.v1.StatsService::Live` — server-streaming
+//!   snapshots, replacing the previous `/api/stats/live`
+//!   WebSocket. Webadmin owns its own `LiveBus` that taps
+//!   `/run/bananas/stats.sock` (the bananas-stats Unix pub/sub).
+//!
+//! Subsequent PRs migrate the per-plugin RPCs to their own
+//! daemons + add cross-daemon gRPC routing through bananas-router.
+
+use std::pin::Pin;
 
 use bananas_proto::health::v1::{
     CheckRequest, CheckResponse,
     health_service_server::{HealthService, HealthServiceServer},
 };
+use bananas_proto::stats::v1::{
+    LiveRequest, LiveSnapshot,
+    stats_service_server::{StatsService, StatsServiceServer},
+};
+use bananas_stats::live_bus::LiveBus;
+use futures_util::Stream;
 use tonic::{Request, Response, Status};
 
 #[derive(Default, Clone)]
@@ -30,11 +42,60 @@ impl HealthService for HealthSvc {
     }
 }
 
+#[derive(Clone)]
+pub struct StatsSvc {
+    bus: LiveBus,
+}
+
+impl StatsSvc {
+    pub fn new(bus: LiveBus) -> Self {
+        Self { bus }
+    }
+}
+
+#[tonic::async_trait]
+impl StatsService for StatsSvc {
+    type LiveStream = Pin<Box<dyn Stream<Item = Result<LiveSnapshot, Status>> + Send + 'static>>;
+
+    async fn live(&self, _req: Request<LiveRequest>) -> Result<Response<Self::LiveStream>, Status> {
+        let mut rx = self.bus.subscribe();
+        let stream = async_stream::stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(payload) => {
+                        // The bus payload is already a JSON-encoded
+                        // Snapshot; pass it through verbatim. PR-5
+                        // will replace the JSON wrapper with a fully
+                        // typed StatsSnapshot proto.
+                        yield Ok(LiveSnapshot {
+                            snapshot_json: payload.as_str().to_string(),
+                        });
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        // Slow consumer — surface as a stream error
+                        // so the SPA reconnects rather than queuing
+                        // stale data.
+                        yield Err(Status::resource_exhausted(format!(
+                            "live stream lagged by {n} messages; reconnect"
+                        )));
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+        };
+        Ok(Response::new(Box::pin(stream) as Self::LiveStream))
+    }
+}
+
 /// Build the tower service that handles every gRPC + gRPC-Web
 /// request. Returned as an axum-compatible `Router` so the public
 /// app can mount it at `/api/grpc/*`. The `GrpcWebLayer` translates
 /// browser-issued gRPC-Web frames to native gRPC; native HTTP/2
 /// gRPC also works (handy for `grpcurl`).
-pub fn build_grpc_router() -> tonic::service::Routes {
+pub fn build_grpc_router(live_bus: LiveBus) -> tonic::service::Routes {
     tonic::service::Routes::new(HealthServiceServer::new(HealthSvc))
+        .add_service(StatsServiceServer::new(StatsSvc::new(live_bus)))
 }

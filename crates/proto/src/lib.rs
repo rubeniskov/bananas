@@ -19,3 +19,9 @@ pub mod health {
         include!(concat!(env!("OUT_DIR"), "/bananas.health.v1.rs"));
     }
 }
+
+pub mod stats {
+    pub mod v1 {
+        include!(concat!(env!("OUT_DIR"), "/bananas.stats.v1.rs"));
+    }
+}

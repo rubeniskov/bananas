@@ -203,6 +203,18 @@ async fn main() -> Result<()> {
         router_socket: Arc::new(router_socket),
         asset_map,
     };
+    // Live-snapshot bus — taps bananas-stats's Unix pub/sub once
+    // and fans out to every gRPC streaming subscriber. Same
+    // multiplex bananas-stats-web uses for its (legacy)
+    // WebSocket route. Path is configurable via
+    // BANANAS_STATS_LIVE_SOCKET so the e2e harness can point
+    // it at a tmpdir socket.
+    let live_socket: PathBuf = std::env::var_os("BANANAS_STATS_LIVE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/stats.sock".into());
+    let live_bus = bananas_stats::live_bus::LiveBus::new();
+    live_bus.start_socket(live_socket);
+
     // gRPC stack: every `/api/grpc/*` path is handled by tonic
     // (with tonic-web translating browser-side gRPC-Web frames
     // to native gRPC). Paths like
@@ -211,7 +223,7 @@ async fn main() -> Result<()> {
     // before tonic dispatches. Everything else (legacy /api/*
     // JSON, /assets/*, /) keeps its existing paths during the
     // gRPC migration. PR-5 retires the JSON sub-proxy.
-    let grpc_routes = grpc::build_grpc_router();
+    let grpc_routes = grpc::build_grpc_router(live_bus);
     let grpc_axum: axum::Router = grpc_routes.into_axum_router();
     let grpc_service = tower::ServiceBuilder::new()
         .layer(tonic_web::GrpcWebLayer::new())

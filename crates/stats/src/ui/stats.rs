@@ -72,7 +72,7 @@ pub fn StatsPage() -> Element {
         spawn(async move {
             let mut backoff_ms = 500u32;
             loop {
-                match api::open_stats_ws() {
+                match api::open_stats_ws().await {
                     Ok(mut ws) => {
                         backoff_ms = 500;
                         while let Some(snap) = ws.next_snapshot().await {
@@ -80,7 +80,7 @@ pub fn StatsPage() -> Element {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(?e, "stats ws open failed; backing off {}ms", backoff_ms);
+                        tracing::warn!(?e, "stats live open failed; backing off {}ms", backoff_ms);
                     }
                 }
                 gloo_timers::future::TimeoutFuture::new(backoff_ms).await;

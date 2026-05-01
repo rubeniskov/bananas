@@ -27,7 +27,7 @@ bananas-config = { path = "crates/config" }
 bananas-mfe-runtime = { path = "crates/mfe-runtime" }
 bananas-config-form = { path = "crates/config-form" }
 bananas-config-form-derive = { path = "crates/config-form-derive" }
-bananas-proto = { path = "crates/proto" }
+bananas-proto = { path = "crates/proto", default-features = false }
 
 # gRPC stack — tonic 0.14 + prost 0.14. Pinned at workspace so
 # the proto crate, the server-side daemons, and the wasm SPA

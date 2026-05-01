@@ -15,6 +15,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 pub mod config;
+pub mod live_bus;
 pub mod live_socket;
 pub mod metrics;
 pub mod storage;

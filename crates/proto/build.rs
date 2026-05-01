@@ -36,6 +36,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
+        // Skip the codegen helpers that reference
+        // `tonic::transport::Channel` directly — those don't
+        // compile to wasm32 (transport pulls hyper). Generated
+        // `*ServiceClient::new(channel)` works with any
+        // `tonic::client::GrpcService` impl, so the SPA passes a
+        // `tonic_web_wasm_client::Client` and daemon-side code
+        // builds a real `tonic::transport::Channel` itself.
+        .build_transport(false)
         // Re-export the generated `mod`s under nicer Rust names —
         // `bananas.health.v1` becomes `bananas::health::v1`. See
         // src/lib.rs for the include glue.

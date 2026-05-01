@@ -1,0 +1,35 @@
+// bananas-stats: live + historical snapshot RPCs.
+//
+// PR-2 only fills in `Live` — the server-streaming RPC that
+// replaces the previous (broken) `/api/stats/live` WebSocket.
+// `Snapshot` and `Range` follow in later PRs once the JSON shape
+// is stable enough to copy over to proto verbatim.
+//
+// `LiveSnapshot.snapshot_json` carries the same JSON-encoded
+// `bananas_stats::metrics::Snapshot` the legacy WebSocket emitted.
+// PR-5 will replace the JSON wrapper with a fully-typed
+// `StatsSnapshot` message; until then the SPA decodes the JSON
+// with the same `serde_json::from_str::<Snapshot>` it used over
+// the WebSocket. Strictly speaking this is "JSON inside protobuf"
+// and forfeits the wire-typing win — but it lets PR-2 ship the
+// streaming-channel-correctness piece (replace WebSocket with
+// gRPC server-stream) without also rewriting every Snapshot
+// sub-type in proto IDL.
+
+syntax = "proto3";
+
+package bananas.stats.v1;
+
+service StatsService {
+  // Server-streaming live snapshots, ~1 Hz, indefinite. The
+  // client typically opens this once on page load and re-opens
+  // on disconnect.
+  rpc Live(LiveRequest) returns (stream LiveSnapshot);
+}
+
+message LiveRequest {}
+
+message LiveSnapshot {
+  // serde_json::to_string(&bananas_stats::metrics::Snapshot)
+  string snapshot_json = 1;
+}

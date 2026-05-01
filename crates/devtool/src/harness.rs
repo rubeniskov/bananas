@@ -70,7 +70,16 @@ const PLUGINS: &[(&str, &str, &str, &str, u32, &str)] = &[
 
 /// A running test environment. Drop it to tear everything down.
 pub struct Harness {
-    tmp: TempDir,
+    /// `Some(TempDir)` when the harness owns the cleanup. `None`
+    /// when `BANANAS_E2E_KEEP=1` was set — TempDir::keep() is
+    /// called so the dir survives the test run for post-mortem
+    /// inspection. The held `Option` keeps the destructor inert
+    /// in the keep-mode case.
+    #[allow(dead_code)]
+    tmp: Option<TempDir>,
+    /// Path to whichever tmp the harness used — set in both modes
+    /// so `Harness::tmp()` keeps working.
+    tmp_path: std::path::PathBuf,
     port: u16,
     children: Vec<(String, Child)>,
     http: reqwest::Client,
@@ -131,8 +140,20 @@ impl Harness {
             .build()
             .context("reqwest client")?;
 
+        let tmp_path = tmp.path().to_path_buf();
+        let keep = std::env::var_os("BANANAS_E2E_KEEP").is_some();
+        let tmp_owned = if keep {
+            // Surface the kept path on stderr so a CI/debug log
+            // can grep it out.
+            eprintln!("[harness] keeping tmp dir: {}", tmp_path.display());
+            let _ = tmp.keep();
+            None
+        } else {
+            Some(tmp)
+        };
         let h = Self {
-            tmp,
+            tmp: tmp_owned,
+            tmp_path,
             port,
             children,
             http,
@@ -149,7 +170,7 @@ impl Harness {
     /// Path to the harness's tmpdir. Tests can read daemon log
     /// files (`<bin>.log`) here when debugging a flaky run.
     pub fn tmp(&self) -> &Path {
-        self.tmp.path()
+        &self.tmp_path
     }
 
     /// Shared `reqwest::Client` with cookie storage enabled. After
@@ -235,7 +256,32 @@ fn spawn(bin: &Path, env: &[(String, std::ffi::OsString)]) -> Result<Child> {
     for (k, v) in env {
         cmd.env(k, v);
     }
-    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    // Tee to a per-binary log file under the harness tmp so tests
+    // can fish out daemon stderr when something goes wrong. The
+    // tmp lives only for the harness's lifetime so this doesn't
+    // leak.
+    let log_dir = std::path::PathBuf::from(
+        env.iter()
+            .find(|(k, _)| k == "BANANAS_OPERATIONS_JOURNAL")
+            .map(|(_, v)| {
+                std::path::Path::new(v)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/tmp"))
+            })
+            .unwrap_or(std::path::Path::new("/tmp"))
+            .as_os_str(),
+    );
+    let log_path = log_dir.join(format!(
+        "{}.log",
+        bin.file_name().and_then(|s| s.to_str()).unwrap_or("daemon")
+    ));
+    let log_file = std::fs::File::create(&log_path).ok();
+    if let Some(f) = log_file {
+        let f2 = f.try_clone().expect("dup log fd");
+        cmd.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
+    } else {
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    }
     cmd.spawn()
         .with_context(|| format!("spawn {}", bin.display()))
 }
