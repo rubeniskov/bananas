@@ -48,6 +48,7 @@ libc.workspace = true
 
 # SPA-only — pulled in only when target = wasm32-unknown-unknown.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+bananas-mfe-runtime.workspace = true
 dioxus.workspace = true
 gloo-net = { workspace = true, features = ["http"] }
 gloo-timers = { version = "0.3", features = ["futures"] }

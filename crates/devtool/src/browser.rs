@@ -28,16 +28,26 @@ use serde::de::DeserializeOwned;
 pub struct Browser {
     inner: ChromiumBrowser,
     _handler: tokio::task::JoinHandle<()>,
+    // Keep the user-data-dir alive for the chrome process's
+    // lifetime — chromium re-opens profile files after launch
+    // (cookie store, history, etc.) and crashes if they vanish.
+    _user_data_dir: tempfile::TempDir,
 }
 
 impl Browser {
     /// Launch headless chrome. The handler task in the background
     /// drains the CDP event stream — without it the page object
     /// wedges as soon as the first event arrives.
+    ///
+    /// Each Browser gets a unique `--user-data-dir` so multiple
+    /// tests can launch chrome in parallel without colliding on
+    /// chrome's `SingletonLock` profile-directory guard.
     pub async fn launch() -> Result<Self> {
         let chrome = locate_chrome().context("locate chrome binary")?;
+        let user_data_dir = tempfile::tempdir().context("tempdir for chrome user-data-dir")?;
         let config = BrowserConfig::builder()
             .chrome_executable(chrome)
+            .user_data_dir(user_data_dir.path())
             .request_timeout(Duration::from_secs(15))
             .build()
             .map_err(|e| anyhow!("BrowserConfig: {e}"))?;
@@ -54,6 +64,7 @@ impl Browser {
         Ok(Self {
             inner: browser,
             _handler: handler_task,
+            _user_data_dir: user_data_dir,
         })
     }
 

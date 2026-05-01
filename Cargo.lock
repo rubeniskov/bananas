@@ -518,6 +518,7 @@ dependencies = [
  "axum",
  "bananas-devtool",
  "bananas-engine",
+ "bananas-mfe-runtime",
  "bananas-server-common",
  "console_error_panic_hook",
  "dioxus",
@@ -566,6 +567,7 @@ dependencies = [
  "axum",
  "bananas-devtool",
  "bananas-engine",
+ "bananas-mfe-runtime",
  "bananas-server-common",
  "bananas-stats",
  "console_error_panic_hook",
@@ -633,6 +635,7 @@ dependencies = [
  "axum",
  "bananas-devtool",
  "bananas-engine",
+ "bananas-mfe-runtime",
  "bananas-server-common",
  "console_error_panic_hook",
  "dioxus",
@@ -651,6 +654,15 @@ dependencies = [
  "tracing-wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "bananas-mfe-runtime"
+version = "1.4.0"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
  "web-sys",
 ]
 
@@ -692,6 +704,7 @@ dependencies = [
  "axum",
  "bananas-devtool",
  "bananas-engine",
+ "bananas-mfe-runtime",
  "bananas-server-common",
  "console_error_panic_hook",
  "dioxus",
@@ -729,6 +742,7 @@ dependencies = [
  "axum",
  "bananas-devtool",
  "bananas-engine",
+ "bananas-mfe-runtime",
  "bananas-server-common",
  "console_error_panic_hook",
  "dioxus",
@@ -758,6 +772,7 @@ dependencies = [
  "axum",
  "bananas-devtool",
  "bananas-engine",
+ "bananas-mfe-runtime",
  "bananas-server-common",
  "console_error_panic_hook",
  "dioxus",

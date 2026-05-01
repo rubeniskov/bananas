@@ -24,6 +24,13 @@ fn main() {
         if let Some(document) = window.document() {
             if let Some(el) = document.get_element_by_id(&root) {
                 el.set_inner_html("");
+                // Stop dioxus-delegated events from bubbling out of
+                // this MFE root into the host's #main listener.
+                // Without this, host's vdom looks up plugin
+                // `data-dioxus-id`s in its own node table and
+                // dispatches the wrong handler — visibly: clicking
+                // a form input pops the host user-menu dropdown.
+                bananas_mfe_runtime::isolate_root(&el);
             }
         }
     }

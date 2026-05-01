@@ -61,6 +61,7 @@ futures-util.workspace = true
 
 # SPA-only deps.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+bananas-mfe-runtime.workspace = true
 dioxus.workspace = true
 gloo-net = { workspace = true, features = ["http", "websocket"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
