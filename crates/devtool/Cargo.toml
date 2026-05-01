@@ -26,3 +26,9 @@ sha-crypt.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls"] }
 tempfile = "3"
 rand.workspace = true
+# CDP-direct browser driver — same Chromium engine playwright uses,
+# no chromedriver subprocess needed. The runtime expects a chrome
+# binary on disk; tests look it up via BANANAS_CHROME or fall back
+# to /usr/bin/chromium / google-chrome / the playwright cache.
+chromiumoxide = { version = "0.9", default-features = false }
+futures-util.workspace = true

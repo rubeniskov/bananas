@@ -10,6 +10,8 @@
 //! `/home/rubeniskov/.claude/plans/gleaming-stargazing-boot.md` for
 //! the migration plan.
 
+mod browser;
 mod harness;
 
+pub use browser::{Browser, Page};
 pub use harness::{Harness, HarnessHandle, TEST_PASSWORD};
