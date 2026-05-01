@@ -37,7 +37,22 @@ fn main() {
     // first paint already reflects the operator's choice — avoids a
     // brief light-flash when reloading on a dark-themed setup.
     theme::apply(theme::load());
-    dioxus::launch(App);
+
+    // Override dioxus-web's default WebHistory with MemoryHistory.
+    // The host SPA owns URL state via direct `history.replaceState`
+    // calls in `canonicalize_url(page)`; we don't want dioxus-web's
+    // launch path also rewriting `window.location` based on
+    // `Dioxus.toml`'s base_path. Today base_path = "/" so the bug
+    // (`base_path + base_path` double-prefix from
+    // `WebHistory::route_from_location`'s strip-or-fallback) doesn't
+    // fire, but the same launch path bit cloud-ui hard. This keeps
+    // them aligned defensively.
+    use std::rc::Rc;
+    let history: Rc<dyn dioxus::history::History> =
+        Rc::new(dioxus::history::MemoryHistory::default());
+    dioxus::LaunchBuilder::new()
+        .with_cfg(dioxus::web::Config::new().history(history))
+        .launch(App);
 }
 
 #[derive(Clone, Copy, PartialEq)]
