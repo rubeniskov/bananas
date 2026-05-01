@@ -1,0 +1,6 @@
+id = "storage"
+label = "Storage"
+socket = "/run/bananas/storage.sock"
+api_prefix = "/api/storage"
+order = 30
+icon = "hard-drive"

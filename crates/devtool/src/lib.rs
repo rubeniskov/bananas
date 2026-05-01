@@ -11,7 +11,9 @@
 //! the migration plan.
 
 mod browser;
+mod container;
 mod harness;
 
 pub use browser::{Browser, Page};
+pub use container::{CONTAINER_TEST_PASSWORD, Container, ExecOutput, IMAGE_TAG};
 pub use harness::{Harness, HarnessHandle, TEST_PASSWORD};

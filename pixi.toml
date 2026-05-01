@@ -302,6 +302,35 @@ cargo build --workspace --bins
 cargo test --workspace --tests
 '"""
 
+# `build-test-container`: bake the `bananas-test:latest` image used
+# by `bananas-devtool::Container`. Pre-builds the host-target debug
+# binaries the Dockerfile copies in, then runs `docker build`.
+# Re-run after touching daemon source — the image embeds the
+# binaries by COPY, no live mount.
+[tasks.build-test-container]
+cmd = """bash -c '
+set -e
+unset CARGO RUSTC
+export RUSTUP_TOOLCHAIN=stable
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo build --workspace --bins
+docker build -t bananas-test:latest -f tests/container/Dockerfile .
+'"""
+
+# `e2e-container`: same shape as `e2e` but ALSO runs the
+# `#[ignore]`-gated container-touching tests. Requires docker on
+# the host context (`docker context use default`), and rebuilds
+# the test image first.
+[tasks.e2e-container]
+cmd = """bash -c '
+set -e
+unset CARGO RUSTC
+export RUSTUP_TOOLCHAIN=stable
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo test --workspace --tests -- --include-ignored
+'"""
+depends-on = ["build-test-container"]
+
 [dependencies]
 python = "==3.11"
 chrpath = "*"

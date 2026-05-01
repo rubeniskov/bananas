@@ -1,0 +1,6 @@
+id = "exports"
+label = "Exports"
+socket = "/run/bananas/exports.sock"
+api_prefix = "/api/exports"
+order = 20
+icon = "share-2"
