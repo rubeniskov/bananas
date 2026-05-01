@@ -1,0 +1,25 @@
+// Liveness probe — the cheapest possible RPC, used by the SPA
+// at startup to verify the gRPC-Web stack is wired up end-to-end.
+// All other plugin protos eventually live under bananas.<plugin>.v1
+// packages; this one is global so the router can dispatch /Check
+// regardless of which plugin daemon is up.
+
+syntax = "proto3";
+
+package bananas.health.v1;
+
+service HealthService {
+  // Plain unary echo. The response carries `version` (the daemon's
+  // CARGO_PKG_VERSION) so a misrouted call returns whose version
+  // it actually hit.
+  rpc Check(CheckRequest) returns (CheckResponse);
+}
+
+message CheckRequest {}
+
+message CheckResponse {
+  string version = 1;
+  // Daemon name, e.g. "bananas-webadmin". Useful for diagnostics
+  // when multiple daemons answer the same RPC during transition.
+  string daemon = 2;
+}

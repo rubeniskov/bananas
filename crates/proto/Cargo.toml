@@ -1,0 +1,32 @@
+[package]
+name = "bananas-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Central .proto definitions + tonic/prost-generated Rust types for every BanaNAS service. Daemons import the generated server traits, the wasm SPA imports the generated clients."
+
+[lib]
+path = "src/lib.rs"
+
+# Both host (daemons + tests) and wasm32 (SPA) consume this
+# crate. The host build pulls in tonic transport for serving;
+# wasm pulls only the prost-generated message types and the
+# client stubs (server transport is gated off via a feature).
+[features]
+default = ["server"]
+# Enable the tonic server side. Only the daemons turn this on;
+# the wasm SPA leaves it off because tonic's transport module
+# pulls hyper which doesn't compile to wasm32-unknown-unknown.
+server = ["tonic/transport", "tonic/router"]
+
+[dependencies]
+tonic = { workspace = true, default-features = false, features = ["codegen"] }
+prost.workspace = true
+tonic-prost = "0.14"
+
+[build-dependencies]
+tonic-build = { workspace = true, default-features = false }
+protoc-bin-vendored.workspace = true
+tonic-prost-build = "0.14"

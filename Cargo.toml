@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud", "crates/exports", "crates/storage", "crates/users", "crates/devtool", "crates/mfe-runtime", "crates/config-form", "crates/config-form-derive"]
+members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud", "crates/exports", "crates/storage", "crates/users", "crates/devtool", "crates/mfe-runtime", "crates/config-form", "crates/config-form-derive", "crates/proto"]
 exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
 resolver = "3"
 
@@ -27,6 +27,23 @@ bananas-config = { path = "crates/config" }
 bananas-mfe-runtime = { path = "crates/mfe-runtime" }
 bananas-config-form = { path = "crates/config-form" }
 bananas-config-form-derive = { path = "crates/config-form-derive" }
+bananas-proto = { path = "crates/proto" }
+
+# gRPC stack — tonic 0.14 + prost 0.14. Pinned at workspace so
+# the proto crate, the server-side daemons, and the wasm SPA
+# clients all see the same generated-code shape. tonic-web is the
+# server-side HTTP/2 ↔ gRPC-Web translator (mounted at /api/grpc/*
+# on the public TCP face); tonic-web-wasm-client is the browser
+# side, gated to wasm32 only.
+tonic = { version = "0.14", default-features = false }
+tonic-web = { version = "0.14" }
+prost = { version = "0.14" }
+tonic-build = { version = "0.14", default-features = false }
+tonic-web-wasm-client = { version = "0.9" }
+# Vendor protoc into the build-host so cross-builds via
+# cargo-zigbuild + Yocto bitbake don't depend on a system-installed
+# protoc binary.
+protoc-bin-vendored = { version = "3.2" }
 
 # Workspace-wide tokio feature subset. "full" pulls in fs, io, mio, net,
 # parking_lot, process, rt, rt-multi-thread, signal, sync, time, macros,

@@ -36,6 +36,7 @@ mod config;
 mod embedded;
 mod errors;
 mod extensions;
+mod grpc;
 // `exports` and `fstab` keep the lightweight parsers used by
 // `config::build_bundle` + `operations::config_import` to dump
 // and restore /etc/exports + /etc/fstab as a TOML bundle. The
@@ -202,7 +203,24 @@ async fn main() -> Result<()> {
         router_socket: Arc::new(router_socket),
         asset_map,
     };
+    // gRPC stack: every `/api/grpc/*` path is handled by tonic
+    // (with tonic-web translating browser-side gRPC-Web frames
+    // to native gRPC). Paths like
+    // `/api/grpc/bananas.health.v1.HealthService/Check` are
+    // stripped to `/bananas.health.v1.HealthService/Check`
+    // before tonic dispatches. Everything else (legacy /api/*
+    // JSON, /assets/*, /) keeps its existing paths during the
+    // gRPC migration. PR-5 retires the JSON sub-proxy.
+    let grpc_routes = grpc::build_grpc_router();
+    let grpc_axum: axum::Router = grpc_routes.into_axum_router();
+    let grpc_service = tower::ServiceBuilder::new()
+        .layer(tonic_web::GrpcWebLayer::new())
+        .service(grpc_axum);
+
     let public_app = Router::new()
+        // gRPC mount — strip the `/api/grpc` prefix before
+        // tonic's path matcher sees the request.
+        .nest_service("/api/grpc", grpc_service)
         // Plugin static assets — sub-proxied to the right plugin
         // daemon's Unix socket. Path is forwarded verbatim, including
         // the `/assets/<id>/` prefix, because each plugin's daemon
