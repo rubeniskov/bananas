@@ -14,6 +14,7 @@ mod dashboard_config;
 mod exports;
 mod icons;
 mod login;
+mod mfe;
 mod mounts;
 mod nfs_help;
 mod permissions;
@@ -87,6 +88,7 @@ enum Page {
     Exports,
     Storage,
     Users,
+    Cloud,
     Settings,
     Updates,
 }
@@ -101,6 +103,7 @@ impl Page {
             Page::Exports => "exports",
             Page::Storage => "storage",
             Page::Users => "users",
+            Page::Cloud => "cloud",
             Page::Settings => "settings",
             Page::Updates => "updates",
         }
@@ -112,6 +115,7 @@ impl Page {
             "exports" => Some(Page::Exports),
             "storage" => Some(Page::Storage),
             "users" => Some(Page::Users),
+            "cloud" => Some(Page::Cloud),
             "settings" => Some(Page::Settings),
             "updates" => Some(Page::Updates),
             _ => None,
@@ -185,17 +189,63 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     // Installed extensions (read once on mount). The Cloud / future
     // plugin tabs render only when the matching manifest is present in
     // /etc/bananas/extensions.d/, so a lean image without bananas-cloud
-    // installed shows no Cloud tab at all.
-    let mut extensions: Signal<Vec<String>> = use_signal(Vec::new);
+    // installed shows no Cloud tab at all. We keep the full Extension
+    // records (not just ids) so the MFE loader can read each plugin's
+    // `spa_path` to discover its bundle.
+    let mut extensions: Signal<Vec<api::Extension>> = use_signal(Vec::new);
     {
         use_effect(move || {
             spawn(async move {
                 if let Ok(list) = api::list_extensions().await {
-                    extensions.set(list.into_iter().map(|e| e.id).collect());
+                    extensions.set(list);
                 }
             });
         });
     }
+
+    // Per-plugin MFE state. Each entry is one of:
+    //   None         — not requested yet (mount div absent)
+    //   Some(Ok(())) — loaded; mount div live; toggle hidden via CSS
+    //   Some(Err(_)) — load failed; mount div shows the retry panel
+    let mut mfe_state: Signal<std::collections::HashMap<String, Result<(), String>>> =
+        use_signal(std::collections::HashMap::new);
+
+    // Trigger an MFE load on first activation of a plugin tab. Memoized
+    // via `is_loaded`/`mfe_state` so subsequent activations are a no-op.
+    let mut activate_plugin = move |id: String, spa_path: String| {
+        if mfe::is_loaded(&id) {
+            mfe_state.write().insert(id, Ok(()));
+            return;
+        }
+        if matches!(mfe_state.read().get(&id), Some(Ok(()))) {
+            return;
+        }
+        spawn(async move {
+            let result = mfe::load(&id, &spa_path).await;
+            mfe_state.write().insert(id, result);
+        });
+    };
+
+    // Reload-on-#cloud handling: if the operator hits refresh while on
+    // /#cloud (or pastes the deep link), `page` is already Cloud at
+    // mount time but no NavTab click ever fires `activate_plugin`. This
+    // effect bridges that gap — it runs whenever extensions resolve or
+    // the page changes, and is itself idempotent because activate_plugin
+    // short-circuits on already-loaded plugins.
+    use_effect(move || {
+        if page() != Page::Cloud {
+            return;
+        }
+        let cloud_ext = extensions
+            .read()
+            .iter()
+            .find(|e| e.id.as_str() == "cloud")
+            .cloned();
+        if let Some(ext) = cloud_ext {
+            let spa = ext.spa_path.clone().unwrap_or_else(|| "/cloud".to_string());
+            activate_plugin(ext.id.clone(), spa);
+        }
+    });
 
     // On mount: discover any in-flight ConfigImport op and reattach the
     // busy overlay to it. This is the "refresh during import" path —
@@ -326,18 +376,33 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     on_click: move |_| page.set(Page::Storage) }
                 NavTab { label: "Users", icon: "users", active: page() == Page::Users,
                     on_click: move |_| page.set(Page::Users) }
-                if extensions.read().iter().any(|id| id == "cloud") {
+                {
                     // Cloud lives in its own SPA bundle (bananas-cloud-ui)
-                    // mounted at /cloud/ by bananas-cloud's ServeDir.
-                    // Full-page nav rather than in-app routing so the
-                    // browser pulls the cloud-ui wasm + assets fresh
-                    // (and doesn't keep the lean default bundle holding
-                    // a useless cloud module's wasm bytes in memory).
-                    a {
-                        class: "nav-tab",
-                        href: "/cloud/",
-                        crate::icons::Icon { name: "cloud" }
-                        span { class: "nav-label", "Cloud" }
+                    // served by the cloud daemon at /cloud/. Rather than
+                    // a full-page nav, we compose it into this same
+                    // document — see crate::mfe. The nav tab is rendered
+                    // only when the manifest is present.
+                    let cloud_ext = extensions
+                        .read()
+                        .iter()
+                        .find(|e| e.id.as_str() == "cloud")
+                        .cloned();
+                    rsx! {
+                        if let Some(ext) = cloud_ext {
+                            NavTab {
+                                label: "Cloud",
+                                icon: "cloud",
+                                active: page() == Page::Cloud,
+                                on_click: move |_| {
+                                    let spa = ext
+                                        .spa_path
+                                        .clone()
+                                        .unwrap_or_else(|| "/cloud".to_string());
+                                    activate_plugin(ext.id.clone(), spa);
+                                    page.set(Page::Cloud);
+                                },
+                            }
+                        }
                     }
                 }
                 NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
@@ -498,6 +563,78 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Users => rsx! { users::UsersPage {} },
                 Page::Settings => rsx! { settings::SettingsPage {} },
                 Page::Updates => rsx! { updates::UpdatesPage {} },
+                // Cloud renders nothing here — its mount div lives
+                // outside the match so it can stay in DOM across tab
+                // switches (Dioxus would unmount/remount otherwise,
+                // dropping the plugin's runtime state on every flick
+                // back to Stats and forcing a full re-fetch on return).
+                Page::Cloud => rsx! { },
+            }
+
+            // Cloud microfrontend mount + status panel. Always rendered
+            // when the cloud manifest is installed; hidden via CSS when
+            // a different tab is active. The plugin's `main()` mounts
+            // its app into `<div id="cloud-mfe-root">` once the script
+            // tag is injected (see crate::mfe).
+            {
+                let cloud_active = page() == Page::Cloud;
+                let cloud_installed = extensions
+                    .read()
+                    .iter()
+                    .any(|e| e.id.as_str() == "cloud");
+                let cloud_status = mfe_state.read().get("cloud").cloned();
+                let frame_class = if cloud_active {
+                    "mfe-frame"
+                } else {
+                    "mfe-frame hidden"
+                };
+                rsx! {
+                    if cloud_installed {
+                        div { class: "{frame_class}",
+                            // The plugin replaces these children once
+                            // its runtime mounts. Until then, we show
+                            // a spinner (or an error+retry panel if the
+                            // discovery/inject failed).
+                            div {
+                                id: "cloud-mfe-root",
+                                class: "mfe-mount",
+                                match cloud_status {
+                                    Some(Err(err)) => rsx! {
+                                        div { class: "mfe-loading mfe-failed",
+                                            p { class: "mfe-failed-title", "Cloud module failed to load." }
+                                            pre { class: "mfe-failed-detail", "{err}" }
+                                            button {
+                                                class: "primary",
+                                                onclick: move |_| {
+                                                    if let Some(ext) = extensions
+                                                        .read()
+                                                        .iter()
+                                                        .find(|e| e.id.as_str() == "cloud")
+                                                        .cloned()
+                                                    {
+                                                        let spa = ext
+                                                            .spa_path
+                                                            .clone()
+                                                            .unwrap_or_else(|| "/cloud".to_string());
+                                                        mfe_state.write().remove("cloud");
+                                                        activate_plugin(ext.id.clone(), spa);
+                                                    }
+                                                },
+                                                "Retry"
+                                            }
+                                        }
+                                    },
+                                    _ => rsx! {
+                                        div { class: "mfe-loading",
+                                            components::Spinner { size: 32 }
+                                            span { "Loading Cloud module…" }
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if reboot_confirm() {

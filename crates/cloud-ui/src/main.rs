@@ -25,7 +25,45 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 fn main() {
     console_error_panic_hook::set_once();
     tracing_wasm::set_as_global_default();
-    dioxus::launch(App);
+
+    // Microfrontend mount target — the webadmin shell sets
+    // `window.__bananas_mfe_root = "cloud-mfe-root"` before injecting
+    // our script tag, so we mount inside the host SPA's div instead of
+    // the standalone `#main` from index.html. Direct access at
+    // `/cloud/` (no host) leaves the global unset and we fall back to
+    // `"main"` — useful for debugging the cloud SPA in isolation.
+    let root = web_sys::window()
+        .and_then(|w| w.get("__bananas_mfe_root"))
+        .and_then(|v| v.as_string())
+        .unwrap_or_else(|| "main".to_string());
+
+    // Dioxus's web bootstrap appends its render output as children of
+    // the rootname element rather than replacing them — that leaves
+    // the host's "Loading Cloud module…" placeholder visible next to
+    // our render. Wipe the mount target's children before we launch
+    // so the host's placeholder vanishes the moment we take over.
+    if let Some(window) = web_sys::window() {
+        if let Some(document) = window.document() {
+            if let Some(el) = document.get_element_by_id(&root) {
+                el.set_inner_html("");
+            }
+        }
+    }
+
+    dioxus::LaunchBuilder::new()
+        .with_cfg(dioxus::web::Config::new().rootname(root))
+        .launch(App);
+}
+
+/// True when this SPA is being composed into the webadmin shell as a
+/// microfrontend (i.e. `window.__bananas_mfe_root` is set). The shell
+/// already paints the BanaNAS top-nav, so we hide our own
+/// "BanaNAS Cloud / ← Back to BanaNAS" bar in that mode and let the
+/// host own page chrome.
+fn is_mfe() -> bool {
+    web_sys::window()
+        .and_then(|w| w.get("__bananas_mfe_root"))
+        .is_some()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -98,26 +136,41 @@ fn App() -> Element {
         });
     }
 
+    let mfe = is_mfe();
     rsx! {
-        document::Stylesheet { href: MAIN_CSS }
+        // In MFE mode the host already injects its own stylesheet and
+        // wraps the content in <main>. Suppress both here so we don't
+        // get double-loaded CSS or a nested <main><main> that doubles
+        // the page-level padding/margin.
+        if !mfe {
+            document::Stylesheet { href: MAIN_CSS }
+        }
         match state() {
             AuthState::Loading | AuthState::SignedOut => rsx! {
-                main { class: "loading-shell",
-                    p { "Loading…" }
+                if mfe {
+                    div { class: "loading-shell", p { "Loading…" } }
+                } else {
+                    main { class: "loading-shell", p { "Loading…" } }
                 }
             },
             AuthState::SignedIn => rsx! {
-                main {
-                    nav { class: "app-nav",
-                        h1 { class: "app-title", "BanaNAS Cloud" }
-                        span { class: "spacer" }
-                        a {
-                            class: "user-menu-trigger ghost",
-                            href: "/",
-                            "← Back to BanaNAS"
-                        }
-                    }
+                if mfe {
+                    // Host owns <main> — render content directly so
+                    // CSS rules on `main` don't apply twice.
                     cloud::CloudPage {}
+                } else {
+                    main {
+                        nav { class: "app-nav",
+                            h1 { class: "app-title", "BanaNAS Cloud" }
+                            span { class: "spacer" }
+                            a {
+                                class: "user-menu-trigger ghost",
+                                href: "/",
+                                "← Back to BanaNAS"
+                            }
+                        }
+                        cloud::CloudPage {}
+                    }
                 }
             }
         }

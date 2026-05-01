@@ -1616,3 +1616,43 @@ button.mp-chip:hover { filter: brightness(1.05); }
 .install-modal .ok-text     { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); }
 .install-modal .err-text    { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); }
 .install-modal .running-text { display: inline-flex; align-items: center; gap: 6px; color: var(--text-soft); }
+
+/* Microfrontend mount frame. The host shell composes plugin SPAs
+ * into the same document; each plugin is rendered into a div with
+ * id="<plugin>-mfe-root", wrapped by .mfe-frame so we can hide the
+ * whole region with display:none on tab-switch without unmounting
+ * the plugin's Dioxus runtime. */
+.mfe-frame {
+  display: contents;
+}
+.mfe-frame.hidden {
+  display: none;
+}
+.mfe-mount {
+  display: contents;
+}
+.mfe-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 16px;
+  color: var(--text-soft);
+}
+.mfe-failed {
+  gap: 8px;
+  color: var(--text);
+}
+.mfe-failed-title {
+  margin: 0;
+  font-weight: 600;
+}
+.mfe-failed-detail {
+  margin: 0;
+  max-width: min(640px, 90vw);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--danger);
+}
