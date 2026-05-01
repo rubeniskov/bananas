@@ -1,0 +1,14 @@
+[application]
+name = "bananas-cloud-ui"
+
+[web.app]
+# The cloud SPA is served by bananas-cloud at /cloud/. Setting
+# base_path so emitted asset URLs are /cloud/assets/* instead of
+# bare /assets/* (which would 404 — the gateway routes /assets/
+# to bananas-webadmin's catch-all).
+base_path = "/cloud"
+title = "BanaNAS Cloud"
+
+[web.wasm_opt]
+level = "2"
+debug = false

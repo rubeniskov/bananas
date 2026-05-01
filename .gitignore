@@ -17,6 +17,7 @@
 /serve/bin/
 # host-built Dioxus Web wasm bundle staged for the recipe
 /serve/webadmin/
+/serve/cloud-ui/
 # local secrets / per-deployment config — see .env.example
 .env
 # rust workspace build output
@@ -24,3 +25,4 @@
 
 /dist/
 /.claude/
+serve/cloud-ui

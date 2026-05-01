@@ -506,9 +506,28 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bananas-cloud-ui"
+version = "1.4.0"
+dependencies = [
+ "console_error_panic_hook",
+ "dioxus",
+ "gloo-net",
+ "gloo-timers",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-wasm",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

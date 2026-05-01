@@ -35,7 +35,7 @@ SYSTEMD_AUTO_ENABLE = "enable"
 #   bananas-router — owns :8080 and proxies /api/cloud/* + /cloud/* here
 #                    via the manifest this package drops at install time.
 #   bananas-webadmin — issues the session cookies this daemon validates.
-RDEPENDS:${PN} += "bananas-rclone bananas-router bananas-webadmin"
+RDEPENDS:${PN} += "bananas-rclone bananas-router bananas-webadmin bananas-cloud-ui"
 
 do_compile[noexec] = "1"
 do_configure[noexec] = "1"

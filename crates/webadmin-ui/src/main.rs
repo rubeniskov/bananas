@@ -9,7 +9,6 @@ use dioxus::prelude::*;
 
 mod api;
 mod browse;
-mod cloud;
 mod components;
 mod dashboard_config;
 mod exports;
@@ -88,7 +87,6 @@ enum Page {
     Exports,
     Storage,
     Users,
-    Cloud,
     Settings,
     Updates,
 }
@@ -103,7 +101,6 @@ impl Page {
             Page::Exports => "exports",
             Page::Storage => "storage",
             Page::Users => "users",
-            Page::Cloud => "cloud",
             Page::Settings => "settings",
             Page::Updates => "updates",
         }
@@ -115,7 +112,6 @@ impl Page {
             "exports" => Some(Page::Exports),
             "storage" => Some(Page::Storage),
             "users" => Some(Page::Users),
-            "cloud" => Some(Page::Cloud),
             "settings" => Some(Page::Settings),
             "updates" => Some(Page::Updates),
             _ => None,
@@ -331,8 +327,18 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 NavTab { label: "Users", icon: "users", active: page() == Page::Users,
                     on_click: move |_| page.set(Page::Users) }
                 if extensions.read().iter().any(|id| id == "cloud") {
-                    NavTab { label: "Cloud", icon: "cloud", active: page() == Page::Cloud,
-                        on_click: move |_| page.set(Page::Cloud) }
+                    // Cloud lives in its own SPA bundle (bananas-cloud-ui)
+                    // mounted at /cloud/ by bananas-cloud's ServeDir.
+                    // Full-page nav rather than in-app routing so the
+                    // browser pulls the cloud-ui wasm + assets fresh
+                    // (and doesn't keep the lean default bundle holding
+                    // a useless cloud module's wasm bytes in memory).
+                    a {
+                        class: "nav-tab",
+                        href: "/cloud/",
+                        crate::icons::Icon { name: "cloud" }
+                        span { class: "nav-label", "Cloud" }
+                    }
                 }
                 NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
                     on_click: move |_| page.set(Page::Settings) }
@@ -490,7 +496,6 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Exports => rsx! { exports::ExportsPage {} },
                 Page::Storage => rsx! { storage::StoragePage {} },
                 Page::Users => rsx! { users::UsersPage {} },
-                Page::Cloud => rsx! { cloud::CloudPage {} },
                 Page::Settings => rsx! { settings::SettingsPage {} },
                 Page::Updates => rsx! { updates::UpdatesPage {} },
             }
