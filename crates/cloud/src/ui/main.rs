@@ -20,18 +20,17 @@ mod cloud;
 mod components;
 mod icons;
 
-const MAIN_CSS: Asset = asset!("/assets/main.css");
-
 fn main() {
     console_error_panic_hook::set_once();
     tracing_wasm::set_as_global_default();
 
     // Microfrontend mount target — the webadmin shell sets
     // `window.__bananas_mfe_root = "cloud-mfe-root"` before injecting
-    // our script tag, so we mount inside the host SPA's div instead of
-    // the standalone `#main` from index.html. Direct access at
-    // `/cloud/` (no host) leaves the global unset and we fall back to
-    // `"main"` — useful for debugging the cloud SPA in isolation.
+    // our script tag, so we mount inside the host SPA's div. The
+    // plugin only ever loads through the host's MFE handshake; direct
+    // navigation to `/assets/cloud/index.html` is rejected at the
+    // daemon. If the global is unset we fall back to `"main"` so a
+    // raw `dx serve` against this crate still has somewhere to render.
     let root = web_sys::window()
         .and_then(|w| w.get("__bananas_mfe_root"))
         .and_then(|v| v.as_string())
@@ -70,17 +69,6 @@ fn main() {
     dioxus::LaunchBuilder::new()
         .with_cfg(dioxus::web::Config::new().rootname(root).history(history))
         .launch(App);
-}
-
-/// True when this SPA is being composed into the webadmin shell as a
-/// microfrontend (i.e. `window.__bananas_mfe_root` is set). The shell
-/// already paints the BanaNAS top-nav, so we hide our own
-/// "BanaNAS Cloud / ← Back to BanaNAS" bar in that mode and let the
-/// host own page chrome.
-fn is_mfe() -> bool {
-    web_sys::window()
-        .and_then(|w| w.get("__bananas_mfe_root"))
-        .is_some()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -153,43 +141,12 @@ fn App() -> Element {
         });
     }
 
-    let mfe = is_mfe();
     rsx! {
-        // In MFE mode the host already injects its own stylesheet and
-        // wraps the content in <main>. Suppress both here so we don't
-        // get double-loaded CSS or a nested <main><main> that doubles
-        // the page-level padding/margin.
-        if !mfe {
-            document::Stylesheet { href: MAIN_CSS }
-        }
         match state() {
             AuthState::Loading | AuthState::SignedOut => rsx! {
-                if mfe {
-                    div { class: "loading-shell", p { "Loading…" } }
-                } else {
-                    main { class: "loading-shell", p { "Loading…" } }
-                }
+                div { class: "loading-shell", p { "Loading…" } }
             },
-            AuthState::SignedIn => rsx! {
-                if mfe {
-                    // Host owns <main> — render content directly so
-                    // CSS rules on `main` don't apply twice.
-                    cloud::CloudPage {}
-                } else {
-                    main {
-                        nav { class: "app-nav",
-                            h1 { class: "app-title", "BanaNAS Cloud" }
-                            span { class: "spacer" }
-                            a {
-                                class: "user-menu-trigger ghost",
-                                href: "/",
-                                "← Back to BanaNAS"
-                            }
-                        }
-                        cloud::CloudPage {}
-                    }
-                }
-            }
+            AuthState::SignedIn => rsx! { cloud::CloudPage {} }
         }
     }
 }

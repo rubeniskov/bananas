@@ -109,7 +109,64 @@ fn main() {
     copy_opts.copy_inside = true;
     fs_extra::dir::copy(public, &ui_out, &copy_opts).expect("copying dx output to OUT_DIR/ui");
 
+    extract_and_strip_index(&out, &ui_out);
+
     precompress_tree(&ui_out);
+}
+
+/// Read `<ui_out>/index.html`, scan for the first
+/// `<script type="module" src="…">` tag, write the URL to
+/// `<out>/mfe_entry.txt`, and delete `index.html` (+ `.br`/`.gz`
+/// companions if present) from the embed tree. Panics on missing
+/// or malformed input — the daemon binary cannot work without the
+/// entry URL, so failing the build is the correct response.
+fn extract_and_strip_index(out: &std::path::Path, ui_out: &std::path::Path) {
+    let html_path = ui_out.join("index.html");
+    let html = std::fs::read_to_string(&html_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", html_path.display()));
+    let src = extract_module_src(&html).unwrap_or_else(|| {
+        panic!(
+            "no <script type=\"module\" src=\"…\"> in {}",
+            html_path.display()
+        )
+    });
+    let entry_path = out.join("mfe_entry.txt");
+    std::fs::write(&entry_path, src.as_bytes())
+        .unwrap_or_else(|e| panic!("write {}: {e}", entry_path.display()));
+
+    for name in ["index.html", "index.html.br", "index.html.gz"] {
+        let p = ui_out.join(name);
+        if p.exists() {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
+/// Plain-string scan for the first `<script type="module" src="…">`
+/// tag's src attribute. dx-cli emits a small, deterministic
+/// `index.html`, so a real HTML parser is overkill.
+fn extract_module_src(html: &str) -> Option<String> {
+    let mut cursor = 0usize;
+    while cursor < html.len() {
+        let rel = html[cursor..].find("<script")?;
+        let tag_start = cursor + rel;
+        let close = html[tag_start..].find('>')?;
+        let tag = &html[tag_start..tag_start + close];
+        let is_module = tag.contains("type=\"module\"") || tag.contains("type='module'");
+        if is_module {
+            for needle in ["src=\"", "src='"] {
+                if let Some(pos) = tag.find(needle) {
+                    let after = &tag[pos + needle.len()..];
+                    let quote = needle.chars().last().unwrap();
+                    if let Some(end) = after.find(quote) {
+                        return Some(after[..end].to_string());
+                    }
+                }
+            }
+        }
+        cursor = tag_start + close + 1;
+    }
+    None
 }
 
 fn precompress_tree(root: &std::path::Path) {

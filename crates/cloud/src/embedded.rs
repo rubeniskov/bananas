@@ -10,8 +10,6 @@
 //! handler picks the right encoding variant from `Accept-Encoding`
 //! exactly the way `tower_http::ServeDir.precompressed_*()` would.
 
-use std::sync::LazyLock;
-
 use axum::{
     body::Body,
     extract::Request,
@@ -21,31 +19,24 @@ use axum::{
 use include_dir::{Dir, include_dir};
 
 /// The full SPA dist tree, baked in at compile time. `build.rs`
-/// guarantees `$OUT_DIR/ui/index.html` exists before this macro
-/// expands.
+/// has already stripped `index.html` (+ companions) from the tree —
+/// the daemon never serves the document root publicly.
 static UI: Dir<'_> = include_dir!("$OUT_DIR/ui");
 
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
-/// The MFE entry script URL — extracted from the embedded
-/// `index.html` once on first read. Returned by the
-/// `/api/cloud/__mfe_entry` JSON endpoint so the host SPA's MFE
-/// loader knows which content-hashed JS shim to inject.
+/// The MFE entry script URL — extracted from the dx-emitted
+/// `index.html` at build time and inlined as a `&'static str`.
+/// Returned by the `/api/cloud/__mfe_entry` JSON endpoint so the
+/// host SPA's MFE loader knows which content-hashed JS shim to
+/// inject.
 ///
 /// Dioxus.toml's `base_path = "/assets/cloud"` causes dx to emit
 /// `<script type="module" src="/assets/cloud/bananas-cloud-ui-<hash>.js">`,
 /// which is the public URL exactly — webadmin sub-proxies that
 /// path back to this daemon's socket where the embedded tree
 /// serves the actual bytes.
-pub static MFE_ENTRY: LazyLock<String> = LazyLock::new(|| {
-    let html = UI
-        .get_file("index.html")
-        .expect("embedded UI tree missing index.html — build.rs ran but produced no SPA")
-        .contents_utf8()
-        .expect("embedded index.html is not valid UTF-8");
-    extract_module_src(html)
-        .expect("no <script type=\"module\" src=\"…\"> in embedded cloud-ui index.html")
-});
+pub const MFE_ENTRY: &str = include_str!(concat!(env!("OUT_DIR"), "/mfe_entry.txt"));
 
 /// Serve `<rest>` from the embedded UI tree. The caller hands us
 /// the request path with the `/assets/cloud/` prefix already
@@ -60,9 +51,9 @@ pub static MFE_ENTRY: LazyLock<String> = LazyLock::new(|| {
 /// Strict semantics:
 ///  - Looks up `<rest>` verbatim in the embedded tree (rooted at
 ///    dx's `public/`).
-///  - **Refuses to serve `index.html`** — that file exists in the
-///    tree but is consumed only by `MFE_ENTRY` extraction; it's
-///    never publicly returned.
+///  - **Refuses to serve `index.html`** — `build.rs` strips it
+///    from the embed tree at compile time, so this is just
+///    defense-in-depth.
 ///  - Picks the best encoding variant the client accepts.
 ///  - Returns 404 for any other miss. No SPA fallback; webadmin
 ///    owns all HTML payloads.
@@ -148,79 +139,5 @@ fn content_type_for(path: &str) -> &'static str {
         "woff" => "font/woff",
         "ttf" => "font/ttf",
         _ => "application/octet-stream",
-    }
-}
-
-/// Plain-string scan of `html` for the first
-/// `<script type="module" ... src="...">` tag and return its src.
-/// dx-cli's emitted index.html is small and deterministic, so a
-/// real HTML parser is overkill. The src we extract is the *full*
-/// public URL (Dioxus.toml's `base_path` already prefixed it with
-/// `/assets/cloud/`); we return it as-is.
-fn extract_module_src(html: &str) -> Option<String> {
-    let mut cursor = 0usize;
-    while cursor < html.len() {
-        let rel = html[cursor..].find("<script")?;
-        let tag_start = cursor + rel;
-        let close = html[tag_start..].find('>')?;
-        let tag = &html[tag_start..tag_start + close];
-        let is_module = tag.contains("type=\"module\"") || tag.contains("type='module'");
-        if is_module {
-            for needle in ["src=\"", "src='"] {
-                if let Some(pos) = tag.find(needle) {
-                    let after = &tag[pos + needle.len()..];
-                    let quote = needle.chars().last().unwrap();
-                    if let Some(end) = after.find(quote) {
-                        return Some(after[..end].to_string());
-                    }
-                }
-            }
-        }
-        cursor = tag_start + close + 1;
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_module_src_double_quoted() {
-        let html = r#"<!doctype html><html><body>
-            <div id="main"></div>
-            <script type="module" src="/assets/cloud/bananas-cloud-ui-deadbeef.js"></script>
-        </body></html>"#;
-        assert_eq!(
-            extract_module_src(html).as_deref(),
-            Some("/assets/cloud/bananas-cloud-ui-deadbeef.js")
-        );
-    }
-
-    #[test]
-    fn extracts_module_src_single_quoted() {
-        let html = "<script type='module' src='/assets/cloud/foo.js'></script>";
-        assert_eq!(
-            extract_module_src(html).as_deref(),
-            Some("/assets/cloud/foo.js")
-        );
-    }
-
-    #[test]
-    fn ignores_non_module_scripts() {
-        let html = r#"
-            <script src="/legacy/old.js"></script>
-            <script type="module" src="/assets/cloud/right.js"></script>
-        "#;
-        assert_eq!(
-            extract_module_src(html).as_deref(),
-            Some("/assets/cloud/right.js")
-        );
-    }
-
-    #[test]
-    fn missing_module_returns_none() {
-        let html = "<script src=\"/legacy/old.js\"></script>";
-        assert!(extract_module_src(html).is_none());
     }
 }

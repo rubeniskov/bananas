@@ -15,8 +15,6 @@ mod stats;
 mod stats_config;
 mod storage;
 
-const MAIN_CSS: Asset = asset!("/assets/main.css");
-
 fn main() {
     console_error_panic_hook::set_once();
     tracing_wasm::set_as_global_default();
@@ -40,12 +38,6 @@ fn main() {
     dioxus::LaunchBuilder::new()
         .with_cfg(dioxus::web::Config::new().rootname(root).history(history))
         .launch(App);
-}
-
-fn is_mfe() -> bool {
-    web_sys::window()
-        .and_then(|w| w.get("__bananas_mfe_root"))
-        .is_some()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -111,37 +103,12 @@ fn App() -> Element {
         });
     }
 
-    let mfe = is_mfe();
     rsx! {
-        if !mfe {
-            document::Stylesheet { href: MAIN_CSS }
-        }
         match state() {
             AuthState::Loading | AuthState::SignedOut => rsx! {
-                if mfe {
-                    div { class: "loading-shell", p { "Loading…" } }
-                } else {
-                    main { class: "loading-shell", p { "Loading…" } }
-                }
+                div { class: "loading-shell", p { "Loading…" } }
             },
-            AuthState::SignedIn => rsx! {
-                if mfe {
-                    stats::StatsPage {}
-                } else {
-                    main {
-                        nav { class: "app-nav",
-                            h1 { class: "app-title", "BanaNAS Stats" }
-                            span { class: "spacer" }
-                            a {
-                                class: "user-menu-trigger ghost",
-                                href: "/",
-                                "← Back to BanaNAS"
-                            }
-                        }
-                        stats::StatsPage {}
-                    }
-                }
-            }
+            AuthState::SignedIn => rsx! { stats::StatsPage {} }
         }
     }
 }
