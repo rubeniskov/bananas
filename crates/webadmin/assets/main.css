@@ -52,9 +52,19 @@
 
 * { box-sizing: border-box; }
 
+/* Paint the document root with the app's background AND make
+ * sure the page always fills the viewport. Short pages
+ * (settings tabs with one section, an empty exports table)
+ * otherwise leak the user-agent default colour below the body
+ * — visible as a white strip at the bottom in dark mode. */
+html {
+  background: var(--bg);
+  min-height: 100vh;
+}
 body {
   font: 14px/1.5 system-ui, -apple-system, sans-serif;
   margin: 0;
+  min-height: 100vh;
   background: var(--bg);
   color: var(--text);
 }

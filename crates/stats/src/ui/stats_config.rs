@@ -131,8 +131,19 @@ fn join_csv(v: &[String]) -> String {
     v.join(", ")
 }
 
+#[derive(Props, Clone, PartialEq)]
+pub struct StatsConfigFormProps {
+    /// When `true` (default), the form renders its own primary
+    /// Save button at the bottom — used by the inline Settings →
+    /// Stats tab. The modal wrapper passes `false` and renders
+    /// its own Save in the modal footer (`form` HTML attribute
+    /// pointing back to this form's id).
+    #[props(default = true)]
+    pub inline_save: bool,
+}
+
 #[component]
-pub fn StatsConfigForm() -> Element {
+pub fn StatsConfigForm(props: StatsConfigFormProps) -> Element {
     let auth_ctx = use_context::<AuthCtx>();
 
     // We keep the loaded Cfg around so non-form fields (e.g.
@@ -269,6 +280,7 @@ pub fn StatsConfigForm() -> Element {
 
     rsx! {
         form {
+            id: "stats-config-form",
             class: "settings-form",
             onsubmit: move |e| { e.prevent_default(); submit(()); },
 
@@ -402,10 +414,12 @@ pub fn StatsConfigForm() -> Element {
                 }
             }
 
-            div { class: "settings-actions",
-                button { class: "primary", r#type: "submit",
-                    disabled: busy() || !hydrated(),
-                    if busy() { "Saving…" } else { "Save & restart service" }
+            if props.inline_save {
+                div { class: "settings-actions",
+                    button { class: "primary", r#type: "submit",
+                        disabled: busy() || !hydrated(),
+                        if busy() { "Saving…" } else { "Save & restart service" }
+                    }
                 }
             }
 
@@ -447,7 +461,24 @@ pub fn StatsConfigModal(props: StatsConfigModalProps) -> Element {
                     }
                 }
                 div { class: "modal-body form-modal-body",
-                    StatsConfigForm {}
+                    StatsConfigForm { inline_save: false }
+                }
+                // Footer Save submits the in-body form via HTML's
+                // standard `form="<id>"` attribute, so the form's
+                // submit handler (and its busy/error state) drive
+                // the actual save. The form's banner-message lane
+                // surfaces success / failure inside the body.
+                div { class: "modal-footer",
+                    button {
+                        class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "primary", r#type: "submit",
+                        form: "stats-config-form",
+                        "Save & restart service"
+                    }
                 }
             }
         }
