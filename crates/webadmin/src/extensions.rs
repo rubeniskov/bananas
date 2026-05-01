@@ -24,6 +24,15 @@ pub struct Extension {
     pub id: String,
     #[serde(default)]
     pub label: Option<String>,
+    /// Sort key for the SPA's nav bar — ascending. Defaults to 0
+    /// when omitted in the manifest, which leaves the plugin at
+    /// the leftmost position alongside other unset siblings.
+    #[serde(default)]
+    pub order: u32,
+    /// Lucide icon name. None → host SPA falls back to a generic
+    /// glyph.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -43,9 +52,14 @@ pub async fn list_extensions() -> Json<ListResponse> {
         .map(|m| Extension {
             id: m.id,
             label: m.label,
+            order: m.order,
+            icon: m.icon,
         })
         .collect();
-    out.sort_by(|a, b| a.id.cmp(&b.id));
+    // Stable ordering: primarily by `order`, then by `id` so two
+    // plugins at the same `order` come back in the same sequence
+    // every page load.
+    out.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.id.cmp(&b.id)));
     Json(ListResponse { extensions: out })
 }
 

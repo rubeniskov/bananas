@@ -343,14 +343,17 @@ pub struct ImportSummary {
 // --- Extensions discovery -----------------------------------------------
 
 /// One installed extension. The MFE loader queries
-/// `/api/<id>/__mfe_entry` for the content-hashed entry script, so
-/// we only carry id + label here.
+/// `/api/<id>/__mfe_entry` for the content-hashed entry script;
+/// `order` + `icon` drive the host SPA's nav rendering.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Extension {
     pub id: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub label: Option<String>,
+    #[serde(default)]
+    pub order: u32,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -47,6 +47,8 @@ api_prefix = "/api"
 label = "Cloud sync"
 socket = "${this.tmp}/cloud.sock"
 api_prefix = "/api/cloud"
+order = 50
+icon = "cloud"
 `);
 
     // Pre-create the session.key (32 random bytes) — the daemons

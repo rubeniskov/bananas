@@ -34,6 +34,19 @@ pub struct Manifest {
     /// catch-all so anything not claimed by another plugin lands
     /// on its Unix socket.
     pub api_prefix: String,
+    /// Sort key for the host SPA's nav bar — plugins render
+    /// left-to-right by ascending `order`. Defaults to 0 if unset
+    /// (legacy manifests still parse and sort first). Conventional
+    /// values: 10/20/30/… so new plugins can slot between without
+    /// renumbering siblings.
+    #[serde(default)]
+    pub order: u32,
+    /// Lucide icon name the host SPA renders next to `label` in the
+    /// nav. Optional; the host falls back to a generic "box" glyph
+    /// if absent. Same icon set webadmin's NavTab already uses (see
+    /// `crates/webadmin/src/ui/icons.rs`).
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 /// Parse every `*.toml` file under `dir`. Bad files are logged and
@@ -117,6 +130,8 @@ mod tests {
             label: None,
             socket: PathBuf::from(socket),
             api_prefix: api_prefix.into(),
+            order: 0,
+            icon: None,
         }
     }
 

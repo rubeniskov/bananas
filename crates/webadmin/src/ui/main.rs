@@ -97,67 +97,63 @@ impl AuthCtx {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// Either a host-level page (`Settings`, `Updates`) or a plugin
+/// SPA mounted via the MFE flow (any installed manifest's `id`).
+/// Plugins are string-identified so the host doesn't need to
+/// recompile to add one — `/api/extensions` drives the nav, the
+/// hash route, and the active-tab predicate.
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum Page {
-    Stats,
-    Exports,
-    Storage,
-    Users,
-    Cloud,
+    /// `id` from the plugin's manifest. Default landing slug is
+    /// "stats" because that's the conventional first plugin in
+    /// the bundled image.
+    Plugin(String),
     Settings,
     Updates,
 }
 
 impl Page {
-    /// URL-hash slug used to make the current page survive a full-page
-    /// reload. Hash-based (vs path-based) so the static SPA fallback at
-    /// `/` doesn't need server-side routing rules.
-    fn slug(self) -> &'static str {
+    /// URL-hash slug used to make the current page survive a
+    /// full-page reload. Hash-based (vs path-based) so the static
+    /// SPA fallback at `/` doesn't need server-side routing rules.
+    fn slug(&self) -> &str {
         match self {
-            Page::Stats => "stats",
-            Page::Exports => "exports",
-            Page::Storage => "storage",
-            Page::Users => "users",
-            Page::Cloud => "cloud",
+            Page::Plugin(id) => id.as_str(),
             Page::Settings => "settings",
             Page::Updates => "updates",
         }
     }
 
-    fn from_slug(s: &str) -> Option<Self> {
+    fn from_slug(s: &str) -> Self {
         match s {
-            "stats" => Some(Page::Stats),
-            "exports" => Some(Page::Exports),
-            "storage" => Some(Page::Storage),
-            "users" => Some(Page::Users),
-            "cloud" => Some(Page::Cloud),
-            "settings" => Some(Page::Settings),
-            "updates" => Some(Page::Updates),
-            _ => None,
+            "settings" => Page::Settings,
+            "updates" => Page::Updates,
+            "" => Page::Plugin("stats".to_string()),
+            other => Page::Plugin(other.to_string()),
         }
     }
 }
 
-/// Resolve the current Page from `window.location.hash`. Stats is the
-/// default landing page — only an explicit `/#<slug>` switches to a
-/// different tab, so legacy path-style URLs (`/exports`, `/users`, …)
-/// from earlier builds land on Stats and get rewritten by the
-/// canonicalize step below.
+/// Resolve the current Page from `window.location.hash`. Stats is
+/// the default landing page — only an explicit `/#<slug>` switches
+/// to a different tab, so legacy path-style URLs (`/exports`,
+/// `/users`, …) from earlier builds land on Stats and get rewritten
+/// by the canonicalize step below.
 fn read_page_from_url() -> Page {
     let Some(window) = web_sys::window() else {
-        return Page::Stats;
+        return Page::Plugin("stats".to_string());
     };
     let hash = window.location().hash().unwrap_or_default();
     let slug = hash.trim_start_matches('#').trim_start_matches('/');
-    Page::from_slug(slug).unwrap_or(Page::Stats)
+    Page::from_slug(slug)
 }
 
-/// Replace the current entry with `/#<slug>` so the visible URL stays
-/// canonical regardless of how the user got here (typed `/exports`,
-/// followed an old `/users#users` bookmark, etc.). Uses `replaceState`
-/// instead of `set_hash` so the path component is also normalized and
-/// nav-tab clicks don't push a history entry per click.
-fn canonicalize_url(page: Page) {
+/// Replace the current entry with `/#<slug>` so the visible URL
+/// stays canonical regardless of how the user got here. Uses
+/// `replaceState` instead of `set_hash` so the path component is
+/// also normalized and nav-tab clicks don't push a history entry
+/// per click.
+fn canonicalize_url(page: &Page) {
     let Some(window) = web_sys::window() else {
         return;
     };
@@ -181,7 +177,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
     // the visible URL is always `/#<slug>` (no `/exports#exports`
     // amalgams) and reloads preserve the current tab.
     use_effect(move || {
-        canonicalize_url(page());
+        canonicalize_url(&page.read());
     });
     use_effect(move || {
         use wasm_bindgen::JsCast;
@@ -241,23 +237,23 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
         });
     };
 
-    // Reload-on-#cloud handling: if the operator hits refresh while on
-    // /#cloud (or pastes the deep link), `page` is already Cloud at
-    // mount time but no NavTab click ever fires `activate_plugin`. This
-    // effect bridges that gap — it runs whenever extensions resolve or
-    // the page changes, and is itself idempotent because activate_plugin
-    // short-circuits on already-loaded plugins.
+    // Reload-on-#<plugin> handling: if the operator hits refresh
+    // while on /#<plugin> (or pastes the deep link), `page` is
+    // already `Plugin(id)` at mount time but no NavTab click ever
+    // fires `activate_plugin`. This effect bridges that gap — it
+    // runs whenever extensions resolve or the page changes, and is
+    // itself idempotent because activate_plugin short-circuits on
+    // already-loaded plugins.
     use_effect(move || {
-        if page() != Page::Cloud {
-            return;
-        }
-        let cloud_ext = extensions
-            .read()
-            .iter()
-            .find(|e| e.id.as_str() == "cloud")
-            .cloned();
-        if let Some(ext) = cloud_ext {
-            activate_plugin(ext.id.clone());
+        let id = match &*page.read() {
+            Page::Plugin(id) => id.clone(),
+            _ => return,
+        };
+        // Only fire MFE for ids backed by a manifest. Host-rendered
+        // fallbacks (stats/exports/storage/users until extracted)
+        // would 404 the __mfe_entry handshake.
+        if extensions.read().iter().any(|e| e.id == id) {
+            activate_plugin(id);
         }
     });
 
@@ -382,43 +378,84 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
         main {
             nav { class: "app-nav",
                 h1 { class: "app-title", "BanaNAS" }
-                NavTab { label: "Stats", icon: "chart-bar", active: page() == Page::Stats,
-                    on_click: move |_| page.set(Page::Stats) }
-                NavTab { label: "Exports", icon: "share-2", active: page() == Page::Exports,
-                    on_click: move |_| page.set(Page::Exports) }
-                NavTab { label: "Storage", icon: "hard-drive", active: page() == Page::Storage,
-                    on_click: move |_| page.set(Page::Storage) }
-                NavTab { label: "Users", icon: "users", active: page() == Page::Users,
-                    on_click: move |_| page.set(Page::Users) }
                 {
-                    // Cloud lives in its own SPA bundle (bananas-cloud-ui)
-                    // served by the cloud daemon at /cloud/. Rather than
-                    // a full-page nav, we compose it into this same
-                    // document — see crate::mfe. The nav tab is rendered
-                    // only when the manifest is present.
-                    let cloud_ext = extensions
-                        .read()
+                    // Manifest-driven nav: render one NavTab per
+                    // installed plugin, sorted by `order` then `id`
+                    // (the server already sorted, but we re-sort here
+                    // because the SPA-side Extension is just a Vec).
+                    // Until the per-feature extractions land
+                    // (commits 3-7), the host fakes "stats", "exports",
+                    // "storage", "users" entries by hardcoding them
+                    // alongside any plugin manifests — those will
+                    // disappear from this fallback list as their
+                    // crates ship.
+                    let mut listed = extensions.read().clone();
+                    listed.sort_by(|a, b| a.order.cmp(&b.order).then(a.id.cmp(&b.id)));
+                    let host_pages: &[(&str, &str, &str, u32)] = &[
+                        ("stats", "Stats", "chart-bar", 10),
+                        ("exports", "Exports", "share-2", 20),
+                        ("storage", "Storage", "hard-drive", 30),
+                        ("users", "Users", "users", 40),
+                    ];
+                    let mut nav_items: Vec<(String, String, String, u32)> = host_pages
                         .iter()
-                        .find(|e| e.id.as_str() == "cloud")
-                        .cloned();
+                        .filter(|(id, _, _, _)| {
+                            // Drop the host-page fallback when a real
+                            // plugin manifest with the same id is
+                            // installed (so we don't double-render
+                            // once the feature graduates to a plugin).
+                            !listed.iter().any(|e| e.id == *id)
+                        })
+                        .map(|(id, label, icon, order)| {
+                            (id.to_string(), label.to_string(), icon.to_string(), *order)
+                        })
+                        .collect();
+                    for ext in &listed {
+                        nav_items.push((
+                            ext.id.clone(),
+                            ext.label.clone().unwrap_or_else(|| ext.id.clone()),
+                            ext.icon.clone().unwrap_or_else(|| "box".to_string()),
+                            ext.order,
+                        ));
+                    }
+                    nav_items.sort_by(|a, b| a.3.cmp(&b.3).then(a.0.cmp(&b.0)));
                     rsx! {
-                        if let Some(ext) = cloud_ext {
+                        for (id, label, icon, _order) in nav_items {
                             NavTab {
-                                label: "Cloud",
-                                icon: "cloud",
-                                active: page() == Page::Cloud,
-                                on_click: move |_| {
-                                    activate_plugin(ext.id.clone());
-                                    page.set(Page::Cloud);
+                                label: label.clone(),
+                                icon: icon.clone(),
+                                active: matches!(&*page.read(), Page::Plugin(p) if p == &id),
+                                on_click: {
+                                    let id = id.clone();
+                                    move |_| {
+                                        // Only trigger the MFE handshake
+                                        // for ids backed by a real
+                                        // manifest; host-rendered
+                                        // fallbacks (stats/exports/etc.
+                                        // pre-extraction) have no
+                                        // /api/<id>/__mfe_entry endpoint.
+                                        if extensions.read().iter().any(|e| e.id == id) {
+                                            activate_plugin(id.clone());
+                                        }
+                                        page.set(Page::Plugin(id.clone()));
+                                    }
                                 },
                             }
                         }
                     }
                 }
-                NavTab { label: "Settings", icon: "settings", active: page() == Page::Settings,
-                    on_click: move |_| page.set(Page::Settings) }
-                NavTab { label: "Updates", icon: "package", active: page() == Page::Updates,
-                    on_click: move |_| page.set(Page::Updates) }
+                NavTab {
+                    label: "Settings",
+                    icon: "settings",
+                    active: matches!(&*page.read(), Page::Settings),
+                    on_click: move |_| page.set(Page::Settings),
+                }
+                NavTab {
+                    label: "Updates",
+                    icon: "package",
+                    active: matches!(&*page.read(), Page::Updates),
+                    on_click: move |_| page.set(Page::Updates),
+                }
                 span { class: "spacer" }
                 div { class: "user-menu",
                     span { class: "user-greeting", "Welcome, ", strong { "{props.username}" }, "!" }
@@ -566,19 +603,31 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 }
             }
 
-            match page() {
-                Page::Stats => rsx! { stats::StatsPage {} },
-                Page::Exports => rsx! { exports::ExportsPage {} },
-                Page::Storage => rsx! { storage::StoragePage {} },
-                Page::Users => rsx! { users::UsersPage {} },
+            // The Settings + Updates pages are host-rendered. Plugins
+            // (cloud today, others as they extract) own their own
+            // wasm bundles and mount via the MFE frame below — for
+            // those, this match contributes nothing, leaving the
+            // empty `()` branch and letting the MFE frame fill in.
+            //
+            // During the per-feature extraction (commits 3-7) the
+            // explicit branches "stats" / "exports" / "storage" /
+            // "users" disappear one at a time as each feature moves
+            // out of webadmin into its own plugin daemon.
+            match &*page.read() {
                 Page::Settings => rsx! { settings::SettingsPage {} },
                 Page::Updates => rsx! { updates::UpdatesPage {} },
-                // Cloud renders nothing here — its mount div lives
-                // outside the match so it can stay in DOM across tab
-                // switches (Dioxus would unmount/remount otherwise,
-                // dropping the plugin's runtime state on every flick
-                // back to Stats and forcing a full re-fetch on return).
-                Page::Cloud => rsx! { },
+                Page::Plugin(id) => match id.as_str() {
+                    "stats" => rsx! { stats::StatsPage {} },
+                    "exports" => rsx! { exports::ExportsPage {} },
+                    "storage" => rsx! { storage::StoragePage {} },
+                    "users" => rsx! { users::UsersPage {} },
+                    // Empty branch for MFE plugins (cloud today).
+                    // The mount frame below renders unconditionally
+                    // and toggles via CSS; keeping the runtime mount
+                    // alive across tab switches preserves plugin
+                    // state on flick-back.
+                    _ => rsx! {},
+                },
             }
 
             // Cloud microfrontend mount + status panel. Always rendered
@@ -587,7 +636,7 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
             // its app into `<div id="cloud-mfe-root">` once the script
             // tag is injected (see crate::mfe).
             {
-                let cloud_active = page() == Page::Cloud;
+                let cloud_active = matches!(&*page.read(), Page::Plugin(id) if id == "cloud");
                 let cloud_installed = extensions
                     .read()
                     .iter()
@@ -836,8 +885,8 @@ fn date_stamp() -> String {
 #[derive(Props, Clone, PartialEq)]
 struct NavTabProps {
     label: String,
-    #[props(default = "")]
-    icon: &'static str,
+    #[props(default)]
+    icon: String,
     active: bool,
     on_click: EventHandler<()>,
 }
@@ -850,7 +899,7 @@ fn NavTab(props: NavTabProps) -> Element {
             class: "{class}",
             href: "javascript:void(0)",
             onclick: move |_| props.on_click.call(()),
-            if !props.icon.is_empty() { icons::Icon { name: props.icon } }
+            if !props.icon.is_empty() { icons::Icon { name: props.icon.clone() } }
             "{props.label}"
         }
     }

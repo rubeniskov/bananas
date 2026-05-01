@@ -11,12 +11,16 @@ use dioxus::prelude::*;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct IconProps {
-    pub name: &'static str,
+    /// Icon name (matches the keys in `paths_for`). Accepted as
+    /// `String` so the host SPA can pass dynamic, manifest-driven
+    /// icon names (e.g. from `/api/extensions`); literal `&str`
+    /// callsites still work via `.into()` in rsx!.
+    pub name: String,
     #[props(default = 16)]
     pub size: u32,
     /// Extra CSS class to apply to the <svg>.
-    #[props(default = "")]
-    pub class: &'static str,
+    #[props(default)]
+    pub class: String,
 }
 
 #[component]
@@ -39,7 +43,7 @@ pub fn Icon(props: IconProps) -> Element {
             "stroke-linejoin": "round",
             class: "{class}",
             "aria-hidden": "true",
-            {paths_for(props.name)}
+            {paths_for(&props.name)}
         }
     }
 }
