@@ -560,11 +560,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "bananas-config-form"
+version = "1.4.0"
+dependencies = [
+ "bananas-config-form-derive",
+ "dioxus",
+ "gloo-net",
+ "gloo-timers",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "toml 1.1.2+spec-1.1.0",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "bananas-config-form-derive"
+version = "1.4.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bananas-dashboard"
 version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-config-form",
  "bananas-devtool",
  "bananas-engine",
  "bananas-mfe-runtime",

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud", "crates/exports", "crates/storage", "crates/users", "crates/devtool", "crates/mfe-runtime"]
+members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud", "crates/exports", "crates/storage", "crates/users", "crates/devtool", "crates/mfe-runtime", "crates/config-form", "crates/config-form-derive"]
 exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
 resolver = "3"
 
@@ -25,6 +25,8 @@ bananas-stats = { path = "crates/stats" }
 bananas-dashboard = { path = "crates/dashboard" }
 bananas-config = { path = "crates/config" }
 bananas-mfe-runtime = { path = "crates/mfe-runtime" }
+bananas-config-form = { path = "crates/config-form" }
+bananas-config-form-derive = { path = "crates/config-form-derive" }
 
 # Workspace-wide tokio feature subset. "full" pulls in fs, io, mio, net,
 # parking_lot, process, rt, rt-multi-thread, signal, sync, time, macros,

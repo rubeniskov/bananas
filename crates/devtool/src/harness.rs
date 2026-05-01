@@ -32,14 +32,7 @@ pub const TEST_PASSWORD: &str = "bananas-test";
 /// match what the plugin .ipks ship in /etc/bananas/extensions.d/
 /// for routing to work.
 const PLUGINS: &[(&str, &str, &str, &str, u32, &str)] = &[
-    (
-        "bananas-cloud",
-        "cloud",
-        "Cloud sync",
-        "/api/cloud",
-        50,
-        "cloud",
-    ),
+    ("bananas-cloud", "cloud", "Cloud", "/api/cloud", 50, "cloud"),
     (
         "bananas-exports",
         "exports",

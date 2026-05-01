@@ -1,0 +1,27 @@
+[package]
+name = "bananas-config-form"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Runtime half of the BanaNAS plugin config-form abstraction. Pairs with bananas-config-form-derive: the macro emits a `ConfigForm` impl, this crate ships the row widgets, hydrate/submit hooks, and the shared Banner/Save shell that every plugin's config form lands on."
+
+[lib]
+path = "src/lib.rs"
+
+# Re-export the proc-macro so plugins only need a single dep line.
+[dependencies]
+bananas-config-form-derive = { path = "../config-form-derive" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus.workspace = true
+gloo-net = { workspace = true, features = ["http"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true
+js-sys = "0.3"
