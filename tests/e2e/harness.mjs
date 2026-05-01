@@ -58,6 +58,14 @@ api_prefix = "/api/exports"
 order = 20
 icon = "share-2"
 `);
+    await fs.writeFile(path.join(ext, 'storage.toml'),
+      `id = "storage"
+label = "Storage"
+socket = "${this.tmp}/storage.sock"
+api_prefix = "/api/storage"
+order = 30
+icon = "hard-drive"
+`);
 
     // Pre-create the session.key (32 random bytes) — the daemons
     // would generate one on demand, but having it before they boot
@@ -73,13 +81,14 @@ icon = "share-2"
   }
 
   async build() {
-    console.log('[harness] cargo build -p bananas-{router,webadmin,cloud,exports}');
+    console.log('[harness] cargo build -p bananas-{router,webadmin,cloud,exports,storage}');
     await runToCompletion('cargo', [
       'build',
       '-p', 'bananas-router',
       '-p', 'bananas-webadmin',
       '-p', 'bananas-cloud',
       '-p', 'bananas-exports',
+      '-p', 'bananas-storage',
     ], { cwd: REPO });
   }
 
@@ -110,6 +119,7 @@ icon = "share-2"
       BANANAS_WEBADMIN_SOCKET: path.join(this.tmp, 'webadmin.sock'),
       BANANAS_CLOUD_SOCKET: path.join(this.tmp, 'cloud.sock'),
       BANANAS_EXPORTS_SOCKET: path.join(this.tmp, 'exports.sock'),
+      BANANAS_STORAGE_SOCKET: path.join(this.tmp, 'storage.sock'),
       BANANAS_SESSION_KEY: path.join(this.tmp, 'session.key'),
       BANANAS_LISTEN_ADDR: TCP_ADDR,
       BANANAS_ENGINE_SOCKET: path.join(this.tmp, 'engine.sock'),
@@ -124,6 +134,7 @@ icon = "share-2"
     this.spawnDaemon('bananas-webadmin', env);
     this.spawnDaemon('bananas-cloud', env);
     this.spawnDaemon('bananas-exports', env);
+    this.spawnDaemon('bananas-storage', env);
 
     // Wait for the public TCP listener — a /healthz on the public
     // app sub-proxies through router→webadmin sock→handler, which

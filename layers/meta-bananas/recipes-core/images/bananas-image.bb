@@ -180,6 +180,7 @@ IMAGE_INSTALL += " \
     bananas-router \
     bananas-webadmin \
     bananas-exports \
+    bananas-storage \
     bananas-stats \
     bananas-config \
     bananas-feed-config \

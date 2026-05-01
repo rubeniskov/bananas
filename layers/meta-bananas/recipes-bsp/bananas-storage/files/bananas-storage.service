@@ -1,0 +1,22 @@
+[Unit]
+Description=BanaNAS storage plugin daemon (disks + fstab + permissions)
+After=local-fs.target bananas-engine.service
+Requires=bananas-engine.service
+
+[Service]
+Type=simple
+User=bananas
+Group=bananas
+ExecStart=/usr/bin/bananas-storage
+RuntimeDirectory=bananas
+RuntimeDirectoryPreserve=yes
+StateDirectory=bananas
+StateDirectoryMode=0700
+Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
+Environment=BANANAS_STORAGE_SOCKET=/run/bananas/storage.sock
+Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

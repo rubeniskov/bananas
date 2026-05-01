@@ -392,9 +392,8 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     listed.sort_by(|a, b| a.order.cmp(&b.order).then(a.id.cmp(&b.id)));
                     let host_pages: &[(&str, &str, &str, u32)] = &[
                         ("stats", "Stats", "chart-bar", 10),
-                        // exports moved out to bananas-exports plugin —
-                        // its NavTab now comes from the manifest loop.
-                        ("storage", "Storage", "hard-drive", 30),
+                        // exports + storage moved out to plugins —
+                        // their NavTabs now come from the manifest loop.
                         ("users", "Users", "users", 40),
                     ];
                     let mut nav_items: Vec<(String, String, String, u32)> = host_pages
@@ -644,10 +643,9 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Updates => rsx! { updates::UpdatesPage {} },
                 Page::Plugin(id) => match id.as_str() {
                     "stats" => rsx! { stats::StatsPage {} },
-                    "storage" => rsx! { storage::StoragePage {} },
                     "users" => rsx! { users::UsersPage {} },
-                    // Empty branch for MFE plugins (cloud, exports
-                    // today). The mount frame below renders
+                    // Empty branch for MFE plugins (cloud, exports,
+                    // storage today). The mount frame below renders
                     // unconditionally and toggles via CSS; keeping
                     // the runtime mount alive across tab switches
                     // preserves plugin state on flick-back.
