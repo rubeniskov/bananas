@@ -82,6 +82,14 @@ api_prefix = "/api/stats"
 order = 10
 icon = "chart-bar"
 `);
+    await fs.writeFile(path.join(ext, 'dashboard.toml'),
+      `id = "dashboard"
+label = "Dashboard"
+socket = "${this.tmp}/dashboard-web.sock"
+api_prefix = "/api/dashboard"
+order = 60
+icon = "layout-grid"
+`);
 
     // Pre-create the session.key (32 random bytes) — the daemons
     // would generate one on demand, but having it before they boot
@@ -97,7 +105,13 @@ icon = "chart-bar"
   }
 
   async build() {
-    console.log('[harness] cargo build -p bananas-{router,webadmin,cloud,exports,storage,users,stats(web)}');
+    console.log('[harness] cargo build all plugin daemons');
+    // Two separate cargo invocations — single-bin plugins via
+    // -p, then the multi-bin packages (bananas-stats has both
+    // collector + web; bananas-dashboard has SLINT + web)
+    // pinned with --bin so we don't pull in the SLINT app
+    // (needs fontconfig the host build env lacks) or the
+    // collector daemon.
     await runToCompletion('cargo', [
       'build',
       '-p', 'bananas-router',
@@ -106,8 +120,17 @@ icon = "chart-bar"
       '-p', 'bananas-exports',
       '-p', 'bananas-storage',
       '-p', 'bananas-users',
+    ], { cwd: REPO });
+    await runToCompletion('cargo', [
+      'build',
       '-p', 'bananas-stats',
       '--bin', 'bananas-stats-web',
+    ], { cwd: REPO });
+    await runToCompletion('cargo', [
+      'build',
+      '-p', 'bananas-dashboard',
+      '--bin', 'bananas-dashboard-web',
+      '--no-default-features',
     ], { cwd: REPO });
   }
 
@@ -141,6 +164,7 @@ icon = "chart-bar"
       BANANAS_STORAGE_SOCKET: path.join(this.tmp, 'storage.sock'),
       BANANAS_USERS_SOCKET: path.join(this.tmp, 'users.sock'),
       BANANAS_STATS_WEB_SOCKET: path.join(this.tmp, 'stats-web.sock'),
+      BANANAS_DASHBOARD_WEB_SOCKET: path.join(this.tmp, 'dashboard-web.sock'),
       BANANAS_SESSION_KEY: path.join(this.tmp, 'session.key'),
       BANANAS_LISTEN_ADDR: TCP_ADDR,
       BANANAS_ENGINE_SOCKET: path.join(this.tmp, 'engine.sock'),
@@ -158,6 +182,7 @@ icon = "chart-bar"
     this.spawnDaemon('bananas-storage', env);
     this.spawnDaemon('bananas-users', env);
     this.spawnDaemon('bananas-stats-web', env);
+    this.spawnDaemon('bananas-dashboard-web', env);
 
     // Wait for the public TCP listener — a /healthz on the public
     // app sub-proxies through router→webadmin sock→handler, which

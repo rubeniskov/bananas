@@ -184,6 +184,7 @@ IMAGE_INSTALL += " \
     bananas-users \
     bananas-stats \
     bananas-stats-web \
+    bananas-dashboard-web \
     bananas-config \
     bananas-feed-config \
 "

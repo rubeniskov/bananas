@@ -9,7 +9,6 @@ use dioxus::prelude::*;
 
 mod api;
 mod components;
-mod dashboard_config;
 mod icons;
 mod login;
 mod mfe;
