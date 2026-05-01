@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/webadmin-ui", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud", "crates/cloud-ui"]
+members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/webadmin-ui", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud"]
 exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
 resolver = "3"
 

@@ -23,17 +23,18 @@ use anyhow::Result;
 use axum::{
     Router,
     extract::Request,
-    http::{StatusCode, header},
+    http::StatusCode,
     middleware::{Next, from_fn_with_state},
-    response::{Html, Response},
+    response::Response,
     routing::{get, post, put},
 };
 use bananas_server_common::{Session, SessionKey, extract_cookie};
-use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 mod cloud;
 mod cloud_jobs;
+mod embedded;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -96,61 +97,15 @@ async fn main() -> Result<()> {
         .route_layer(from_fn_with_state(state.clone(), require_session))
         .with_state(state);
 
-    // Serve the cloud SPA bundle at /cloud/* from the BANANAS_CLOUD_UI_DIR
-    // (default /usr/share/bananas/cloud-ui/, populated by the
-    // bananas-cloud-ui IPK). Static assets are immutable-cached
-    // because dx-cli emits content-hashed filenames; the SPA
-    // fallback reads index.html per request so a future bananas-cloud-ui
-    // upgrade lands without restarting this daemon.
-    let ui_dir: PathBuf = std::env::var_os("BANANAS_CLOUD_UI_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "/usr/share/bananas/cloud-ui".into());
-    let index_html_path = Arc::new(ui_dir.join("index.html"));
-    if let Err(e) = std::fs::metadata(&*index_html_path) {
-        tracing::warn!(
-            path = %index_html_path.display(),
-            error = %e,
-            "cloud-ui index.html is not readable at startup"
-        );
-    }
-    let assets = ServeDir::new(ui_dir.join("assets"))
-        .precompressed_br()
-        .precompressed_gzip();
-
+    // Serve the cloud SPA bundle at /cloud/* from bytes embedded in
+    // this binary. `build.rs` ran `dx build --bin bananas-cloud-ui`
+    // and staged the output under $OUT_DIR/ui/, which `embedded.rs`
+    // pulls in via `include_dir!`. Asset URLs that hit the embedded
+    // tree directly get an immutable Cache-Control; SPA deep-links
+    // fall back to index.html (no-cache).
     let app = Router::new()
         .nest("/api", api)
-        .nest_service(
-            "/cloud/assets",
-            tower::ServiceBuilder::new()
-                .layer(SetResponseHeaderLayer::overriding(
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
-                ))
-                .service(assets),
-        )
-        .fallback(get({
-            let index_html_path = index_html_path.clone();
-            move || {
-                let path = index_html_path.clone();
-                async move {
-                    match tokio::fs::read_to_string(&*path).await {
-                        Ok(html) => (
-                            StatusCode::OK,
-                            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                            Html(html),
-                        ),
-                        Err(e) => {
-                            tracing::warn!(path = %path.display(), error = %e, "cloud SPA fallback read failed");
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                                Html(String::from("cloud-ui bundle missing on disk")),
-                            )
-                        }
-                    }
-                }
-            }
-        }))
+        .fallback(get(serve_ui))
         .layer(TraceLayer::new_for_http());
 
     // Always Unix socket — the public TCP port is owned by
@@ -173,6 +128,19 @@ async fn main() -> Result<()> {
     tracing::info!(socket = %socket_path.display(), "bananas-cloud listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Fallback handler — anything not matched by `/api/*` falls through
+/// here, which means it's a static-asset or SPA-route request.
+/// bananas-router forwards the path verbatim, so we see the full
+/// `/cloud/...` URL; strip that mount prefix before consulting the
+/// embedded tree (dx-cli emits assets at `assets/<hash>.{js,wasm,…}`
+/// without the `/cloud/` prefix — that prefix only lives in the URL
+/// strings written into index.html).
+async fn serve_ui(req: Request) -> Response {
+    let path = req.uri().path().to_string();
+    let rest = path.strip_prefix("/cloud").unwrap_or(path.as_str());
+    embedded::serve(rest, &req)
 }
 
 /// Auth middleware — same shape as bananas-webadmin's

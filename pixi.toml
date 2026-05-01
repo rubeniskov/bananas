@@ -167,30 +167,6 @@ tar -C serve/webadmin -czf serve/bin/bananas-webadmin-ui.tar.gz .
 '"""
 depends-on = ["setup-dx"]
 
-# `build-cloud-ui`: same shape as build-webadmin, but for the optional
-# cloud SPA (crates/cloud-ui → /usr/share/bananas/cloud-ui/ on the BPI,
-# served by bananas-cloud at /cloud/*). dx-cli output dir mirrors the
-# crate name; tarball ships as bananas-cloud-ui.tar.gz so
-# bananas-cloud-ui.bb's SRC_URI picks it up.
-[tasks.build-cloud-ui]
-cmd = """bash -c '
-unset CARGO RUSTC
-export RUSTUP_TOOLCHAIN=stable
-export PATH="$HOME/.cargo/bin:$PATH"
-rm -rf target/dx/bananas-cloud-ui/release/web/public
-dx build --release --package bananas-cloud-ui --platform web
-rm -rf serve/cloud-ui
-mkdir -p serve/cloud-ui serve/bin
-cp -r target/dx/bananas-cloud-ui/release/web/public/. serve/cloud-ui/
-find serve/cloud-ui/assets -type f \\( -name "*.wasm" -o -name "*.js" -o -name "*.css" -o -name "*.svg" -o -name "*.html" \\) -print0 \\
-  | while IFS= read -r -d "" f; do
-      brotli -Z -k -f "$f"
-      gzip -9 -k -f "$f"
-    done
-tar -C serve/cloud-ui -czf serve/bin/bananas-cloud-ui.tar.gz .
-'"""
-depends-on = ["setup-dx"]
-
 # `build-webadmin-arm`: cross-compile bananas-webadmin + bananas-engine for the
 # BPI's armv7-unknown-linux-gnueabihf target using cargo-zigbuild (zig as the
 # cross linker, no per-target gcc needed). Stages the stripped binaries in

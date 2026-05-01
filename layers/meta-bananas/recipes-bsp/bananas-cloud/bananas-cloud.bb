@@ -35,7 +35,11 @@ SYSTEMD_AUTO_ENABLE = "enable"
 #   bananas-router — owns :8080 and proxies /api/cloud/* + /cloud/* here
 #                    via the manifest this package drops at install time.
 #   bananas-webadmin — issues the session cookies this daemon validates.
-RDEPENDS:${PN} += "bananas-rclone bananas-router bananas-webadmin bananas-cloud-ui"
+#
+# The cloud SPA is now embedded directly in this binary via include_dir!
+# (see crates/cloud/build.rs + src/embedded.rs); the separate
+# bananas-cloud-ui IPK was retired in v1.5.
+RDEPENDS:${PN} += "bananas-rclone bananas-router bananas-webadmin"
 
 do_compile[noexec] = "1"
 do_configure[noexec] = "1"
