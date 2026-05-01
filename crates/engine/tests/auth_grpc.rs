@@ -1,12 +1,8 @@
-//! gRPC variant of the auth integration tests. Mirrors
-//! `tests/auth.rs` (which exercises the legacy newline-JSON
-//! socket) but goes through the new `EngineService::Authenticate`
-//! RPC mounted at `BANANAS_ENGINE_GRPC_SOCKET`.
-//!
-//! The pattern: spawn the bananas-engine binary as a subprocess
-//! pointed at a tmpdir shadow, dial its gRPC Unix socket via a
-//! tonic Channel that uses a custom Unix connector, and call
-//! Authenticate.
+//! gRPC integration tests for `EngineService::Authenticate` and
+//! `EngineService::ChangeOwnPassword`. Spawns the bananas-engine
+//! binary as a subprocess pointed at a tmpdir shadow, dials its
+//! Unix socket via a tonic Channel that uses a custom Unix
+//! connector, and exercises both happy-path and rejection cases.
 
 use std::path::PathBuf;
 use std::time::Duration;

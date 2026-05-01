@@ -33,16 +33,7 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    // Single socket — the engine speaks gRPC over it. The legacy
-    // newline-JSON `Command` enum had its own listener on
-    // `BANANAS_ENGINE_GRPC_SOCKET` during the migration; once every
-    // command was migrated, the line-JSON listener was retired and
-    // the gRPC listener took over the canonical socket name. Either
-    // env var is honoured for backwards-compat with running images
-    // that still set the legacy name; new deployments use
-    // `BANANAS_ENGINE_SOCKET`.
     let socket_path: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
-        .or_else(|| std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET"))
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine.sock".into());
     let exports_path: PathBuf = std::env::var_os("BANANAS_EXPORTS_PATH")
