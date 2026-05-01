@@ -26,6 +26,15 @@ service EngineService {
   // legacy newline-JSON path is the source of truth until every
   // caller is migrated to gRPC.
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // Self-service password rotation. Verifies `old_password`
+  // against /etc/shadow before invoking `chpasswd` with
+  // `new_password`. Permitted for every user — including root —
+  // because the caller has already proven knowledge of the
+  // current password. Maps 1:1 to `Command::ChangeOwnPassword`.
+  // Errors collapse to `Unauthenticated` with the same redaction
+  // policy as Authenticate so callers can't probe usernames.
+  rpc ChangeOwnPassword(ChangeOwnPasswordRequest) returns (ChangeOwnPasswordResponse);
 }
 
 message AuthenticateRequest {
@@ -40,4 +49,16 @@ message AuthenticateResponse {
   // a magic "password_expired" error string for this; protobuf
   // gives us a real boolean instead.
   bool lastchg_zero = 1;
+}
+
+message ChangeOwnPasswordRequest {
+  string username = 1;
+  string old_password = 2;
+  string new_password = 3;
+}
+
+message ChangeOwnPasswordResponse {
+  // No structured reply needed — success is encoded in the gRPC
+  // status itself. Reserved for future fields (e.g. the new
+  // lastchg day count) without breaking the wire format.
 }

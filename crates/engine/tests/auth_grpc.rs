@@ -11,7 +11,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bananas_proto::engine::v1::{AuthenticateRequest, engine_service_client::EngineServiceClient};
+use bananas_proto::engine::v1::{
+    AuthenticateRequest, ChangeOwnPasswordRequest, engine_service_client::EngineServiceClient,
+};
 use tokio::process::{Child, Command as TokioCommand};
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
@@ -152,4 +154,27 @@ async fn grpc_authenticate_surfaces_password_expired() {
         .await
         .expect("RPC ok");
     assert!(resp.into_inner().lastchg_zero);
+}
+
+#[tokio::test]
+async fn grpc_change_own_password_rejects_wrong_old() {
+    // Same redaction as `Authenticate`: a wrong old-password
+    // surfaces as `Unauthenticated`. We can't exercise the
+    // success path here because `change_own_password` shells out
+    // to `/usr/sbin/chpasswd`, which isn't available (or wouldn't
+    // be safe to run) inside `cargo test`. The success path is
+    // covered by the e2e harness against a real systemd image.
+    let shadow = shadow_line("root", "bananas-test");
+    let engine = Engine::spawn(&shadow).await;
+    let mut client = EngineServiceClient::new(engine.channel().await);
+
+    let err = client
+        .change_own_password(ChangeOwnPasswordRequest {
+            username: "root".into(),
+            old_password: "wrong".into(),
+            new_password: "new-bananas-test".into(),
+        })
+        .await
+        .expect_err("expected unauthenticated");
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }

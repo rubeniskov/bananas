@@ -11,8 +11,9 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use bananas_engine::{Command, Response as HelperResponse};
-use bananas_proto::engine::v1::{AuthenticateRequest, engine_service_client::EngineServiceClient};
+use bananas_proto::engine::v1::{
+    AuthenticateRequest, ChangeOwnPasswordRequest, engine_service_client::EngineServiceClient,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -160,13 +161,31 @@ pub async fn change_password(
             .into_response();
     }
 
-    let cmd = Command::ChangeOwnPassword {
-        username: req.username.clone(),
-        old_password: req.old_password,
-        new_password: req.new_password,
+    // Same gRPC migration shape as `login`: every failure mode
+    // collapses to Unauthenticated on the wire (the engine
+    // refuses to distinguish between "user doesn't exist", "old
+    // password wrong", and "new password rejected"), so we can
+    // dispatch on the tonic Code without inspecting strings.
+    let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "ok": false, "error": format!("helper unreachable: {e}") })),
+            )
+                .into_response();
+        }
     };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, .. }) => {
+    let mut client = EngineServiceClient::new(channel);
+    let rpc = client
+        .change_own_password(ChangeOwnPasswordRequest {
+            username: req.username.clone(),
+            old_password: req.old_password,
+            new_password: req.new_password,
+        })
+        .await;
+    match rpc {
+        Ok(_) => {
             let ttl = if req.remember {
                 TTL_REMEMBER_SECS
             } else {
@@ -185,17 +204,14 @@ pub async fn change_password(
             )
                 .into_response()
         }
-        Ok(HelperResponse { error, .. }) => (
+        Err(status) if status.code() == tonic::Code::Unauthenticated => (
             StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "ok": false,
-                "error": error.unwrap_or_else(|| "invalid credentials".into())
-            })),
+            Json(json!({ "ok": false, "error": "invalid credentials" })),
         )
             .into_response(),
-        Err(e) => (
+        Err(status) => (
             StatusCode::BAD_GATEWAY,
-            Json(json!({ "ok": false, "error": format!("helper unreachable: {e}") })),
+            Json(json!({ "ok": false, "error": format!("helper unreachable: {status}") })),
         )
             .into_response(),
     }

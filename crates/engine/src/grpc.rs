@@ -9,12 +9,12 @@
 use std::path::PathBuf;
 
 use bananas_proto::engine::v1::{
-    AuthenticateRequest, AuthenticateResponse,
+    AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
 
-use crate::{authenticate, verify_shadow_password};
+use crate::{authenticate, change_own_password, verify_shadow_password};
 
 /// Engine gRPC service. Holds the same shadow path the
 /// newline-JSON dispatch threads through `Cx`.
@@ -45,6 +45,31 @@ impl EngineService for EngineGrpc {
                     return Ok(Response::new(AuthenticateResponse { lastchg_zero: true }));
                 }
                 tracing::warn!(user=%body.username, error=%msg, "auth failed (gRPC)");
+                Err(Status::unauthenticated("invalid credentials"))
+            }
+        }
+    }
+
+    async fn change_own_password(
+        &self,
+        req: Request<ChangeOwnPasswordRequest>,
+    ) -> Result<Response<ChangeOwnPasswordResponse>, Status> {
+        let body = req.into_inner();
+        // Same redaction as Authenticate — every failure surfaces
+        // as a single Unauthenticated so callers can't distinguish
+        // "user doesn't exist" from "old password wrong" from "new
+        // password rejected by safety check".
+        match change_own_password(
+            &body.username,
+            &body.old_password,
+            &body.new_password,
+            &self.shadow_path,
+        )
+        .await
+        {
+            Ok(()) => Ok(Response::new(ChangeOwnPasswordResponse {})),
+            Err(e) => {
+                tracing::warn!(user=%body.username, error=%e, "change_own_password failed (gRPC)");
                 Err(Status::unauthenticated("invalid credentials"))
             }
         }

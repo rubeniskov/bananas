@@ -745,7 +745,7 @@ pub(crate) async fn verify_shadow_password(
 /// they know the current password. After `chpasswd` succeeds, `chage`
 /// stamps lastchg with today's day count, which clears the
 /// `password_expired` state for future logins.
-async fn change_own_password(
+pub(crate) async fn change_own_password(
     username: &str,
     old_password: &str,
     new_password: &str,
