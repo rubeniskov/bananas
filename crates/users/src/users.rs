@@ -10,47 +10,68 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    CreateUserRequest, DeleteUserRequest, ListUsersRequest, SetAdminRequest, SetPasswordRequest,
+    engine_service_client::EngineServiceClient,
+};
+use bananas_proto::engine_client;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tonic::transport::Channel;
 
 use crate::AppState;
 
-/// Pass-through helper. Calls the daemon, parses its `output` field as
-/// JSON, returns it. Maps helper failures to a 400 with the error string.
-async fn proxy(state: &AppState, cmd: Command) -> Response {
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => match serde_json::from_str::<Value>(&output) {
-            Ok(value) => Json(value).into_response(),
-            // ListUsers returns a JSON blob; the action commands return a
-            // human-readable string. Wrap the latter so the client gets a
-            // consistent JSON shape.
-            Err(_) => Json(json!({ "ok": true, "message": output })).into_response(),
-        },
-        Ok(HelperResponse { error, output, .. }) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "ok": false,
-                "error": error.unwrap_or_else(|| "helper rejected the request".into()),
-                "output": output,
-            })),
-        )
-            .into_response(),
-        Err(e) => (
+/// Builds an engine gRPC client. On transport failure returns a
+/// pre-rendered 502 response so the call sites stay terse.
+async fn engine_client(state: &AppState) -> Result<EngineServiceClient<Channel>, Response> {
+    match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => Ok(EngineServiceClient::new(c)),
+        Err(e) => Err((
             StatusCode::BAD_GATEWAY,
             Json(json!({
                 "ok": false,
                 "error": format!("helper unreachable: {e}")
             })),
         )
-            .into_response(),
+            .into_response()),
     }
 }
 
+/// Map a tonic `Status` failure to the JSON shape the SPA expects.
+/// InvalidArgument / AlreadyExists / NotFound surface as 400; the
+/// rest are 502.
+fn status_to_response(status: tonic::Status) -> Response {
+    use tonic::Code;
+    let http = match status.code() {
+        Code::InvalidArgument | Code::AlreadyExists | Code::NotFound => StatusCode::BAD_REQUEST,
+        _ => StatusCode::BAD_GATEWAY,
+    };
+    (
+        http,
+        Json(json!({
+            "ok": false,
+            "error": status.message().to_string(),
+        })),
+    )
+        .into_response()
+}
+
 pub async fn list(State(state): State<AppState>) -> Response {
-    proxy(&state, Command::ListUsers).await
+    let mut client = match engine_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client.list_users(ListUsersRequest {}).await {
+        Ok(resp) => match serde_json::from_str::<Value>(&resp.into_inner().users_json) {
+            Ok(value) => Json(value).into_response(),
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "ok": false, "error": format!("list_users payload: {e}") })),
+            )
+                .into_response(),
+        },
+        Err(status) => status_to_response(status),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,17 +85,23 @@ pub struct CreateUser {
 }
 
 pub async fn create(State(state): State<AppState>, Json(req): Json<CreateUser>) -> Response {
-    proxy(
-        &state,
-        Command::CreateUser {
+    let mut client = match engine_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .create_user(CreateUserRequest {
             username: req.username,
             password: req.password,
-            full_name: req.full_name,
+            full_name: req.full_name.unwrap_or_default(),
             admin: req.admin,
             password_is_hash: false,
-        },
-    )
-    .await
+        })
+        .await
+    {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(status) => status_to_response(status),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,18 +114,31 @@ pub async fn set_admin(
     Path(username): Path<String>,
     Json(req): Json<SetAdmin>,
 ) -> Response {
-    proxy(
-        &state,
-        Command::SetAdmin {
+    let mut client = match engine_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .set_admin(SetAdminRequest {
             username,
             admin: req.admin,
-        },
-    )
-    .await
+        })
+        .await
+    {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(status) => status_to_response(status),
+    }
 }
 
 pub async fn delete(State(state): State<AppState>, Path(username): Path<String>) -> Response {
-    proxy(&state, Command::DeleteUser { username }).await
+    let mut client = match engine_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client.delete_user(DeleteUserRequest { username }).await {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(status) => status_to_response(status),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,12 +151,18 @@ pub async fn set_password(
     Path(username): Path<String>,
     Json(req): Json<SetPassword>,
 ) -> Response {
-    proxy(
-        &state,
-        Command::SetPassword {
+    let mut client = match engine_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .set_password(SetPasswordRequest {
             username,
             password: req.password,
-        },
-    )
-    .await
+        })
+        .await
+    {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(status) => status_to_response(status),
+    }
 }

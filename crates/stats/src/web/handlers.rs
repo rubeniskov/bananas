@@ -160,31 +160,35 @@ fn empty_snapshot() -> Response {
 /// Returns `{config: "..."}` so the UI can drop it straight into a
 /// textarea without parsing.
 pub async fn get_config(State(state): State<AppState>) -> Response {
-    use bananas_engine::{Command, Response as HelperResponse};
-    let cmd = Command::ReadServiceConfig {
-        name: "stats".into(),
+    use bananas_proto::engine::v1::{
+        ReadServiceConfigRequest, engine_service_client::EngineServiceClient,
     };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => {
-            // Empty output means /etc/bananas/stats.toml doesn't exist
-            // yet (the helper returns "" rather than an error). Fall
-            // back to serializing the daemon's compiled-in defaults so
-            // the UI's modal always has something concrete to show /
-            // edit, instead of a blank textarea that confuses operators
-            // on a fresh image.
-            let body = if output.trim().is_empty() {
+    use bananas_proto::engine_client;
+    let channel = match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("engine unreachable: {e}")),
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .read_service_config(ReadServiceConfigRequest {
+            name: "stats".into(),
+        })
+        .await
+    {
+        Ok(resp) => {
+            // Empty content means /etc/bananas/stats.toml doesn't
+            // exist yet. Fall back to the daemon's compiled-in
+            // defaults so the UI's modal always has something
+            // concrete to show / edit instead of a blank textarea.
+            let content = resp.into_inner().content;
+            let body = if content.trim().is_empty() {
                 default_config_toml()
             } else {
-                output
+                content
             };
             Json(json!({ "config": body })).into_response()
         }
-        Ok(HelperResponse { error, .. }) => {
-            err_500(error.unwrap_or_else(|| "helper rejected ReadServiceConfig".into()))
-        }
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+        Err(status) => err_500(format!("ReadServiceConfig(stats) failed: {status}")),
     }
 }
 
@@ -205,21 +209,27 @@ pub struct PutConfig {
 /// Returns `{ok, output}` mirroring the helper's response so the UI can
 /// surface systemctl's stdout in the success banner.
 pub async fn put_config(State(state): State<AppState>, Json(req): Json<PutConfig>) -> Response {
-    use bananas_engine::{Command, Response as HelperResponse};
-    let cmd = Command::WriteServiceConfig {
-        name: "stats".into(),
-        content: req.config,
+    use bananas_proto::engine::v1::{
+        WriteServiceConfigRequest, engine_service_client::EngineServiceClient,
     };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => Json(json!({ "ok": true, "output": output })).into_response(),
-        Ok(HelperResponse { error, output, .. }) => err_400(format!(
-            "{}\n\n{}",
-            error.unwrap_or_else(|| "helper rejected WriteServiceConfig".into()),
-            output
-        )),
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+    use bananas_proto::engine_client;
+    let channel = match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("engine unreachable: {e}")),
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .write_service_config(WriteServiceConfigRequest {
+            name: "stats".into(),
+            content: req.config,
+        })
+        .await
+    {
+        Ok(resp) => Json(json!({ "ok": true, "output": resp.into_inner().output })).into_response(),
+        Err(status) if status.code() == tonic::Code::InvalidArgument => {
+            err_400(status.message().to_string())
+        }
+        Err(status) => err_500(format!("WriteServiceConfig(stats) failed: {status}")),
     }
 }
 

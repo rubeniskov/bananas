@@ -30,7 +30,8 @@ axum = { workspace = true, features = ["macros"] }
 anyhow.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tower-http.workspace = true
-bananas-engine.workspace = true
+bananas-proto = { workspace = true, features = ["server"] }
+tonic = { workspace = true, features = ["transport"] }
 bananas-server-common.workspace = true
 include_dir = "0.7"
 

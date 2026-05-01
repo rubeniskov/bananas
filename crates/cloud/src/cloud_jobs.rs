@@ -32,7 +32,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{RunCloudSyncRequest, engine_service_client::EngineServiceClient};
+use bananas_proto::engine_client;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 
@@ -151,32 +152,33 @@ impl JobManager {
 
         let mgr = self.clone();
         tokio::spawn(async move {
-            let cmd = Command::RunCloudSync { idx: sync_idx };
-            let res = bananas_engine::call(&helper_socket, &cmd).await;
+            // Build a fresh tonic Channel per spawn — rclone runs
+            // are typically minutes-to-hours apart, so caching the
+            // client wouldn't save anything meaningful.
+            let res = match engine_client::channel(&helper_socket).await {
+                Ok(channel) => {
+                    let mut client = EngineServiceClient::new(channel);
+                    client
+                        .run_cloud_sync(RunCloudSyncRequest {
+                            idx: sync_idx as u32,
+                        })
+                        .await
+                }
+                Err(e) => Err(tonic::Status::unavailable(format!(
+                    "engine unreachable: {e}"
+                ))),
+            };
             let mut inner = mgr.inner.write().await;
             if let Some(state) = inner.jobs.get_mut(&id) {
                 state.finished_unix = Some(unix_now());
                 match res {
-                    Ok(HelperResponse {
-                        ok: true, output, ..
-                    }) => {
+                    Ok(resp) => {
                         state.status = JobStatus::Success;
-                        state.output = truncate_tail(&output, MAX_OUTPUT_BYTES);
+                        state.output = truncate_tail(&resp.into_inner().output, MAX_OUTPUT_BYTES);
                     }
-                    Ok(HelperResponse { error, output, .. }) => {
+                    Err(status) => {
                         state.status = JobStatus::Failure;
-                        state.output = truncate_tail(
-                            &format!(
-                                "{}\n\n{}",
-                                error.unwrap_or_else(|| "rclone failed".into()),
-                                output
-                            ),
-                            MAX_OUTPUT_BYTES,
-                        );
-                    }
-                    Err(e) => {
-                        state.status = JobStatus::Failure;
-                        state.output = format!("helper unreachable: {e}");
+                        state.output = format!("rclone failed: {status}");
                     }
                 }
             }
@@ -279,18 +281,25 @@ async fn scheduler_tick(
     manager: &JobManager,
     helper_socket: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let cmd = Command::ReadServiceConfig {
-        name: "cloud".into(),
+    use bananas_proto::engine::v1::ReadServiceConfigRequest;
+    let channel = engine_client::channel(helper_socket).await?;
+    let mut client = EngineServiceClient::new(channel);
+    let resp = match client
+        .read_service_config(ReadServiceConfigRequest {
+            name: "cloud".into(),
+        })
+        .await
+    {
+        Ok(r) => r.into_inner(),
+        Err(_) => {
+            // No cloud.toml yet — nothing to schedule.
+            return Ok(());
+        }
     };
-    let resp = bananas_engine::call(helper_socket, &cmd).await?;
-    if !resp.ok {
-        // No cloud.toml yet — nothing to schedule.
+    if resp.content.trim().is_empty() {
         return Ok(());
     }
-    if resp.output.trim().is_empty() {
-        return Ok(());
-    }
-    let cfg: CloudConfig = match toml::from_str(&resp.output) {
+    let cfg: CloudConfig = match toml::from_str(&resp.content) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "scheduler: cloud.toml parse failed");

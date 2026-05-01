@@ -19,12 +19,24 @@ default = ["server"]
 # Enable the tonic server side. Only the daemons turn this on;
 # the wasm SPA leaves it off because tonic's transport module
 # pulls hyper which doesn't compile to wasm32-unknown-unknown.
-server = ["tonic/transport", "tonic/router"]
+server = [
+    "tonic/transport",
+    "tonic/router",
+    "dep:tower",
+    "dep:hyper-util",
+    "dep:tokio",
+]
 
 [dependencies]
 tonic = { workspace = true, default-features = false, features = ["codegen"] }
 prost.workspace = true
 tonic-prost = "0.14"
+# Client-side helpers for dialing engine's Unix-socket gRPC mount
+# from a host daemon. Both deps are server-side only — gated off
+# the `server` feature so the wasm SPA build doesn't pull them.
+tower = { version = "0.5", optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+tokio = { workspace = true, optional = true, features = ["net"] }
 
 [build-dependencies]
 tonic-build = { workspace = true, default-features = false }

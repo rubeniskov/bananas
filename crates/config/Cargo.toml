@@ -11,9 +11,10 @@ name = "bananas-config"
 path = "src/main.rs"
 
 [dependencies]
-# Wire protocol + helper RPC client. The TUI runs as the bananas group,
-# same socket the server uses.
-bananas-engine.workspace = true
+# Wire protocol — engine gRPC client. The TUI runs as the
+# bananas group; same socket the server daemons use.
+bananas-proto = { workspace = true, features = ["server"] }
+tonic = { workspace = true, features = ["transport"] }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

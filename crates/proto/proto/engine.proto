@@ -1,18 +1,10 @@
 // bananas-engine: privileged-ops daemon RPCs.
 //
-// PR-4 fills in a single RPC — `Authenticate`, the highest-value
-// path because (a) it's hit on every /api/login and (b) it's the
-// most security-sensitive, so type-checked wire shapes matter.
-// The other 27 `Command` enum variants in
-// `crates/engine/src/lib.rs` continue to use the existing
-// newline-JSON Unix socket. They migrate one or two at a time in
-// follow-up PRs as the engine's tonic mount stabilises.
-//
-// Engine binary serves both protocols: the legacy newline-JSON
-// socket at `BANANAS_ENGINE_SOCKET` (unchanged) and a sibling
-// gRPC socket at `BANANAS_ENGINE_GRPC_SOCKET`. Callers pick
-// whichever path is migrated for the RPC they need; the
-// transition stays incremental.
+// Every RPC the engine answers lives on this single service.
+// The legacy newline-JSON `Command` enum + its sibling listener
+// were retired once every variant migrated; the engine now
+// speaks gRPC over a single Unix socket
+// (`BANANAS_ENGINE_SOCKET`, default `/run/bananas/engine.sock`).
 
 syntax = "proto3";
 
@@ -130,6 +122,72 @@ service EngineService {
   // hash it. `admin=true` adds the user to `bananas-admin`.
   // Maps 1:1 to `Command::CreateUser`.
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+
+  // List human accounts (UID >= 1000, non-`bananas`) with their
+  // group + admin flag. Hashes are NOT included (use
+  // `ExportUsers` for the hash-bearing variant). Wire shape stays
+  // a JSON-encoded string for the same staged-migration reason as
+  // ExportUsers. Maps 1:1 to `Command::ListUsers`.
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+
+  // Add or remove `username` from the `bananas-admin` group.
+  // Maps 1:1 to `Command::SetAdmin`.
+  rpc SetAdmin(SetAdminRequest) returns (SetAdminResponse);
+
+  // `userdel -r username`. Refuses for system users (UID < 1000)
+  // and the `bananas` service user. Maps 1:1 to
+  // `Command::DeleteUser`.
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+
+  // `chpasswd` over stdin for an existing user. Caller must already
+  // be admin (the webadmin layer enforces session-cookie checks);
+  // engine refuses for system users to prevent self-lockout.
+  // Maps 1:1 to `Command::SetPassword`.
+  rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
+
+  // `mkdir -p path` under an allowlisted prefix
+  // (`/srv/`, `/mnt/`, …). Refuses arbitrary paths so a
+  // confused web caller can't create directories anywhere on
+  // the system. Maps 1:1 to `Command::MakeDirectory`.
+  rpc MakeDirectory(MakeDirectoryRequest) returns (MakeDirectoryResponse);
+
+  // `lsblk -J -b -o NAME,KNAME,…` — the engine runs as root so
+  // it can read the kernel's block-device topology including
+  // partitions on raw disks. Wire shape stays a JSON-encoded
+  // string for the same reasons as List/Export Users. Maps 1:1
+  // to `Command::Lsblk`.
+  rpc Lsblk(LsblkRequest) returns (LsblkResponse);
+
+  // `smartctl -a -j device` — pulls the SMART health snapshot
+  // for the named block device. Wire shape is the smartctl
+  // JSON output verbatim. Maps 1:1 to `Command::Smart`.
+  rpc Smart(SmartRequest) returns (SmartResponse);
+
+  // `stat path` for an allowlisted path; returns
+  // `{uid,gid,user,group,mode,kind}` JSON. Maps 1:1 to
+  // `Command::Stat`.
+  rpc Stat(StatRequest) returns (StatResponse);
+
+  // chown / chmod a path. Each of `uid`/`gid`/`mode` is
+  // optional (signalled by their `_set` companion bools);
+  // missing ones leave that aspect untouched. `recursive=true`
+  // walks the tree. Allowlisted paths only. Maps 1:1 to
+  // `Command::SetPermissions`.
+  rpc SetPermissions(SetPermissionsRequest) returns (SetPermissionsResponse);
+
+  // Run an rclone sync defined at index `idx` of
+  // `/etc/bananas/cloud.toml`'s `[[syncs]]` array. Blocks until
+  // rclone exits; the engine writes per-line progress to the
+  // sync-progress dir while running so callers can tail it via
+  // `bananas.cloud.v1.CloudService::TailRunLog`. Maps 1:1 to
+  // `Command::RunCloudSync`.
+  rpc RunCloudSync(RunCloudSyncRequest) returns (RunCloudSyncResponse);
+
+  // Send SIGTERM to a running rclone job for the given sync
+  // index. Returns OK even if no job is currently running so a
+  // double-cancel from the UI isn't an error. Maps 1:1 to
+  // `Command::CancelCloudSync`.
+  rpc CancelCloudSync(CancelCloudSyncRequest) returns (CancelCloudSyncResponse);
 }
 
 message AuthenticateRequest {
@@ -318,3 +376,104 @@ message CreateUserRequest {
 }
 
 message CreateUserResponse {}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  // JSON-encoded `{"users": [...]}` with UID/GID/admin/locked
+  // fields but no shadow hash. Stays opaque on the wire until
+  // the users page itself migrates to gRPC.
+  string users_json = 1;
+}
+
+message SetAdminRequest {
+  string username = 1;
+  bool admin = 2;
+}
+
+message SetAdminResponse {}
+
+message DeleteUserRequest {
+  string username = 1;
+}
+
+message DeleteUserResponse {}
+
+message SetPasswordRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message SetPasswordResponse {}
+
+message MakeDirectoryRequest {
+  string path = 1;
+}
+
+message MakeDirectoryResponse {
+  // Combined output from any in-flight stat/mkdir tracing.
+  string output = 1;
+}
+
+message LsblkRequest {}
+
+message LsblkResponse {
+  // Raw JSON document from `lsblk -J`.
+  string lsblk_json = 1;
+}
+
+message SmartRequest {
+  string device = 1;
+}
+
+message SmartResponse {
+  // Raw JSON document from `smartctl -a -j`.
+  string smart_json = 1;
+}
+
+message StatRequest {
+  string path = 1;
+}
+
+message StatResponse {
+  // JSON `{uid,gid,user,group,mode,kind}` document.
+  string stat_json = 1;
+}
+
+message SetPermissionsRequest {
+  string path = 1;
+  // Each of uid/gid/mode is optional. The `_set` companion bool
+  // distinguishes "value supplied" from protobuf's default-zero
+  // / empty-string, which would otherwise be ambiguous (chown
+  // root:root is uid=0/gid=0).
+  uint32 uid = 2;
+  bool uid_set = 3;
+  uint32 gid = 4;
+  bool gid_set = 5;
+  string mode = 6;
+  bool mode_set = 7;
+  bool recursive = 8;
+}
+
+message SetPermissionsResponse {
+  string output = 1;
+}
+
+message RunCloudSyncRequest {
+  uint32 idx = 1;
+}
+
+message RunCloudSyncResponse {
+  // Captured rclone stdout+stderr (truncated by the engine to
+  // a sane upper bound; full transcript stays in the
+  // sync-progress log on disk).
+  string output = 1;
+}
+
+message CancelCloudSyncRequest {
+  uint32 idx = 1;
+}
+
+message CancelCloudSyncResponse {
+  string output = 1;
+}

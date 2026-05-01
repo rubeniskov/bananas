@@ -37,3 +37,36 @@ pub mod engine {
         include!(concat!(env!("OUT_DIR"), "/bananas.engine.v1.rs"));
     }
 }
+
+/// Tiny shared helper for daemons that need to dial bananas-engine's
+/// gRPC Unix socket. Keeps every plugin daemon from re-implementing
+/// the tonic + tower service-fn + tokio Unix connector dance.
+///
+/// Server-side only: the wasm SPA leaves the `server` feature off
+/// because `tonic::transport` and `hyper-util` don't build for
+/// wasm32-unknown-unknown.
+#[cfg(feature = "server")]
+pub mod engine_client {
+    use std::path::{Path, PathBuf};
+
+    use tonic::transport::{Channel, Endpoint, Uri};
+    use tower::service_fn;
+
+    /// Build a tonic Channel that dials the engine's gRPC Unix
+    /// socket. The URI is a placeholder — the custom connector
+    /// ignores it and opens a UnixStream instead. Tonic still
+    /// requires *some* URI to instantiate the Endpoint.
+    pub async fn channel(socket: &Path) -> Result<Channel, tonic::transport::Error> {
+        let path: PathBuf = socket.to_path_buf();
+        Endpoint::try_from("http://[::]:50051")
+            .expect("static placeholder URI parses")
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let p = path.clone();
+                async move {
+                    let stream = tokio::net::UnixStream::connect(p).await?;
+                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
+                }
+            }))
+            .await
+    }
+}

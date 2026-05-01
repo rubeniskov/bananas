@@ -26,7 +26,12 @@ mod handlers;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub helper_socket: Arc<PathBuf>,
+    /// Path to bananas-engine's gRPC Unix socket. The dashboard
+    /// plugin only needs `ReadServiceConfig` /
+    /// `WriteServiceConfig` from the engine — both have already
+    /// migrated to gRPC, so the legacy newline-JSON socket
+    /// (`BANANAS_ENGINE_SOCKET`) isn't read here anymore.
+    pub helper_grpc_socket: Arc<PathBuf>,
     pub session_key: Arc<SessionKey>,
 }
 
@@ -49,12 +54,13 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "/var/lib/bananas/session.key".into());
     let session_key = SessionKey::load_or_create(&session_key_path)?;
 
-    let helper_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
+    let helper_grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
+        .or_else(|| std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET"))
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
     let state = AppState {
-        helper_socket: Arc::new(helper_socket),
+        helper_grpc_socket: Arc::new(helper_grpc_socket),
         session_key: Arc::new(session_key),
     };
 

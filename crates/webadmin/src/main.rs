@@ -107,9 +107,10 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "/var/lib/bananas/session.key".into());
     let session_key = SessionKey::load_or_create(&session_key_path)?;
 
-    let helper_grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET")
+    let helper_grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
+        .or_else(|| std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/run/bananas/engine-grpc.sock".into());
+        .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
     let operations_journal: PathBuf = std::env::var_os("BANANAS_OPERATIONS_JOURNAL")
         .map(PathBuf::from)

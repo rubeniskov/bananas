@@ -1,33 +1,37 @@
-//! Tonic-served gRPC half of the engine. Hosted on
-//! `BANANAS_ENGINE_GRPC_SOCKET` (default
-//! `/run/bananas/engine-grpc.sock`), alongside the legacy
-//! newline-JSON socket at `BANANAS_ENGINE_SOCKET`. Migration
-//! between them is per-command: each Command variant moves to
-//! gRPC at its own pace, and during the transition both paths
-//! work.
+//! Tonic-served gRPC face of the engine. Hosted on
+//! `BANANAS_ENGINE_SOCKET` (default `/run/bananas/engine.sock`).
+//! Every privileged op the platform exposes routes through here;
+//! the legacy newline-JSON listener was retired when the last
+//! `Command` variant migrated.
 
 use std::path::PathBuf;
 
 use bananas_proto::engine::v1::{
-    AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
-    CreateUserRequest, CreateUserResponse, ExportUsersRequest, ExportUsersResponse,
+    AuthenticateRequest, AuthenticateResponse, CancelCloudSyncRequest, CancelCloudSyncResponse,
+    ChangeOwnPasswordRequest, ChangeOwnPasswordResponse, CreateUserRequest, CreateUserResponse,
+    DeleteUserRequest, DeleteUserResponse, ExportUsersRequest, ExportUsersResponse,
     InstalledPackage as ProtoInstalledPackage, ListTimezonesRequest, ListTimezonesResponse,
-    OpkgListInstalledRequest, OpkgListInstalledResponse, OpkgListUpgradableRequest,
-    OpkgListUpgradableResponse, OpkgUpdateRequest, OpkgUpdateResponse, OpkgUpgradeRequest,
-    OpkgUpgradeResponse, OpkgUpgradeStatusRequest, OpkgUpgradeStatusResponse,
+    ListUsersRequest, ListUsersResponse, LsblkRequest, LsblkResponse, MakeDirectoryRequest,
+    MakeDirectoryResponse, OpkgListInstalledRequest, OpkgListInstalledResponse,
+    OpkgListUpgradableRequest, OpkgListUpgradableResponse, OpkgUpdateRequest, OpkgUpdateResponse,
+    OpkgUpgradeRequest, OpkgUpgradeResponse, OpkgUpgradeStatusRequest, OpkgUpgradeStatusResponse,
     ReadServiceConfigRequest, ReadServiceConfigResponse, RebootSystemRequest, RebootSystemResponse,
-    SetTimezoneRequest, SetTimezoneResponse, UpgradablePackage as ProtoUpgradablePackage,
-    WriteExportsRequest, WriteExportsResponse, WriteFstabRequest, WriteFstabResponse,
-    WriteServiceConfigRequest, WriteServiceConfigResponse,
+    RunCloudSyncRequest, RunCloudSyncResponse, SetAdminRequest, SetAdminResponse,
+    SetPasswordRequest, SetPasswordResponse, SetPermissionsRequest, SetPermissionsResponse,
+    SetTimezoneRequest, SetTimezoneResponse, SmartRequest, SmartResponse, StatRequest,
+    StatResponse, UpgradablePackage as ProtoUpgradablePackage, WriteExportsRequest,
+    WriteExportsResponse, WriteFstabRequest, WriteFstabResponse, WriteServiceConfigRequest,
+    WriteServiceConfigResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
 
 use crate::Cx;
 use crate::{
-    authenticate, change_own_password, create_user, list_timezones_vec, list_users, opkg,
-    read_service_config, reboot_system, set_timezone, verify_shadow_password, write_exports,
-    write_fstab, write_service_config,
+    authenticate, cancel_cloud_sync, change_own_password, create_user, delete_user,
+    list_timezones_vec, list_users, make_directory, opkg, read_service_config, reboot_system,
+    run_cloud_sync, run_lsblk, set_admin, set_password, set_permissions, set_timezone, smart,
+    stat_path, verify_shadow_password, write_exports, write_fstab, write_service_config,
 };
 
 /// Engine gRPC service. Holds the same `Cx` (on-disk paths) the
@@ -368,6 +372,220 @@ impl EngineService for EngineGrpc {
                 } else {
                     Err(Status::internal(msg))
                 }
+            }
+        }
+    }
+
+    async fn list_users(
+        &self,
+        _req: Request<ListUsersRequest>,
+    ) -> Result<Response<ListUsersResponse>, Status> {
+        match list_users(false).await {
+            Ok(users_json) => Ok(Response::new(ListUsersResponse { users_json })),
+            Err(e) => {
+                tracing::warn!(error = %e, "list_users failed (gRPC)");
+                Err(Status::internal(format!("list_users: {e}")))
+            }
+        }
+    }
+
+    async fn set_admin(
+        &self,
+        req: Request<SetAdminRequest>,
+    ) -> Result<Response<SetAdminResponse>, Status> {
+        let body = req.into_inner();
+        match set_admin(&body.username, body.admin).await {
+            Ok(()) => Ok(Response::new(SetAdminResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "set_admin failed (gRPC)");
+                if msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else if msg.contains("not found") {
+                    Err(Status::not_found(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn delete_user(
+        &self,
+        req: Request<DeleteUserRequest>,
+    ) -> Result<Response<DeleteUserResponse>, Status> {
+        let body = req.into_inner();
+        match delete_user(&body.username).await {
+            Ok(()) => Ok(Response::new(DeleteUserResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "delete_user failed (gRPC)");
+                if msg.starts_with("invalid")
+                    || msg.contains("system user")
+                    || msg.contains("refusing")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else if msg.contains("not found") {
+                    Err(Status::not_found(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn set_password(
+        &self,
+        req: Request<SetPasswordRequest>,
+    ) -> Result<Response<SetPasswordResponse>, Status> {
+        let body = req.into_inner();
+        match set_password(&body.username, &body.password).await {
+            Ok(()) => Ok(Response::new(SetPasswordResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "set_password failed (gRPC)");
+                if msg.starts_with("invalid")
+                    || msg.contains("system user")
+                    || msg.contains("refusing")
+                    || msg.contains("password")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn make_directory(
+        &self,
+        req: Request<MakeDirectoryRequest>,
+    ) -> Result<Response<MakeDirectoryResponse>, Status> {
+        let path = req.into_inner().path;
+        match make_directory(&path).await {
+            Ok(output) => Ok(Response::new(MakeDirectoryResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(path = %path, error = %msg, "make_directory failed (gRPC)");
+                if msg.starts_with("refusing")
+                    || msg.starts_with("invalid")
+                    || msg.contains("not allowed")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn lsblk(&self, _req: Request<LsblkRequest>) -> Result<Response<LsblkResponse>, Status> {
+        match run_lsblk().await {
+            Ok(lsblk_json) => Ok(Response::new(LsblkResponse { lsblk_json })),
+            Err(e) => {
+                tracing::warn!(error = %e, "lsblk failed (gRPC)");
+                Err(Status::internal(format!("lsblk: {e}")))
+            }
+        }
+    }
+
+    async fn smart(&self, req: Request<SmartRequest>) -> Result<Response<SmartResponse>, Status> {
+        let device = req.into_inner().device;
+        match smart(&device).await {
+            Ok(smart_json) => Ok(Response::new(SmartResponse { smart_json })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(device = %device, error = %msg, "smart failed (gRPC)");
+                if msg.contains("not allowed") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn stat(&self, req: Request<StatRequest>) -> Result<Response<StatResponse>, Status> {
+        let path = req.into_inner().path;
+        match stat_path(&path).await {
+            Ok(stat_json) => Ok(Response::new(StatResponse { stat_json })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(path = %path, error = %msg, "stat failed (gRPC)");
+                if msg.contains("not allowed") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn set_permissions(
+        &self,
+        req: Request<SetPermissionsRequest>,
+    ) -> Result<Response<SetPermissionsResponse>, Status> {
+        let body = req.into_inner();
+        let uid = body.uid_set.then_some(body.uid);
+        let gid = body.gid_set.then_some(body.gid);
+        let mode = if body.mode_set {
+            Some(body.mode.as_str())
+        } else {
+            None
+        };
+        match set_permissions(&body.path, uid, gid, mode, body.recursive).await {
+            Ok(output) => Ok(Response::new(SetPermissionsResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(path = %body.path, error = %msg, "set_permissions failed (gRPC)");
+                if msg.contains("not allowed")
+                    || msg.starts_with("invalid")
+                    || msg.contains("nothing to change")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn run_cloud_sync(
+        &self,
+        req: Request<RunCloudSyncRequest>,
+    ) -> Result<Response<RunCloudSyncResponse>, Status> {
+        let idx = req.into_inner().idx as usize;
+        // rclone-side errors are real failures (network, auth,
+        // disk). Bad-config errors get InvalidArgument so the SPA
+        // distinguishes "this run failed" from "the sync entry is
+        // misconfigured".
+        match run_cloud_sync(idx).await {
+            Ok(output) => Ok(Response::new(RunCloudSyncResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(idx, error = %msg, "run_cloud_sync failed (gRPC)");
+                if msg.contains("not found")
+                    || msg.contains("invalid")
+                    || msg.contains("out of range")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn cancel_cloud_sync(
+        &self,
+        req: Request<CancelCloudSyncRequest>,
+    ) -> Result<Response<CancelCloudSyncResponse>, Status> {
+        let idx = req.into_inner().idx as usize;
+        match cancel_cloud_sync(idx).await {
+            Ok(output) => Ok(Response::new(CancelCloudSyncResponse { output })),
+            Err(e) => {
+                tracing::warn!(idx, error = %e, "cancel_cloud_sync failed (gRPC)");
+                Err(Status::internal(format!("cancel_cloud_sync: {e}")))
             }
         }
     }

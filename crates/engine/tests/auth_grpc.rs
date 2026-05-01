@@ -35,7 +35,7 @@ fn shadow_line(user: &str, password: &str) -> String {
 
 struct Engine {
     _tmp: tempfile::TempDir,
-    grpc_socket: PathBuf,
+    socket: PathBuf,
     child: Child,
 }
 
@@ -44,14 +44,12 @@ impl Engine {
         let tmp = tempfile::tempdir().expect("tempdir");
         let shadow = tmp.path().join("shadow");
         let socket = tmp.path().join("engine.sock");
-        let grpc_socket = tmp.path().join("engine-grpc.sock");
         let exports = tmp.path().join("exports");
         std::fs::write(&shadow, shadow_contents).expect("write shadow");
         std::fs::write(&exports, "").expect("write exports");
 
         let child = TokioCommand::new(ENGINE_BIN)
             .env("BANANAS_ENGINE_SOCKET", &socket)
-            .env("BANANAS_ENGINE_GRPC_SOCKET", &grpc_socket)
             .env("BANANAS_SHADOW_PATH", &shadow)
             .env("BANANAS_EXPORTS_PATH", &exports)
             .stdout(std::process::Stdio::null())
@@ -63,26 +61,26 @@ impl Engine {
         // built-in retry; we just poll until the file appears.
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
-            if grpc_socket.exists() {
+            if socket.exists() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(
-            grpc_socket.exists(),
+            socket.exists(),
             "engine never bound gRPC socket at {}",
-            grpc_socket.display()
+            socket.display()
         );
 
         Self {
             _tmp: tmp,
-            grpc_socket,
+            socket,
             child,
         }
     }
 
     async fn channel(&self) -> Channel {
-        let path = self.grpc_socket.clone();
+        let path = self.socket.clone();
         // The URI is a placeholder — the connector ignores it and
         // dials the Unix socket. tonic still needs *some* URI to
         // satisfy `Endpoint`.

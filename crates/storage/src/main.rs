@@ -22,7 +22,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    MakeDirectoryRequest, WriteFstabRequest, engine_service_client::EngineServiceClient,
+};
+use bananas_proto::engine_client;
 use bananas_server_common::{Session, SessionKey, extract_cookie};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -37,7 +40,7 @@ mod storage;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub helper_socket: Arc<PathBuf>,
+    pub helper_grpc_socket: Arc<PathBuf>,
     pub session_key: Arc<SessionKey>,
     pub storage_cache: storage::StorageCache,
     /// /etc/fstab in production; redirected to a tmpdir fixture
@@ -64,7 +67,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "/var/lib/bananas/session.key".into());
     let session_key = SessionKey::load_or_create(&session_key_path)?;
 
-    let helper_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
+    let helper_grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
+        .or_else(|| std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET"))
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
@@ -76,7 +80,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "/etc/fstab".into());
 
     let state = AppState {
-        helper_socket: Arc::new(helper_socket),
+        helper_grpc_socket: Arc::new(helper_grpc_socket),
         session_key: Arc::new(session_key),
         storage_cache: storage::StorageCache::new(),
         fstab_path: Arc::new(fstab_path),
@@ -378,25 +382,24 @@ async fn apply_fstab(state: &AppState, rows: &[fstab::Row]) -> axum::response::R
     let body = fstab::serialize(rows);
     let content = format!("{}{}", header, body);
 
-    let cmd = Command::WriteFstab { content };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => Json(json!({ "ok": true, "output": output })).into_response(),
-        Ok(HelperResponse { error, output, .. }) => api_err(
+    let channel = match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => {
+            return api_err(
+                StatusCode::BAD_GATEWAY,
+                format!("could not reach engine: {e}"),
+            );
+        }
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client.write_fstab(WriteFstabRequest { content }).await {
+        Ok(resp) => Json(json!({ "ok": true, "output": resp.into_inner().output })).into_response(),
+        Err(status) if status.code() == tonic::Code::InvalidArgument => {
+            api_err(StatusCode::BAD_REQUEST, status.message().to_string())
+        }
+        Err(status) => api_err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "{}\n\n{}",
-                error.as_deref().unwrap_or("helper rejected the change"),
-                output
-            ),
-        ),
-        Err(e) => api_err(
-            StatusCode::BAD_GATEWAY,
-            format!(
-                "could not reach helper at {}: {e}",
-                state.helper_socket.display()
-            ),
+            format!("WriteFstab failed: {status}"),
         ),
     }
 }
@@ -434,22 +437,24 @@ async fn post_mkdir(State(state): State<AppState>, Json(req): Json<MkdirReq>) ->
     if path.is_empty() {
         return api_err(StatusCode::BAD_REQUEST, "path required");
     }
-    let cmd = Command::MakeDirectory { path };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => Json(json!({ "ok": true, "output": output })).into_response(),
-        Ok(HelperResponse { error, output, .. }) => api_err(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "{}\n\n{}",
-                error.as_deref().unwrap_or("mkdir failed"),
-                output
-            ),
-        ),
-        Err(e) => api_err(
-            StatusCode::BAD_GATEWAY,
-            format!("could not reach helper: {e}"),
+    let channel = match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => {
+            return api_err(
+                StatusCode::BAD_GATEWAY,
+                format!("could not reach engine: {e}"),
+            );
+        }
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client.make_directory(MakeDirectoryRequest { path }).await {
+        Ok(resp) => Json(json!({ "ok": true, "output": resp.into_inner().output })).into_response(),
+        Err(status) if status.code() == tonic::Code::InvalidArgument => {
+            api_err(StatusCode::BAD_REQUEST, status.message().to_string())
+        }
+        Err(status) => api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("mkdir failed: {status}"),
         ),
     }
 }

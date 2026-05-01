@@ -18,7 +18,10 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    LsblkRequest, SmartRequest, engine_service_client::EngineServiceClient,
+};
+use bananas_proto::engine_client;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::task::JoinSet;
@@ -216,35 +219,39 @@ fn parse_partition(entry: &Value) -> Partition {
     }
 }
 
-/// Run lsblk via the root helper. The unprivileged bananas-webadmin
-/// user can call lsblk directly, but it'd return null for FSTYPE /
-/// LABEL / UUID because blkid (used internally by lsblk) needs raw
-/// read on /dev/sd*. The helper runs as root and pipes the JSON
-/// back through the existing IPC channel — same shape as Smart.
+/// Run lsblk via the engine over gRPC. The unprivileged daemon
+/// user can call lsblk directly, but it'd return null for FSTYPE
+/// / LABEL / UUID because blkid (used internally by lsblk) needs
+/// raw read on /dev/sd*. The engine runs as root and ships the
+/// JSON back inside the gRPC reply — same shape as Smart.
 async fn run_lsblk(state: &AppState) -> anyhow::Result<Value> {
     use anyhow::Context;
-    let resp = bananas_engine::call(&state.helper_socket, &Command::Lsblk)
+    let channel = engine_client::channel(&state.helper_grpc_socket)
         .await
-        .context("calling helper Lsblk")?;
-    if !resp.ok {
-        anyhow::bail!(
-            "helper Lsblk failed: {}",
-            resp.error.unwrap_or_else(|| "unknown".into())
-        );
-    }
-    serde_json::from_str(&resp.output).context("parsing lsblk JSON")
+        .context("dialing engine gRPC socket")?;
+    let mut client = EngineServiceClient::new(channel);
+    let resp = client
+        .lsblk(LsblkRequest {})
+        .await
+        .map_err(|status| anyhow::anyhow!("Lsblk RPC: {status}"))?
+        .into_inner();
+    serde_json::from_str(&resp.lsblk_json).context("parsing lsblk JSON")
 }
 
 async fn fetch_smart(state: &AppState, device: &str) -> Result<Value, String> {
-    let cmd = Command::Smart {
-        device: device.to_string(),
-    };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => serde_json::from_str(&output).map_err(|e| format!("smartctl JSON: {e}")),
-        Ok(HelperResponse { error, .. }) => Err(error.unwrap_or_else(|| "smartctl failed".into())),
-        Err(e) => Err(format!("helper call: {e}")),
+    let channel = engine_client::channel(&state.helper_grpc_socket)
+        .await
+        .map_err(|e| format!("engine unreachable: {e}"))?;
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .smart(SmartRequest {
+            device: device.to_string(),
+        })
+        .await
+    {
+        Ok(resp) => serde_json::from_str(&resp.into_inner().smart_json)
+            .map_err(|e| format!("smartctl JSON: {e}")),
+        Err(status) => Err(format!("Smart RPC: {status}")),
     }
 }
 

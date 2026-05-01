@@ -4,8 +4,13 @@
 use std::{io::Write, path::Path};
 
 use anyhow::{Context, Result, bail};
-use bananas_engine::Command as HelperCommand;
-use serde::Deserialize;
+use bananas_proto::engine::v1::{
+    OpkgListInstalledRequest, OpkgListUpgradableRequest, OpkgUpdateRequest, OpkgUpgradeRequest,
+    ReadServiceConfigRequest, RebootSystemRequest, SetTimezoneRequest,
+    engine_service_client::EngineServiceClient,
+};
+use bananas_proto::engine_client;
+use tonic::transport::Channel;
 
 const UNITS: &[&str] = &[
     "bananas-webadmin.service",
@@ -15,6 +20,13 @@ const UNITS: &[&str] = &[
 ];
 
 const PACKAGE_PREFIX: &str = "bananas-";
+
+async fn engine(socket: &Path) -> Result<EngineServiceClient<Channel>> {
+    let channel = engine_client::channel(socket)
+        .await
+        .with_context(|| format!("connecting to engine at {}", socket.display()))?;
+    Ok(EngineServiceClient::new(channel))
+}
 
 pub async fn status(socket: &Path) -> Result<()> {
     let versions = read_versions(socket).await.unwrap_or_default();
@@ -42,33 +54,27 @@ pub async fn status(socket: &Path) -> Result<()> {
 }
 
 pub async fn timezone(socket: &Path, zone: Option<&str>) -> Result<()> {
+    let mut client = engine(socket).await?;
     match zone {
         Some(tz) => {
-            let resp = bananas_engine::call(socket, &HelperCommand::SetTimezone { tz: tz.into() })
+            client
+                .set_timezone(SetTimezoneRequest { tz: tz.into() })
                 .await
-                .context("calling helper")?;
-            if resp.ok {
-                println!("Timezone set to {tz}.");
-                Ok(())
-            } else {
-                bail!(resp.error.unwrap_or_else(|| "unknown helper error".into()))
-            }
+                .map_err(|status| anyhow::anyhow!("SetTimezone: {status}"))?;
+            println!("Timezone set to {tz}.");
+            Ok(())
         }
         None => {
-            // No `GetTimezone` command yet — read /etc/bananas/system.toml
+            // No `GetTimezone` RPC — read /etc/bananas/system.toml
             // through ReadServiceConfig instead.
-            let resp = bananas_engine::call(
-                socket,
-                &HelperCommand::ReadServiceConfig {
+            let resp = client
+                .read_service_config(ReadServiceConfigRequest {
                     name: "system".into(),
-                },
-            )
-            .await
-            .context("calling helper")?;
-            if !resp.ok {
-                bail!(resp.error.unwrap_or_else(|| "unknown helper error".into()));
-            }
-            let parsed: toml::Table = resp.output.parse().unwrap_or_default();
+                })
+                .await
+                .map_err(|status| anyhow::anyhow!("ReadServiceConfig(system): {status}"))?
+                .into_inner();
+            let parsed: toml::Table = resp.content.parse().unwrap_or_default();
             let tz = parsed
                 .get("system")
                 .and_then(|v| v.as_table())
@@ -92,33 +98,30 @@ pub async fn reboot(socket: &Path, skip_confirm: bool) -> Result<()> {
             return Ok(());
         }
     }
-    let resp = bananas_engine::call(socket, &HelperCommand::RebootSystem)
+    let mut client = engine(socket).await?;
+    client
+        .reboot_system(RebootSystemRequest {})
         .await
-        .context("calling helper")?;
-    if resp.ok {
-        println!("Reboot triggered.");
-    } else {
-        bail!(resp.error.unwrap_or_else(|| "helper refused".into()));
-    }
+        .map_err(|status| anyhow::anyhow!("RebootSystem: {status}"))?;
+    println!("Reboot triggered.");
     Ok(())
 }
 
 /// Refresh the opkg feed index and print upgradable bananas-* packages.
 pub async fn update_check(socket: &Path) -> Result<()> {
-    let update_resp = bananas_engine::call(socket, &HelperCommand::OpkgUpdate)
-        .await
-        .context("calling helper for opkg update")?;
-    if !update_resp.ok {
-        eprintln!(
-            "warning: opkg update failed: {}",
-            update_resp.error.unwrap_or_else(|| "unknown error".into())
-        );
-        // Continue anyway — list-upgradable still works against
-        // cached metadata.
+    let mut client = engine(socket).await?;
+    if let Err(status) = client.opkg_update(OpkgUpdateRequest {}).await {
+        eprintln!("warning: opkg update failed: {status}");
+        // Continue — list-upgradable still works against cached metadata.
     }
 
-    let upgradable = list_upgradable(socket).await?;
-    let bananas: Vec<&UpgradablePackage> = upgradable
+    let upgradable = client
+        .opkg_list_upgradable(OpkgListUpgradableRequest {})
+        .await
+        .map_err(|status| anyhow::anyhow!("OpkgListUpgradable: {status}"))?
+        .into_inner()
+        .packages;
+    let bananas: Vec<_> = upgradable
         .iter()
         .filter(|p| p.name.starts_with(PACKAGE_PREFIX))
         .collect();
@@ -156,55 +159,23 @@ pub async fn update_install(socket: &Path, packages: &[String]) -> Result<()> {
 
     println!("Upgrading: {}", resolved.join(", "));
     println!();
-    let resp = bananas_engine::call(
-        socket,
-        &HelperCommand::OpkgUpgrade {
+    let mut client = engine(socket).await?;
+    let resp = client
+        .opkg_upgrade(OpkgUpgradeRequest {
             packages: resolved.clone(),
-        },
-    )
-    .await
-    .context("calling helper")?;
+        })
+        .await
+        .map_err(|status| anyhow::anyhow!("OpkgUpgrade: {status}"))?
+        .into_inner();
     if !resp.output.is_empty() {
         print!("{}", resp.output);
         if !resp.output.ends_with('\n') {
             println!();
         }
     }
-    if !resp.ok {
-        bail!(
-            resp.error
-                .unwrap_or_else(|| "helper refused install".into())
-        );
-    }
     println!();
     println!("Done.");
     Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct UpgradablePackage {
-    name: String,
-    installed: String,
-    candidate: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct InstalledPackageRow {
-    name: String,
-    version: String,
-}
-
-async fn list_upgradable(socket: &Path) -> Result<Vec<UpgradablePackage>> {
-    let resp = bananas_engine::call(socket, &HelperCommand::OpkgListUpgradable)
-        .await
-        .context("calling helper for opkg list-upgradable")?;
-    if !resp.ok {
-        bail!(
-            resp.error
-                .unwrap_or_else(|| "opkg list-upgradable failed".into())
-        );
-    }
-    Ok(serde_json::from_str(&resp.output).context("parsing list-upgradable JSON")?)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────
@@ -225,15 +196,16 @@ fn hostname() -> String {
 /// rendering the same shape; "server" and "helper" both resolve to
 /// the bananas-webadmin package.
 pub async fn read_versions(socket: &Path) -> Result<std::collections::HashMap<String, String>> {
-    let resp = bananas_engine::call(socket, &HelperCommand::OpkgListInstalled)
+    let mut client = engine(socket).await?;
+    let resp = match client
+        .opkg_list_installed(OpkgListInstalledRequest {})
         .await
-        .context("calling helper for opkg list-installed")?;
-    if !resp.ok {
-        return Ok(std::collections::HashMap::new());
-    }
-    let rows: Vec<InstalledPackageRow> = serde_json::from_str(&resp.output).unwrap_or_default();
+    {
+        Ok(r) => r.into_inner(),
+        Err(_) => return Ok(std::collections::HashMap::new()),
+    };
     let mut by_pkg: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for r in rows {
+    for r in resp.packages {
         by_pkg.insert(r.name, r.version);
     }
     let mut out = std::collections::HashMap::new();

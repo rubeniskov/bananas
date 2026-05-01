@@ -16,7 +16,11 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::Result;
-use bananas_engine::Command as HelperCommand;
+use bananas_proto::engine::v1::{
+    ReadServiceConfigRequest, RebootSystemRequest, SetTimezoneRequest,
+    engine_service_client::EngineServiceClient,
+};
+use bananas_proto::engine_client;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -127,17 +131,18 @@ async fn refresh(socket: &Path, state: &mut AppState) {
 }
 
 async fn current_timezone(socket: &Path) -> Result<String> {
-    let resp = bananas_engine::call(
-        socket,
-        &HelperCommand::ReadServiceConfig {
+    let channel = engine_client::channel(socket).await?;
+    let mut client = EngineServiceClient::new(channel);
+    let resp = match client
+        .read_service_config(ReadServiceConfigRequest {
             name: "system".into(),
-        },
-    )
-    .await?;
-    if !resp.ok {
-        return Ok(String::new());
-    }
-    let parsed: toml::Table = resp.output.parse().unwrap_or_default();
+        })
+        .await
+    {
+        Ok(r) => r.into_inner(),
+        Err(_) => return Ok(String::new()),
+    };
+    let parsed: toml::Table = resp.content.parse().unwrap_or_default();
     Ok(parsed
         .get("system")
         .and_then(|v| v.as_table())
@@ -156,24 +161,29 @@ async fn handle_tab_key(socket: &Path, state: &mut AppState, key: event::KeyEven
                     return;
                 }
                 state.tz_busy = true;
-                let resp = bananas_engine::call(
-                    socket,
-                    &HelperCommand::SetTimezone {
-                        tz: state.tz_input.clone(),
-                    },
-                )
-                .await;
+                let resp = match engine_client::channel(socket).await {
+                    Ok(channel) => {
+                        let mut client = EngineServiceClient::new(channel);
+                        client
+                            .set_timezone(SetTimezoneRequest {
+                                tz: state.tz_input.clone(),
+                            })
+                            .await
+                            .map(|_| ())
+                    }
+                    Err(e) => Err(tonic::Status::unavailable(format!(
+                        "engine unreachable: {e}"
+                    ))),
+                };
                 state.tz_busy = false;
                 match resp {
-                    Ok(r) if r.ok => {
+                    Ok(()) => {
                         state.timezone = state.tz_input.clone();
                         state.flash = Some((true, format!("Timezone set to {}.", state.timezone)));
                     }
-                    Ok(r) => {
-                        state.flash =
-                            Some((false, r.error.unwrap_or_else(|| "helper refused".into())));
+                    Err(status) => {
+                        state.flash = Some((false, status.message().to_string()));
                     }
-                    Err(e) => state.flash = Some((false, format!("helper unreachable: {e}"))),
                 }
             }
             KeyCode::Char(c) if !c.is_control() => {
@@ -190,18 +200,27 @@ async fn handle_tab_key(socket: &Path, state: &mut AppState, key: event::KeyEven
                     return;
                 }
                 state.reboot_busy = true;
-                let resp = bananas_engine::call(socket, &HelperCommand::RebootSystem).await;
+                let resp = match engine_client::channel(socket).await {
+                    Ok(channel) => {
+                        let mut client = EngineServiceClient::new(channel);
+                        client
+                            .reboot_system(RebootSystemRequest {})
+                            .await
+                            .map(|_| ())
+                    }
+                    Err(e) => Err(tonic::Status::unavailable(format!(
+                        "engine unreachable: {e}"
+                    ))),
+                };
                 state.reboot_busy = false;
                 match resp {
-                    Ok(r) if r.ok => {
+                    Ok(()) => {
                         state.flash =
                             Some((true, "Reboot triggered. Connection will drop.".into()));
                     }
-                    Ok(r) => {
-                        state.flash =
-                            Some((false, r.error.unwrap_or_else(|| "helper refused".into())));
+                    Err(status) => {
+                        state.flash = Some((false, status.message().to_string()));
                     }
-                    Err(e) => state.flash = Some((false, format!("helper unreachable: {e}"))),
                 }
             }
         }

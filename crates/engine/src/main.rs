@@ -8,7 +8,6 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bananas_engine::{Command, Response};
 use serde_json::json;
 
 mod grpc;
@@ -16,7 +15,6 @@ mod opkg;
 use tokio::{
     fs,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::{UnixListener, UnixStream},
     process::Command as TokioCommand,
 };
 
@@ -35,9 +33,18 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
+    // Single socket — the engine speaks gRPC over it. The legacy
+    // newline-JSON `Command` enum had its own listener on
+    // `BANANAS_ENGINE_GRPC_SOCKET` during the migration; once every
+    // command was migrated, the line-JSON listener was retired and
+    // the gRPC listener took over the canonical socket name. Either
+    // env var is honoured for backwards-compat with running images
+    // that still set the legacy name; new deployments use
+    // `BANANAS_ENGINE_SOCKET`.
     let socket_path: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
+        .or_else(|| std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/run/bananas-engine.sock".into());
+        .unwrap_or_else(|| "/run/bananas/engine.sock".into());
     let exports_path: PathBuf = std::env::var_os("BANANAS_EXPORTS_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/etc/exports".into());
@@ -52,23 +59,12 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "/etc/shadow".into());
 
-    if socket_path.exists() {
-        fs::remove_file(&socket_path).await.ok();
-    }
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("binding {}", socket_path.display()))?;
-    fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o660))
-        .await
-        .ok();
-    // The unprivileged frontend (bananas-webadmin) runs as the `bananas`
-    // user. Without this chown the socket is root:root 0660, which the
-    // frontend can't open. Look up the GID by reading /etc/group; falls
-    // back to a no-op log if the group is missing.
-    if let Some(gid) = lookup_group_gid("bananas") {
-        if let Err(e) = std::os::unix::fs::chown(&socket_path, Some(0), Some(gid)) {
-            tracing::warn!(error=%e, "failed to chown socket to root:bananas");
-        }
-    } else {
+    // The unprivileged frontend (bananas-webadmin et al.) runs as
+    // the `bananas` user. The gRPC listener inside `grpc::serve`
+    // binds with mode 0660; we chown to root:bananas after the bind
+    // returns. Look up the GID by reading /etc/group.
+    let bananas_gid = lookup_group_gid("bananas");
+    if bananas_gid.is_none() {
         tracing::warn!(
             "group 'bananas' not found in /etc/group — frontend won't be able to connect"
         );
@@ -86,37 +82,29 @@ async fn main() -> Result<()> {
         shadow: shadow_path.clone(),
     };
 
-    // Spawn the gRPC half on its own Unix socket. Sibling of the
-    // newline-JSON socket; lives at `BANANAS_ENGINE_GRPC_SOCKET`.
-    // PR-4 ships only Authenticate; the legacy line-JSON socket
-    // continues to handle every other Command variant.
-    let grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "/run/bananas/engine-grpc.sock".into());
+    // grpc::serve manages the bind + serve_with_incoming loop. We
+    // chown the socket to root:bananas after a brief grace period so
+    // unprivileged callers can dial it.
     {
-        let cx_for_grpc = cx.clone();
+        let socket_for_chown = socket_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = grpc::serve(grpc_socket, cx_for_grpc).await {
-                tracing::error!(error=%e, "engine gRPC mount exited");
+            // Wait briefly for grpc::serve to bind, then chown.
+            for _ in 0..50 {
+                if socket_for_chown.exists() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            if let Some(gid) = bananas_gid {
+                if let Err(e) = std::os::unix::fs::chown(&socket_for_chown, Some(0), Some(gid)) {
+                    tracing::warn!(error=%e, "failed to chown socket to root:bananas");
+                }
             }
         });
     }
 
-    loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(error=%e, "accept failed");
-                continue;
-            }
-        };
-        let cx = cx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle(stream, &cx).await {
-                tracing::error!(error=%e, "request handler failed");
-            }
-        });
-    }
+    grpc::serve(socket_path, cx).await?;
+    Ok(())
 }
 
 /// Per-request context holding the on-disk paths the helper reads
@@ -127,209 +115,6 @@ async fn main() -> Result<()> {
 pub(crate) struct Cx {
     pub(crate) exports: PathBuf,
     pub(crate) shadow: PathBuf,
-}
-
-async fn handle(stream: UnixStream, cx: &Cx) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
-
-    let response = match serde_json::from_str::<Command>(line.trim()) {
-        Ok(cmd) => dispatch(cmd, cx).await,
-        Err(e) => Response::err(format!("bad command: {e}"), String::new()),
-    };
-
-    let mut payload = serde_json::to_vec(&response)?;
-    payload.push(b'\n');
-    write_half.write_all(&payload).await?;
-    Ok(())
-}
-
-async fn dispatch(cmd: Command, cx: &Cx) -> Response {
-    match cmd {
-        Command::WriteExports { content } => match write_exports(&content, &cx.exports).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::ReloadExports => match exportfs_reload().await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::WriteFstab { content } => match write_fstab(&content).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::Smart { device } => match smart(&device).await {
-            Ok(json) => Response::ok(json),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::ListUsers => match list_users(false).await {
-            Ok(json) => Response::ok(json),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::ExportUsers => match list_users(true).await {
-            Ok(json) => Response::ok(json),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::CreateUser {
-            username,
-            password,
-            full_name,
-            admin,
-            password_is_hash,
-        } => {
-            match create_user(
-                &username,
-                &password,
-                full_name.as_deref(),
-                admin,
-                password_is_hash,
-            )
-            .await
-            {
-                Ok(()) => Response::ok(format!("created {username}")),
-                Err(e) => Response::err(e.to_string(), String::new()),
-            }
-        }
-        Command::DeleteUser { username } => match delete_user(&username).await {
-            Ok(()) => Response::ok(format!("deleted {username}")),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::SetPassword { username, password } => {
-            match set_password(&username, &password).await {
-                Ok(()) => Response::ok(format!("password updated for {username}")),
-                Err(e) => Response::err(e.to_string(), String::new()),
-            }
-        }
-        Command::ChangeOwnPassword {
-            username,
-            old_password,
-            new_password,
-        } => {
-            match change_own_password(&username, &old_password, &new_password, &cx.shadow).await {
-                Ok(()) => Response::ok(format!("password rotated for {username}")),
-                // Same redaction rule as authenticate — bury the specific
-                // reason behind a single "invalid credentials" so we don't
-                // confirm whether the user exists.
-                Err(_) => Response::err("invalid credentials", String::new()),
-            }
-        }
-        Command::SetAdmin { username, admin } => match set_admin(&username, admin).await {
-            Ok(()) => Response::ok(format!(
-                "{username} is {} an admin",
-                if admin { "now" } else { "no longer" }
-            )),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::Stat { path } => match stat_path(&path).await {
-            Ok(json) => Response::ok(json),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::SetPermissions {
-            path,
-            uid,
-            gid,
-            mode,
-            recursive,
-        } => match set_permissions(&path, uid, gid, mode.as_deref(), recursive).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::ReadServiceConfig { name } => match read_service_config(&name).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::WriteServiceConfig { name, content } => {
-            match write_service_config(&name, &content).await {
-                Ok(out) => Response::ok(out),
-                Err(e) => Response::err(e.to_string(), String::new()),
-            }
-        }
-        Command::RunCloudSync { idx } => match run_cloud_sync(idx).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::CancelCloudSync { idx } => match cancel_cloud_sync(idx).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::RebootSystem => match reboot_system().await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::MakeDirectory { path } => match make_directory(&path).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::Lsblk => match run_lsblk().await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::SetTimezone { tz } => match set_timezone(&tz).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::ListTimezones => match list_timezones().await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::OpkgUpdate => match opkg::update().await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::OpkgListUpgradable => match opkg::list_upgradable().await {
-            Ok(rows) => match serde_json::to_string(&rows) {
-                Ok(json) => Response::ok(json),
-                Err(e) => Response::err(format!("serializing upgradable: {e}"), String::new()),
-            },
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::OpkgListInstalled => match opkg::list_installed().await {
-            Ok(rows) => match serde_json::to_string(&rows) {
-                Ok(json) => Response::ok(json),
-                Err(e) => Response::err(format!("serializing installed: {e}"), String::new()),
-            },
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::OpkgUpgrade { packages } => match opkg::upgrade(&packages).await {
-            Ok(out) => Response::ok(out),
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::OpkgUpgradeStatus { since } => match opkg::upgrade_status(since).await {
-            Ok(status) => match serde_json::to_string(&status) {
-                Ok(json) => Response::ok(json),
-                Err(e) => Response::err(format!("serializing upgrade-status: {e}"), String::new()),
-            },
-            Err(e) => Response::err(e.to_string(), String::new()),
-        },
-        Command::Authenticate { username, password } => {
-            // Generic failure message — same string for missing user, locked
-            // account, and wrong password. Avoids confirming which usernames
-            // exist on the system to an attacker probing the API.
-            //
-            // The `password_expired` sentinel is the deliberate exception:
-            // it can only fire when the username + password are BOTH
-            // correct (the lastchg check happens after the hash compare),
-            // so it leaks no more than a successful login already would.
-            // Passing it through is what lets the UI swap into the "set
-            // new password" form on first sign-in.
-            const GENERIC_FAIL: &str = "invalid credentials";
-            match authenticate(&username, &password, &cx.shadow).await {
-                Ok(()) => Response::ok(format!("authenticated {username}")),
-                Err(e) => {
-                    let msg = e.to_string();
-                    tracing::warn!(user=%username, error=%msg, "auth failed");
-                    let surface = if msg.contains("password_expired") {
-                        "password_expired"
-                    } else {
-                        GENERIC_FAIL
-                    };
-                    Response::err(surface, String::new())
-                }
-            }
-        }
-    }
 }
 
 pub(crate) async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
@@ -1048,7 +833,7 @@ async fn chpasswd_encrypted(username: &str, hash: &str) -> Result<()> {
     Ok(())
 }
 
-async fn set_admin(username: &str, admin: bool) -> Result<()> {
+pub(crate) async fn set_admin(username: &str, admin: bool) -> Result<()> {
     if !valid_name(username) {
         anyhow::bail!("invalid username");
     }
@@ -1074,7 +859,7 @@ async fn set_admin(username: &str, admin: bool) -> Result<()> {
     Ok(())
 }
 
-async fn delete_user(username: &str) -> Result<()> {
+pub(crate) async fn delete_user(username: &str) -> Result<()> {
     if !valid_name(username) {
         anyhow::bail!("invalid username");
     }
@@ -1096,7 +881,7 @@ async fn delete_user(username: &str) -> Result<()> {
     Ok(())
 }
 
-async fn set_password(username: &str, password: &str) -> Result<()> {
+pub(crate) async fn set_password(username: &str, password: &str) -> Result<()> {
     if !valid_name(username) {
         anyhow::bail!("invalid username");
     }
@@ -1281,13 +1066,6 @@ async fn persist_timezone_to_system_toml(tz: &str) -> Result<String> {
     Ok(format!("wrote {SYSTEM_TOML}\n"))
 }
 
-pub(crate) async fn list_timezones() -> Result<String> {
-    serde_json::to_string(&list_timezones_vec().await?).context("serializing timezone list")
-}
-
-/// Same payload as `list_timezones`, but returned as a typed vec so
-/// the gRPC handler can map to `repeated string zones` directly
-/// without re-parsing JSON.
 pub(crate) async fn list_timezones_vec() -> Result<Vec<String>> {
     // Walk /usr/share/zoneinfo and return every regular file path
     // relative to that root. Skip top-level directories that aren't
@@ -1342,7 +1120,7 @@ pub(crate) async fn list_timezones_vec() -> Result<Vec<String>> {
     Ok(zones)
 }
 
-async fn run_lsblk() -> Result<String> {
+pub(crate) async fn run_lsblk() -> Result<String> {
     // -J = JSON, -b = bytes (not human-readable), -o pins the column
     // set the server expects to parse. Running here as root lets
     // blkid read /dev/sd* superblocks for FSTYPE/LABEL/UUID.
@@ -1366,7 +1144,7 @@ async fn run_lsblk() -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-async fn make_directory(path: &str) -> Result<String> {
+pub(crate) async fn make_directory(path: &str) -> Result<String> {
     if !is_safe_perms_path(path) {
         anyhow::bail!("path not allowed: {path}");
     }
@@ -1386,7 +1164,7 @@ async fn make_directory(path: &str) -> Result<String> {
     Ok(format!("created {path}"))
 }
 
-async fn stat_path(path: &str) -> Result<String> {
+pub(crate) async fn stat_path(path: &str) -> Result<String> {
     if !is_safe_perms_path(path) {
         anyhow::bail!("path not allowed: {path}");
     }
@@ -1418,7 +1196,7 @@ async fn stat_path(path: &str) -> Result<String> {
     }))?)
 }
 
-async fn set_permissions(
+pub(crate) async fn set_permissions(
     path: &str,
     uid: Option<u32>,
     gid: Option<u32>,
@@ -1533,7 +1311,7 @@ fn lookup_group_name(gid: u32) -> Option<String> {
 /// Run smartctl against a validated block device. Returns the JSON output
 /// verbatim — the server passes it through to the UI, which extracts the
 /// fields it cares about (smart_status.passed, ata_smart_attributes, etc.).
-async fn smart(device: &str) -> Result<String> {
+pub(crate) async fn smart(device: &str) -> Result<String> {
     if !is_valid_block_device(device) {
         anyhow::bail!("invalid device path {device:?}");
     }
@@ -1728,7 +1506,7 @@ async fn systemd_daemon_reload() -> Result<String> {
     Ok(combined)
 }
 
-async fn run_cloud_sync(idx: usize) -> Result<String> {
+pub(crate) async fn run_cloud_sync(idx: usize) -> Result<String> {
     // Read cloud.toml fresh — the user might have edited entries via
     // the API just before triggering the run.
     let raw = match tokio::fs::read_to_string("/etc/bananas/cloud.toml").await {
@@ -2058,7 +1836,7 @@ fn sync_log_path(idx: usize) -> std::path::PathBuf {
 /// open transfers cleanly; if it doesn't exit within ~5 s the OS sends
 /// SIGKILL (handled by the Drop on the spawned process). Returns a
 /// human-readable status line for the apply banner.
-async fn cancel_cloud_sync(idx: usize) -> Result<String> {
+pub(crate) async fn cancel_cloud_sync(idx: usize) -> Result<String> {
     let pid_path = sync_pid_path(idx);
     let pid_str = match fs::read_to_string(&pid_path).await {
         Ok(s) => s.trim().to_string(),

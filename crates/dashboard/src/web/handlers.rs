@@ -9,7 +9,10 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    ReadServiceConfigRequest, WriteServiceConfigRequest, engine_service_client::EngineServiceClient,
+};
+use bananas_proto::engine_client;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -31,44 +34,50 @@ pub async fn put_config(State(state): State<AppState>, Json(req): Json<PutConfig
 }
 
 async fn read(state: &AppState, name: &'static str) -> Response {
-    let cmd = Command::ReadServiceConfig { name: name.into() };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => {
-            let body = if output.trim().is_empty() {
+    let channel = match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("helper unreachable: {e}")),
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .read_service_config(ReadServiceConfigRequest { name: name.into() })
+        .await
+    {
+        Ok(resp) => {
+            let content = resp.into_inner().content;
+            let body = if content.trim().is_empty() {
                 default_dashboard_toml()
             } else {
-                output
+                content
             };
             (StatusCode::OK, Json(json!({ "config": body }))).into_response()
         }
-        Ok(HelperResponse { error, .. }) => {
-            err_500(error.unwrap_or_else(|| format!("helper rejected ReadServiceConfig({name})")))
-        }
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+        Err(status) => err_500(format!("ReadServiceConfig({name}) failed: {status}")),
     }
 }
 
 async fn write(state: &AppState, name: &'static str, content: String) -> Response {
-    let cmd = Command::WriteServiceConfig {
-        name: name.into(),
-        content,
+    let channel = match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("helper unreachable: {e}")),
     };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => (
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .write_service_config(WriteServiceConfigRequest {
+            name: name.into(),
+            content,
+        })
+        .await
+    {
+        Ok(resp) => (
             StatusCode::OK,
-            Json(json!({ "ok": true, "output": output })),
+            Json(json!({ "ok": true, "output": resp.into_inner().output })),
         )
             .into_response(),
-        Ok(HelperResponse { error, output, .. }) => err_400(format!(
-            "{}\n\n{}",
-            error.unwrap_or_else(|| format!("helper rejected WriteServiceConfig({name})")),
-            output
-        )),
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+        Err(status) if status.code() == tonic::Code::InvalidArgument => {
+            err_400(status.message().to_string())
+        }
+        Err(status) => err_500(format!("WriteServiceConfig({name}) failed: {status}")),
     }
 }
 

@@ -29,7 +29,11 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    CancelCloudSyncRequest, ReadServiceConfigRequest, WriteServiceConfigRequest,
+    engine_service_client::EngineServiceClient,
+};
+use bananas_proto::engine_client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -117,26 +121,24 @@ pub async fn providers() -> Response {
 // ---------------- Read / write helpers ----------------
 
 async fn load(state: &AppState) -> Result<CloudConfig, String> {
-    let cmd = Command::ReadServiceConfig {
-        name: "cloud".into(),
-    };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => {
-            if output.trim().is_empty() {
-                return Ok(CloudConfig::default());
-            }
-            let mut cfg: CloudConfig =
-                toml::from_str(&output).map_err(|e| format!("parsing cloud.toml: {e}"))?;
-            migrate_provider_keys(&mut cfg);
-            Ok(cfg)
-        }
-        Ok(HelperResponse { error, .. }) => {
-            Err(error.unwrap_or_else(|| "helper rejected ReadServiceConfig".into()))
-        }
-        Err(e) => Err(format!("helper unreachable: {e}")),
+    let channel = engine_client::channel(&state.helper_grpc_socket)
+        .await
+        .map_err(|e| format!("engine unreachable: {e}"))?;
+    let mut client = EngineServiceClient::new(channel);
+    let resp = client
+        .read_service_config(ReadServiceConfigRequest {
+            name: "cloud".into(),
+        })
+        .await
+        .map_err(|status| format!("ReadServiceConfig(cloud): {status}"))?
+        .into_inner();
+    if resp.content.trim().is_empty() {
+        return Ok(CloudConfig::default());
     }
+    let mut cfg: CloudConfig =
+        toml::from_str(&resp.content).map_err(|e| format!("parsing cloud.toml: {e}"))?;
+    migrate_provider_keys(&mut cfg);
+    Ok(cfg)
 }
 
 /// Backward-compat shim for cloud.toml files that predate the
@@ -155,19 +157,18 @@ fn migrate_provider_keys(cfg: &mut CloudConfig) {
 
 async fn save(state: &AppState, cfg: &CloudConfig) -> Result<(), String> {
     let body = toml::to_string_pretty(cfg).map_err(|e| format!("serializing cloud.toml: {e}"))?;
-    let cmd = Command::WriteServiceConfig {
-        name: "cloud".into(),
-        content: body,
-    };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, .. }) => Ok(()),
-        Ok(HelperResponse { error, output, .. }) => Err(format!(
-            "{}\n\n{}",
-            error.unwrap_or_else(|| "helper rejected WriteServiceConfig".into()),
-            output
-        )),
-        Err(e) => Err(format!("helper unreachable: {e}")),
-    }
+    let channel = engine_client::channel(&state.helper_grpc_socket)
+        .await
+        .map_err(|e| format!("engine unreachable: {e}"))?;
+    let mut client = EngineServiceClient::new(channel);
+    client
+        .write_service_config(WriteServiceConfigRequest {
+            name: "cloud".into(),
+            content: body,
+        })
+        .await
+        .map(|_| ())
+        .map_err(|status| format!("WriteServiceConfig(cloud): {status}"))
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -454,7 +455,7 @@ pub async fn run_sync(State(state): State<AppState>, AxumPath(idx): AxumPath<usi
     );
     let job_id = state
         .jobs
-        .enqueue(idx, label, (*state.helper_socket).clone())
+        .enqueue(idx, label, (*state.helper_grpc_socket).clone())
         .await;
     Json(json!({ "ok": true, "job_id": job_id })).into_response()
 }
@@ -467,20 +468,20 @@ pub async fn cancel_sync(
     State(state): State<AppState>,
     AxumPath(idx): AxumPath<usize>,
 ) -> Response {
-    let cmd = Command::CancelCloudSync { idx };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => Json(json!({ "ok": true, "output": output })).into_response(),
-        Ok(HelperResponse { error, output, .. }) => err(
+    let channel = match engine_client::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("engine unreachable: {e}")),
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .cancel_cloud_sync(CancelCloudSyncRequest { idx: idx as u32 })
+        .await
+    {
+        Ok(resp) => Json(json!({ "ok": true, "output": resp.into_inner().output })).into_response(),
+        Err(status) => err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "{}\n\n{}",
-                error.unwrap_or_else(|| "cancel failed".into()),
-                output
-            ),
+            format!("cancel failed: {status}"),
         ),
-        Err(e) => err(StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")),
     }
 }
 
