@@ -2,7 +2,10 @@
 // nav tab. Catches the class of bugs that bit cloud-ui twice now —
 // dioxus-web's launch path mutating window.history based on
 // Dioxus.toml's base_path.
-const TABS = ['Stats', 'Exports', 'Storage', 'Users', 'Cloud', 'Settings', 'Updates'];
+//
+// Settings + Updates moved to the header dropdown; the dropdown
+// suite (dropdown.test.mjs) covers their click + URL behaviour.
+const TABS = ['Stats', 'Exports', 'Storage', 'Users', 'Cloud'];
 
 export default async function ({ origin, page }) {
   await page.goto(`${origin}/`, { waitUntil: 'load' });

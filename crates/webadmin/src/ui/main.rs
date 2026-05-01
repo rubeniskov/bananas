@@ -444,18 +444,6 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                         }
                     }
                 }
-                NavTab {
-                    label: "Settings",
-                    icon: "settings",
-                    active: matches!(&*page.read(), Page::Settings),
-                    on_click: move |_| page.set(Page::Settings),
-                }
-                NavTab {
-                    label: "Updates",
-                    icon: "package",
-                    active: matches!(&*page.read(), Page::Updates),
-                    on_click: move |_| page.set(Page::Updates),
-                }
                 span { class: "spacer" }
                 div { class: "user-menu",
                     span { class: "user-greeting", "Welcome, ", strong { "{props.username}" }, "!" }
@@ -475,6 +463,47 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                             onclick: move |_| menu_open.set(false),
                         }
                         div { class: "user-menu-popover", role: "menu",
+                            // Section 1 — theme picker. Light/dark
+                            // mode is the most-used menu item, so it
+                            // takes the top slot for thumb reach on
+                            // mobile.
+                            div { class: "theme-picker", role: "group", "aria-label": "Theme",
+                                span { class: "theme-picker-label", "Theme" }
+                                {
+                                    let active = current_theme();
+                                    let opts = [theme::Theme::Auto, theme::Theme::Light, theme::Theme::Dark];
+                                    rsx! {
+                                        for t in opts {
+                                            {
+                                                let cls = if active == t {
+                                                    "theme-picker-btn active"
+                                                } else {
+                                                    "theme-picker-btn"
+                                                };
+                                                rsx! {
+                                                    button {
+                                                        class: "{cls}",
+                                                        r#type: "button",
+                                                        "data-tip": "{t.label()}",
+                                                        onclick: move |_| {
+                                                            theme::apply(t);
+                                                            current_theme.set(t);
+                                                        },
+                                                        icons::Icon { name: t.icon() }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: "user-menu-sep" }
+                            // Section 2 — config + nav. Save / load
+                            // config sit next to the nav-actions
+                            // (Updates, Settings) because all four
+                            // are "configuration" affordances and
+                            // bunching them keeps the cognitive
+                            // grouping clean.
                             button {
                                 class: "user-menu-item",
                                 role: "menuitem",
@@ -519,38 +548,35 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                                     }
                                 }
                             }
-                            div { class: "user-menu-sep" }
-                            div { class: "theme-picker", role: "group", "aria-label": "Theme",
-                                span { class: "theme-picker-label", "Theme" }
-                                {
-                                    let active = current_theme();
-                                    let opts = [theme::Theme::Auto, theme::Theme::Light, theme::Theme::Dark];
-                                    rsx! {
-                                        for t in opts {
-                                            {
-                                                let cls = if active == t {
-                                                    "theme-picker-btn active"
-                                                } else {
-                                                    "theme-picker-btn"
-                                                };
-                                                rsx! {
-                                                    button {
-                                                        class: "{cls}",
-                                                        r#type: "button",
-                                                        "data-tip": "{t.label()}",
-                                                        onclick: move |_| {
-                                                            theme::apply(t);
-                                                            current_theme.set(t);
-                                                        },
-                                                        icons::Icon { name: t.icon() }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                            button {
+                                class: "user-menu-item",
+                                role: "menuitem",
+                                disabled: auth_ctx.busy.read().clone(),
+                                onclick: move |_| {
+                                    menu_open.set(false);
+                                    page.set(Page::Updates);
+                                },
+                                icons::Icon { name: "package" }
+                                span { "Updates" }
+                            }
+                            button {
+                                class: "user-menu-item",
+                                role: "menuitem",
+                                disabled: auth_ctx.busy.read().clone(),
+                                onclick: move |_| {
+                                    menu_open.set(false);
+                                    page.set(Page::Settings);
+                                },
+                                icons::Icon { name: "settings" }
+                                span { "Settings" }
                             }
                             div { class: "user-menu-sep" }
+                            // Section 3 — destructive / session-end.
+                            // Reboot stays first (it's a system-level
+                            // action) followed by sign-out, both
+                            // visually separated by the divider above
+                            // so accidental clicks need the slight
+                            // travel.
                             button {
                                 class: "user-menu-item danger",
                                 role: "menuitem",

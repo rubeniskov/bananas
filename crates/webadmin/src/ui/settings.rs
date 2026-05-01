@@ -1,13 +1,15 @@
-//! Settings page — canonical home for all service config files. Three
-//! tabs:
-//!   - Stats   → parsed form for stats.toml + readonly Generated TOML
-//!   - Dashboard → parsed form for dashboard.toml + readonly Generated TOML
-//!   - General → focused timezone picker + raw system.toml editor
+//! Settings page — host-level system config only.
 //!
-//! Stats and Dashboard tabs delegate to dedicated form components
-//! (`stats_config::StatsConfigForm` and
-//! `dashboard_config::DashboardConfigForm`). Each handles its own
-//! load / save / readonly preview.
+//! Two cards:
+//!   - Timezone picker (writes to `/etc/bananas/system.toml` via
+//!     timedatectl through bananas-engine)
+//!   - Read-only system.toml viewer
+//!
+//! Per-feature configs (stats / dashboard / cloud / future plugins)
+//! live inside their respective plugin SPAs — settings is no longer
+//! a hub for those. The Tab enum that used to switch between Stats,
+//! Dashboard, and General was removed when settings dropped its
+//! per-feature responsibilities.
 
 #![allow(non_snake_case)]
 
@@ -16,59 +18,16 @@ use gloo_net::http::Request;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{
-    AuthCtx, components::Spinner, dashboard_config::DashboardConfigForm,
-    stats_config::StatsConfigForm,
-};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    Stats,
-    Dashboard,
-    General,
-}
-
-impl Tab {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Stats => "Stats",
-            Self::Dashboard => "Dashboard",
-            Self::General => "General",
-        }
-    }
-}
+use crate::{AuthCtx, components::Spinner};
 
 #[component]
 pub fn SettingsPage() -> Element {
-    let mut tab = use_signal(|| Tab::Stats);
     rsx! {
         div { class: "section-header",
             h2 { "Settings" }
         }
-        div { class: "settings-tabs",
-            for t in [Tab::Stats, Tab::Dashboard, Tab::General] {
-                {
-                    let active = tab() == t;
-                    let cls = if active { "settings-tab active" } else { "settings-tab" };
-                    rsx! {
-                        button {
-                            r#type: "button",
-                            class: "{cls}",
-                            onclick: move |_| tab.set(t),
-                            "{t.label()}"
-                        }
-                    }
-                }
-            }
-        }
-        match tab() {
-            Tab::Stats => rsx! { StatsConfigForm {} },
-            Tab::Dashboard => rsx! { DashboardConfigForm {} },
-            Tab::General => rsx! {
-                TimezoneCard {}
-                SystemTomlEditor {}
-            },
-        }
+        TimezoneCard {}
+        SystemTomlEditor {}
     }
 }
 
