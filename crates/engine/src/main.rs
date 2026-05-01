@@ -1179,7 +1179,7 @@ fn is_safe_perms_path(path: &str) -> bool {
     })
 }
 
-async fn set_timezone(tz: &str) -> Result<String> {
+pub(crate) async fn set_timezone(tz: &str) -> Result<String> {
     // Validate against the on-disk zoneinfo db. A bogus tz here would
     // get rejected by timedatectl too, but checking up front gives us
     // a cleaner error message and keeps audit logs readable.
@@ -1281,7 +1281,14 @@ async fn persist_timezone_to_system_toml(tz: &str) -> Result<String> {
     Ok(format!("wrote {SYSTEM_TOML}\n"))
 }
 
-async fn list_timezones() -> Result<String> {
+pub(crate) async fn list_timezones() -> Result<String> {
+    serde_json::to_string(&list_timezones_vec().await?).context("serializing timezone list")
+}
+
+/// Same payload as `list_timezones`, but returned as a typed vec so
+/// the gRPC handler can map to `repeated string zones` directly
+/// without re-parsing JSON.
+pub(crate) async fn list_timezones_vec() -> Result<Vec<String>> {
     // Walk /usr/share/zoneinfo and return every regular file path
     // relative to that root. Skip top-level directories that aren't
     // user-facing zones (Etc/ collides too much with friendly names,
@@ -1332,7 +1339,7 @@ async fn list_timezones() -> Result<String> {
         }
     }
     zones.sort();
-    Ok(serde_json::to_string(&zones).context("serializing timezone list")?)
+    Ok(zones)
 }
 
 async fn run_lsblk() -> Result<String> {

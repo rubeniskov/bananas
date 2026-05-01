@@ -15,10 +15,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    ListTimezonesRequest, SetTimezoneRequest, engine_service_client::EngineServiceClient,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::AppState;
+use crate::engine_grpc;
 use crate::errors::{err_400, err_500};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -76,19 +80,28 @@ pub async fn post_timezone(
     if tz.is_empty() {
         return err_400("timezone required".into());
     }
-    let cmd = Command::SetTimezone { tz: tz.clone() };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => axum::response::IntoResponse::into_response(Json(
-            json!({ "ok": true, "tz": tz, "output": output }),
-        )),
-        Ok(HelperResponse { error, output, .. }) => err_400(format!(
-            "{}\n\n{}",
-            error.unwrap_or_else(|| "helper rejected SetTimezone".into()),
-            output
-        )),
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+    let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("helper unreachable: {e}")),
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .set_timezone(SetTimezoneRequest { tz: tz.clone() })
+        .await
+    {
+        Ok(resp) => Json(json!({
+            "ok": true,
+            "tz": tz,
+            "output": resp.into_inner().output,
+        }))
+        .into_response(),
+        // InvalidArgument = bad zone string from the caller; everything
+        // else (timedatectl failure, persist error, dashboard restart
+        // bouncing) is a real engine problem.
+        Err(status) if status.code() == tonic::Code::InvalidArgument => {
+            err_400(status.message().to_string())
+        }
+        Err(status) => err_500(format!("set_timezone failed: {status}")),
     }
 }
 
@@ -96,23 +109,14 @@ pub async fn post_timezone(
 /// zone the OS knows about, as a flat JSON array. Backs the Settings →
 /// General timezone picker (datalist autocomplete).
 pub async fn get_timezones(State(state): State<AppState>) -> Response {
-    let cmd = Command::ListTimezones;
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => {
-            // Helper returns a JSON array string; pass it through as-is.
-            (
-                axum::http::StatusCode::OK,
-                [("content-type", "application/json")],
-                output,
-            )
-                .into_response()
-        }
-        Ok(HelperResponse { error, .. }) => {
-            err_500(error.unwrap_or_else(|| "helper rejected ListTimezones".into()))
-        }
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+    let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("helper unreachable: {e}")),
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client.list_timezones(ListTimezonesRequest {}).await {
+        Ok(resp) => Json(resp.into_inner().zones).into_response(),
+        Err(status) => err_500(format!("list_timezones failed: {status}")),
     }
 }
 
@@ -150,20 +154,23 @@ pub fn spawn_first_boot_geoip(state: crate::AppState) {
         // Helper SetTimezone now does timedatectl + system.toml persist
         // + bananas-dashboard restart in one shot, so a single call is
         // all this needs.
-        let set_cmd = Command::SetTimezone { tz: tz.clone() };
-        match bananas_engine::call(&state.helper_socket, &set_cmd).await {
-            Ok(HelperResponse { ok: true, .. }) => {
-                tracing::info!(tz = %tz, "first-boot timezone set via geoip");
-            }
-            Ok(HelperResponse { error, .. }) => {
-                tracing::warn!(
-                    tz = %tz, error = ?error,
-                    "helper rejected geoip-derived timezone"
-                );
-            }
+        let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+            Ok(c) => c,
             Err(e) => {
                 tracing::warn!(error = %e, "helper unreachable for geoip apply");
+                return;
             }
+        };
+        let mut client = EngineServiceClient::new(channel);
+        match client
+            .set_timezone(SetTimezoneRequest { tz: tz.clone() })
+            .await
+        {
+            Ok(_) => tracing::info!(tz = %tz, "first-boot timezone set via geoip"),
+            Err(status) => tracing::warn!(
+                tz = %tz, error = %status,
+                "helper rejected geoip-derived timezone"
+            ),
         }
     });
 }

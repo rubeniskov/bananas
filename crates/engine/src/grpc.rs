@@ -10,12 +10,16 @@ use std::path::PathBuf;
 
 use bananas_proto::engine::v1::{
     AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
-    RebootSystemRequest, RebootSystemResponse,
+    ListTimezonesRequest, ListTimezonesResponse, RebootSystemRequest, RebootSystemResponse,
+    SetTimezoneRequest, SetTimezoneResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
 
-use crate::{authenticate, change_own_password, reboot_system, verify_shadow_password};
+use crate::{
+    authenticate, change_own_password, list_timezones_vec, reboot_system, set_timezone,
+    verify_shadow_password,
+};
 
 /// Engine gRPC service. Holds the same shadow path the
 /// newline-JSON dispatch threads through `Cx`.
@@ -88,6 +92,41 @@ impl EngineService for EngineGrpc {
             Err(e) => {
                 tracing::warn!(error=%e, "reboot_system failed (gRPC)");
                 Err(Status::internal(format!("reboot failed: {e}")))
+            }
+        }
+    }
+
+    async fn set_timezone(
+        &self,
+        req: Request<SetTimezoneRequest>,
+    ) -> Result<Response<SetTimezoneResponse>, Status> {
+        let body = req.into_inner();
+        // Bad-tz strings are caller-supplied, so surface as
+        // InvalidArgument; a timedatectl failure or persist error
+        // is a real engine problem and maps to Internal.
+        match set_timezone(&body.tz).await {
+            Ok(output) => Ok(Response::new(SetTimezoneResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(tz = %body.tz, error = %msg, "set_timezone failed (gRPC)");
+                if msg.starts_with("invalid timezone") || msg.starts_with("unknown timezone") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn list_timezones(
+        &self,
+        _req: Request<ListTimezonesRequest>,
+    ) -> Result<Response<ListTimezonesResponse>, Status> {
+        match list_timezones_vec().await {
+            Ok(zones) => Ok(Response::new(ListTimezonesResponse { zones })),
+            Err(e) => {
+                tracing::warn!(error = %e, "list_timezones failed (gRPC)");
+                Err(Status::internal(format!("list_timezones failed: {e}")))
             }
         }
     }

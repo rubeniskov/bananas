@@ -42,6 +42,20 @@ service EngineService {
   // "applied" banner before the connection closes. Maps 1:1 to
   // `Command::RebootSystem`.
   rpc RebootSystem(RebootSystemRequest) returns (RebootSystemResponse);
+
+  // Set the system timezone to an IANA zone name (e.g.
+  // `Europe/Madrid`). The engine validates the name against
+  // `/usr/share/zoneinfo/`, runs `timedatectl set-timezone`,
+  // persists the choice to `/etc/bananas/system.toml`, and
+  // restarts bananas-dashboard so the LCD reflects the new
+  // offset. Maps 1:1 to `Command::SetTimezone`.
+  rpc SetTimezone(SetTimezoneRequest) returns (SetTimezoneResponse);
+
+  // Enumerate every IANA zone the OS knows about (sorted, with
+  // the `Etc/`, `posix/`, `right/`, `SystemV/` legacy trees
+  // pruned). Backs the Settings → General timezone autocomplete.
+  // Maps 1:1 to `Command::ListTimezones`.
+  rpc ListTimezones(ListTimezonesRequest) returns (ListTimezonesResponse);
 }
 
 message AuthenticateRequest {
@@ -77,4 +91,22 @@ message RebootSystemResponse {
   // single "Reboot scheduled" line — kept verbatim so the UI can
   // surface unit-failure detail if any).
   string output = 1;
+}
+
+message SetTimezoneRequest {
+  string tz = 1;
+}
+
+message SetTimezoneResponse {
+  // Combined output from timedatectl + the system.toml writer +
+  // the dashboard restart. Surfaced verbatim so the UI can show
+  // any sub-step failure.
+  string output = 1;
+}
+
+message ListTimezonesRequest {}
+
+message ListTimezonesResponse {
+  // Sorted list of IANA zone names available on the host.
+  repeated string zones = 1;
 }
