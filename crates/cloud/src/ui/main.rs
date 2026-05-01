@@ -50,8 +50,25 @@ fn main() {
         }
     }
 
+    // Override dioxus-web's default WebHistory provider — at launch,
+    // it auto-discovers `Dioxus.toml`'s `base_path` via
+    // `dioxus_cli_config::web_base_path()` and calls
+    // `history.replaceState(null, "", base_path + current_route)`.
+    // For us that produces the bug `/assets/cloud/assets/cloud`:
+    // the host SPA had just set the URL to `/#cloud`, then cloud-ui's
+    // bootstrap rewrites it to `<base_path>/<route_from_location>`,
+    // and `route_from_location` returns the prefix verbatim when the
+    // current path doesn't start with it (see dioxus-web 0.7.6's
+    // `WebHistory::route_from_location` strip-or-fallback logic).
+    //
+    // Cloud-ui has no Router; it's composed into the host via MFE
+    // and the host owns URL state. Swap in `MemoryHistory` so the
+    // launch path never touches `window.history`.
+    use std::rc::Rc;
+    let history: Rc<dyn dioxus::history::History> =
+        Rc::new(dioxus::history::MemoryHistory::default());
     dioxus::LaunchBuilder::new()
-        .with_cfg(dioxus::web::Config::new().rootname(root))
+        .with_cfg(dioxus::web::Config::new().rootname(root).history(history))
         .launch(App);
 }
 
