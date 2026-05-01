@@ -53,6 +53,10 @@ include_dir = "0.7"
 # SPA-only — pulled in only when target = wasm32-unknown-unknown.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bananas-mfe-runtime.workspace = true
+# bananas-proto with default features off — `server` pulls in
+# tonic transport (hyper) which doesn't compile to wasm32. The
+# SPA only needs the generated client + message types.
+bananas-proto = { workspace = true, default-features = false }
 dioxus.workspace = true
 gloo-net = { workspace = true, features = ["http"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
@@ -62,6 +66,13 @@ js-sys = "0.3"
 wasm-bindgen = "0.2"
 tracing-wasm.workspace = true
 console_error_panic_hook.workspace = true
+# gRPC-Web client for `CloudService::TailRunLog`. Same shape as
+# the stats SPA (PR-2): `tonic-web-wasm-client::Client` wraps a
+# fetch+streaming-bytes channel that the generated stub uses.
+tonic = { workspace = true, default-features = false, features = ["codegen"] }
+tonic-prost = "0.14"
+tonic-web-wasm-client.workspace = true
+prost.workspace = true
 
 [build-dependencies]
 fs_extra = "1.3"

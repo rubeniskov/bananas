@@ -11,12 +11,23 @@
 //!   snapshots, replacing the previous `/api/stats/live`
 //!   WebSocket. Webadmin owns its own `LiveBus` that taps
 //!   `/run/bananas/stats.sock` (the bananas-stats Unix pub/sub).
+//! - `bananas.cloud.v1.CloudService::TailRunLog` — server-streaming
+//!   tail of the per-line rclone output engine writes to
+//!   `/run/bananas/sync-progress/<idx>.log` while a sync is
+//!   running. Replaces the SPA's "show snapshot output once
+//!   the run finishes" path with live updates.
 //!
 //! Subsequent PRs migrate the per-plugin RPCs to their own
 //! daemons + add cross-daemon gRPC routing through bananas-router.
 
+use std::path::PathBuf;
 use std::pin::Pin;
+use std::time::Duration;
 
+use bananas_proto::cloud::v1::{
+    LogChunk, TailRunLogRequest,
+    cloud_service_server::{CloudService, CloudServiceServer},
+};
 use bananas_proto::health::v1::{
     CheckRequest, CheckResponse,
     health_service_server::{HealthService, HealthServiceServer},
@@ -27,6 +38,7 @@ use bananas_proto::stats::v1::{
 };
 use bananas_stats::live_bus::LiveBus;
 use futures_util::Stream;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tonic::{Request, Response, Status};
 
 #[derive(Default, Clone)]
@@ -90,12 +102,99 @@ impl StatsService for StatsSvc {
     }
 }
 
+/// Cloud service — currently TailRunLog only. Path to the
+/// `<idx>.log` directory is configurable via
+/// `BANANAS_SYNC_PROGRESS_DIR` so the e2e harness can drop a
+/// fixture there. Defaults to `/run/bananas/sync-progress`,
+/// matching what bananas-engine writes.
+#[derive(Clone)]
+pub struct CloudSvc {
+    progress_dir: PathBuf,
+}
+
+impl CloudSvc {
+    pub fn new(progress_dir: PathBuf) -> Self {
+        Self { progress_dir }
+    }
+}
+
+#[tonic::async_trait]
+impl CloudService for CloudSvc {
+    type TailRunLogStream = Pin<Box<dyn Stream<Item = Result<LogChunk, Status>> + Send + 'static>>;
+
+    async fn tail_run_log(
+        &self,
+        req: Request<TailRunLogRequest>,
+    ) -> Result<Response<Self::TailRunLogStream>, Status> {
+        let idx = req.into_inner().sync_idx;
+        let path = self.progress_dir.join(format!("{idx}.log"));
+
+        // Empty stream when the file isn't there — finished runs
+        // have already had their `<idx>.log` cleaned up by engine.
+        // Callers fall back to the unary `output` field on the
+        // already-fetched CloudJob.
+        if !path.exists() {
+            let empty = futures_util::stream::empty();
+            return Ok(Response::new(Box::pin(empty) as Self::TailRunLogStream));
+        }
+
+        let stream = async_stream::stream! {
+            // Open the file and read until EOF; on EOF we keep
+            // re-opening with a small delay until the file
+            // disappears (engine removes it on run completion).
+            let mut emitted = 0usize;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(60 * 60);
+            while tokio::time::Instant::now() < deadline {
+                if !path.exists() {
+                    break;
+                }
+                let f = match tokio::fs::File::open(&path).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        yield Err(Status::not_found(format!("open log: {e}")));
+                        return;
+                    }
+                };
+                // Skip already-emitted bytes — the file is append-only
+                // until engine removes it, so byte offset is a stable
+                // resume point.
+                let mut reader = BufReader::new(f);
+                if emitted > 0 {
+                    use tokio::io::AsyncSeekExt;
+                    let _ = reader.seek(std::io::SeekFrom::Start(emitted as u64)).await;
+                }
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line).await {
+                        Ok(0) => {
+                            // EOF — wait a beat and re-poll.
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            break;
+                        }
+                        Ok(n) => {
+                            emitted += n;
+                            yield Ok(LogChunk { text: line.clone() });
+                        }
+                        Err(e) => {
+                            yield Err(Status::internal(format!("read log: {e}")));
+                            return;
+                        }
+                    }
+                }
+            }
+        };
+        Ok(Response::new(Box::pin(stream) as Self::TailRunLogStream))
+    }
+}
+
 /// Build the tower service that handles every gRPC + gRPC-Web
 /// request. Returned as an axum-compatible `Router` so the public
 /// app can mount it at `/api/grpc/*`. The `GrpcWebLayer` translates
 /// browser-issued gRPC-Web frames to native gRPC; native HTTP/2
 /// gRPC also works (handy for `grpcurl`).
-pub fn build_grpc_router(live_bus: LiveBus) -> tonic::service::Routes {
+pub fn build_grpc_router(live_bus: LiveBus, sync_progress_dir: PathBuf) -> tonic::service::Routes {
     tonic::service::Routes::new(HealthServiceServer::new(HealthSvc))
         .add_service(StatsServiceServer::new(StatsSvc::new(live_bus)))
+        .add_service(CloudServiceServer::new(CloudSvc::new(sync_progress_dir)))
 }

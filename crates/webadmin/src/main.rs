@@ -215,6 +215,13 @@ async fn main() -> Result<()> {
     let live_bus = bananas_stats::live_bus::LiveBus::new();
     live_bus.start_socket(live_socket);
 
+    // Sync-progress dir — bananas-engine writes per-line rclone
+    // output to `<dir>/<idx>.log` while a sync runs. The
+    // CloudService::TailRunLog RPC streams from there.
+    let sync_progress_dir: PathBuf = std::env::var_os("BANANAS_SYNC_PROGRESS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/sync-progress".into());
+
     // gRPC stack: every `/api/grpc/*` path is handled by tonic
     // (with tonic-web translating browser-side gRPC-Web frames
     // to native gRPC). Paths like
@@ -223,7 +230,7 @@ async fn main() -> Result<()> {
     // before tonic dispatches. Everything else (legacy /api/*
     // JSON, /assets/*, /) keeps its existing paths during the
     // gRPC migration. PR-5 retires the JSON sub-proxy.
-    let grpc_routes = grpc::build_grpc_router(live_bus);
+    let grpc_routes = grpc::build_grpc_router(live_bus, sync_progress_dir);
     let grpc_axum: axum::Router = grpc_routes.into_axum_router();
     let grpc_service = tower::ServiceBuilder::new()
         .layer(tonic_web::GrpcWebLayer::new())

@@ -1897,13 +1897,43 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     let stdout = child.stdout.take().expect("piped");
     let stderr = child.stderr.take().expect("piped");
 
+    // Tee every output line to `<idx>.log` so the UI can stream
+    // live rclone output via `CloudService::TailRunLog` while a
+    // run is in flight. The file is removed on run completion
+    // (both `<idx>.progress` and `<idx>.log` get cleaned up
+    // below) so the next run starts fresh and a stale log can't
+    // bleed into a different sync's modal.
+    let log_path = sync_log_path(idx);
+    let _ = tokio::fs::remove_file(&log_path).await;
+    let log_writer = match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .await
+    {
+        Ok(f) => Some(std::sync::Arc::new(tokio::sync::Mutex::new(f))),
+        Err(e) => {
+            tracing::warn!(
+                error=%e, path=%log_path.display(),
+                "could not open run log; TailRunLog will be empty for this run"
+            );
+            None
+        }
+    };
+
     let progress_for_stdout = progress_path.clone();
+    let log_for_stdout = log_writer.clone();
     let stdout_task = tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
         let mut captured = String::new();
         while let Ok(Some(line)) = reader.next_line().await {
             if let Some(pct) = parse_rclone_progress(&line) {
                 let _ = tokio::fs::write(&progress_for_stdout, pct.to_string()).await;
+            }
+            if let Some(f) = &log_for_stdout {
+                let mut g = f.lock().await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut *g, line.as_bytes()).await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut *g, b"\n").await;
             }
             captured.push_str(&line);
             captured.push('\n');
@@ -1912,12 +1942,18 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     });
 
     let progress_for_stderr = progress_path.clone();
+    let log_for_stderr = log_writer.clone();
     let stderr_task = tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         let mut captured = String::new();
         while let Ok(Some(line)) = reader.next_line().await {
             if let Some(pct) = parse_rclone_progress(&line) {
                 let _ = tokio::fs::write(&progress_for_stderr, pct.to_string()).await;
+            }
+            if let Some(f) = &log_for_stderr {
+                let mut g = f.lock().await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut *g, line.as_bytes()).await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut *g, b"\n").await;
             }
             captured.push_str(&line);
             captured.push('\n');
@@ -1935,6 +1971,7 @@ async fn run_cloud_sync(idx: usize) -> Result<String> {
     // run.
     let _ = tokio::fs::remove_file(&progress_path).await;
     let _ = tokio::fs::remove_file(&pid_path).await;
+    let _ = tokio::fs::remove_file(&log_path).await;
 
     let combined = format!("{stdout_capture}{stderr_capture}");
     if !status.success() {
@@ -1982,6 +2019,14 @@ fn sync_progress_path(idx: usize) -> std::path::PathBuf {
 /// run is in flight so the Cancel button has something to target.
 fn sync_pid_path(idx: usize) -> std::path::PathBuf {
     std::path::PathBuf::from(format!("/run/bananas/sync-progress/{idx}.pid"))
+}
+
+/// Sibling of the progress file: per-line append of every rclone
+/// stdout/stderr line for live tailing via `CloudService::TailRunLog`.
+/// Removed when the run finishes; the JobManager's captured `output`
+/// keeps the post-run history.
+fn sync_log_path(idx: usize) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/run/bananas/sync-progress/{idx}.log"))
 }
 
 /// Cancel the in-flight rclone for `idx` by sending SIGTERM to the PID

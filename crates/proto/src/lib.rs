@@ -25,3 +25,9 @@ pub mod stats {
         include!(concat!(env!("OUT_DIR"), "/bananas.stats.v1.rs"));
     }
 }
+
+pub mod cloud {
+    pub mod v1 {
+        include!(concat!(env!("OUT_DIR"), "/bananas.cloud.v1.rs"));
+    }
+}

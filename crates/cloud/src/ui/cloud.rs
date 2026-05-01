@@ -615,13 +615,54 @@ struct RunLogModalProps {
 
 #[component]
 fn RunLogModal(props: RunLogModalProps) -> Element {
-    let j = &props.job;
+    let j = props.job.clone();
     let title = format!("Run #{} — {}", j.id, j.status.label());
-    let body = if j.output.trim().is_empty() {
-        "(no output captured for this run)".to_string()
-    } else {
-        j.output.clone()
-    };
+
+    // For finished runs we already have the captured `output`
+    // string. For in-flight runs we tail
+    // `bananas.cloud.v1.CloudService::TailRunLog` and append
+    // chunks as they arrive — same shape the deployed BPI
+    // produces, just streamed.
+    let mut tailed: Signal<String> = use_signal(|| {
+        if j.output.trim().is_empty() {
+            String::new()
+        } else {
+            j.output.clone()
+        }
+    });
+    let is_running = j.status == api::CloudJobStatus::Running;
+    let sync_idx = j.sync_idx as u32;
+
+    if is_running {
+        use_effect(move || {
+            spawn(async move {
+                use bananas_proto::cloud::v1::{
+                    TailRunLogRequest, cloud_service_client::CloudServiceClient,
+                };
+                let Some(origin) = web_sys::window().and_then(|w| w.location().origin().ok())
+                else {
+                    return;
+                };
+                let base = format!("{origin}/api/grpc");
+                let client = tonic_web_wasm_client::Client::new(base);
+                let mut grpc = CloudServiceClient::new(client);
+                let resp = match grpc.tail_run_log(TailRunLogRequest { sync_idx }).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!(?e, "tail_run_log open failed");
+                        return;
+                    }
+                };
+                let mut stream = resp.into_inner();
+                while let Ok(Some(chunk)) = stream.message().await {
+                    let mut current = tailed.peek().clone();
+                    current.push_str(&chunk.text);
+                    tailed.set(current);
+                }
+            });
+        });
+    }
+
     rsx! {
         div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
             div {
@@ -636,7 +677,13 @@ fn RunLogModal(props: RunLogModalProps) -> Element {
                     }
                 }
                 div { class: "modal-body form-modal-body",
-                    pre { class: "run-log", "{body}" }
+                    pre { class: "run-log",
+                        if tailed().trim().is_empty() {
+                            "(no output captured for this run)"
+                        } else {
+                            "{tailed()}"
+                        }
+                    }
                 }
                 div { class: "modal-footer",
                     button {

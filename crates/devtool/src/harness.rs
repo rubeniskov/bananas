@@ -109,6 +109,7 @@ impl Harness {
         std::fs::write(tmp.path().join("exports"), "").context("write empty exports")?;
         std::fs::write(tmp.path().join("fstab"), default_fstab_fixture())
             .context("write default fstab fixture")?;
+        std::fs::create_dir_all(tmp.path().join("sync-progress")).context("mkdir sync-progress")?;
 
         let env_base = base_env(tmp.path(), port);
 
@@ -315,6 +316,7 @@ fn base_env(tmp: &Path, port: u16) -> Vec<(String, std::ffi::OsString)> {
         ("BANANAS_EXPORTS_PATH".into(), join("exports")),
         ("BANANAS_SHADOW_PATH".into(), join("shadow")),
         ("BANANAS_FSTAB_PATH".into(), join("fstab")),
+        ("BANANAS_SYNC_PROGRESS_DIR".into(), join("sync-progress")),
         ("BANANAS_STATS_DB".into(), join("stats.db")),
         ("BANANAS_STATS_LIVE_SOCKET".into(), join("stats-live.sock")),
         ("BANANAS_OPERATIONS_JOURNAL".into(), join("operations.json")),
