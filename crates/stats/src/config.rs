@@ -135,8 +135,9 @@ pub struct LiveSocket {
     /// Path of the Unix socket bananas-stats binds for live snapshots.
     /// Subscribers (bananas-webadmin, bananas-dashboard) connect here and
     /// receive newline-delimited JSON. Default lives under
-    /// `/run/bananas-stats/` (created by systemd's RuntimeDirectory=);
-    /// dev hosts that don't have that dir fall back to /tmp.
+    /// `/run/bananas/` alongside the other daemon sockets (created by
+    /// systemd's `RuntimeDirectory=bananas`); dev hosts that don't have
+    /// that dir fall back to /tmp.
     pub path: PathBuf,
 }
 

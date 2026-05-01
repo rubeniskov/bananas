@@ -1,9 +1,8 @@
 //! Form-based dashboard config editor — symmetric with stats_config.
 //! Loads /etc/bananas/dashboard.toml through /api/dashboard/config,
-//! parses [ui] + [live_socket] into typed form fields, lets the
-//! operator edit each value, and serializes a clean TOML payload on
-//! save. Composed TOML appears below the form in a read-only Copy
-//! textarea.
+//! parses the flat schema into typed form fields, lets the operator
+//! edit each value, and serializes a clean TOML payload on save.
+//! Composed TOML appears below the form in a read-only Copy textarea.
 //!
 //! No service restart on save — bananas-dashboard polls the file's
 //! mtime every 2 s and reapplies theme + refresh-rate changes in
@@ -24,39 +23,22 @@ struct ConfigResp {
     config: String,
 }
 
-/// Mirror of the dashboard-side fields in `bananas_stats::config`.
-/// dashboard.toml is just `[ui]` + `[live_socket]`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Mirror of `bananas-dashboard`'s `DashboardConfig` — flat fields
+/// directly under the document root, no `[ui]` / `[live_socket]`
+/// subsections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Cfg {
-    ui: Ui,
-    live_socket: LiveSocket,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-struct LiveSocket {
-    path: String,
-}
-impl Default for LiveSocket {
-    fn default() -> Self {
-        Self {
-            path: "/run/bananas-stats/live.sock".into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-struct Ui {
     width: u32,
     height: u32,
     title: String,
     theme: String,
     spark_window: usize,
     refresh_ms: u64,
+    socket: String,
 }
-impl Default for Ui {
+
+impl Default for Cfg {
     fn default() -> Self {
         Self {
             width: 800,
@@ -65,6 +47,7 @@ impl Default for Ui {
             theme: "auto".into(),
             spark_window: 60,
             refresh_ms: 2000,
+            socket: "/run/bananas/stats.sock".into(),
         }
     }
 }
@@ -97,12 +80,12 @@ pub fn DashboardConfigForm() -> Element {
                 Ok(r) if r.ok() => match r.json::<ConfigResp>().await {
                     Ok(body) => {
                         let parsed: Cfg = toml::from_str(&body.config).unwrap_or_default();
-                        width.set(parsed.ui.width.to_string());
-                        height.set(parsed.ui.height.to_string());
-                        title.set(parsed.ui.title.clone());
-                        theme.set(parsed.ui.theme.clone());
-                        spark_window.set(parsed.ui.spark_window.to_string());
-                        refresh_ms.set(parsed.ui.refresh_ms.to_string());
+                        width.set(parsed.width.to_string());
+                        height.set(parsed.height.to_string());
+                        title.set(parsed.title.clone());
+                        theme.set(parsed.theme.clone());
+                        spark_window.set(parsed.spark_window.to_string());
+                        refresh_ms.set(parsed.refresh_ms.to_string());
                         cfg.set(parsed);
                         hydrated.set(true);
                     }
@@ -125,13 +108,13 @@ pub fn DashboardConfigForm() -> Element {
 
     let composed_toml = move || -> String {
         let mut new = Cfg::default();
-        new.ui.width = width().parse().unwrap_or(800);
-        new.ui.height = height().parse().unwrap_or(480);
-        new.ui.title = title();
-        new.ui.theme = theme();
-        new.ui.spark_window = spark_window().parse().unwrap_or(60);
-        new.ui.refresh_ms = refresh_ms().parse().unwrap_or(2000);
-        new.live_socket = cfg().live_socket.clone();
+        new.width = width().parse().unwrap_or(800);
+        new.height = height().parse().unwrap_or(480);
+        new.title = title();
+        new.theme = theme();
+        new.spark_window = spark_window().parse().unwrap_or(60);
+        new.refresh_ms = refresh_ms().parse().unwrap_or(2000);
+        new.socket = cfg().socket.clone();
         toml::to_string_pretty(&new).unwrap_or_default()
     };
 

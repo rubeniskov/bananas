@@ -11,8 +11,9 @@ use anyhow::Result;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::sync::watch;
 
-use bananas_stats::config::Ui as UiCfg;
 use bananas_stats::metrics::Snapshot;
+
+use crate::config::DashboardConfig;
 
 slint::include_modules!();
 
@@ -53,7 +54,7 @@ impl History {
 }
 
 pub fn launch(
-    cfg: UiCfg,
+    cfg: DashboardConfig,
     cfg_path: Option<std::path::PathBuf>,
     mut rx: watch::Receiver<Snapshot>,
     local_offset: time::UtcOffset,
@@ -118,14 +119,14 @@ pub fn launch(
                 }
                 last_mtime = Some(mtime);
                 tracing::info!(path = %path.display(), "config file changed; reloading theme");
-                let new_cfg = match crate::config::Config::load(&path) {
+                let new_cfg = match DashboardConfig::load(&path) {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::warn!(error = ?e, "config reload failed; keeping existing theme");
                         continue;
                     }
                 };
-                let new_dark = match new_cfg.ui.theme.as_str() {
+                let new_dark = match new_cfg.theme.as_str() {
                     "light" => false,
                     "dark" => true,
                     _ => is_pm_local(initial_offset),

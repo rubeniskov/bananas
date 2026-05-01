@@ -26,41 +26,40 @@ pub struct ConfigBundle {
     /// older importers can refuse instead of silently dropping fields.
     #[serde(default = "default_version")]
     pub version: u32,
+    /// NFS exports (mirrors /etc/exports rows).
     #[serde(default)]
     pub exports: Vec<ExportEntry>,
+    /// Mount entries (mirrors /etc/fstab rows; named after the UI tab
+    /// that owns them rather than the file format).
     #[serde(default)]
-    pub fstab: Vec<FstabEntry>,
+    pub storage: Vec<StorageEntry>,
+    /// User accounts (UID >= 1000, non-system).
     #[serde(default)]
     pub users: Vec<UserEntry>,
-    /// Cloud-sync accounts + sync entries from /etc/bananas/cloud.toml.
-    /// Stored as an opaque TOML table — the cloud daemon (if installed)
-    /// owns the schema; webadmin only round-trips the section so a
-    /// "Save config / Load config" preserves the cloud config across
-    /// reflashes even when bananas-cloud isn't installed yet.
+    /// Per-section TOML config tables. Each key matches a UI tab and
+    /// round-trips the file at /etc/bananas/<key>.toml. Stored as
+    /// opaque tables — the consuming daemon owns the schema; webadmin
+    /// only ferries the bytes so a "Save config / Load config" cycle
+    /// preserves them across reflashes (even for plugins that aren't
+    /// installed yet, like bananas-cloud).
+    #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
+    pub system: toml::Table,
+    #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
+    pub dashboard: toml::Table,
+    #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
+    pub stats: toml::Table,
     #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
     pub cloud: toml::Table,
-    /// Raw TOML of /etc/bananas/dashboard.toml (LCD UI appearance +
-    /// refresh cadence). Stored verbatim instead of parsed so the
-    /// schema can grow without a bundle-version bump every time.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub dashboard_toml: String,
-    /// Raw TOML of /etc/bananas/system.toml (timezone today, more later).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub system_toml: String,
 }
 
 /// Current bundle schema version.
 ///
-/// v2 (May 2026): the `cloud` section is an opaque toml::Table that
-/// bananas-webadmin round-trips without parsing; bananas-cloud (when
-/// installed) is the only consumer that knows the schema. Imports
-/// preserve the section even when bananas-cloud is absent so a
-/// reflash → "Save config" → "Load config" cycle keeps cloud
-/// accounts + tokens warm for a future `opkg install bananas-cloud`.
-///
-/// v1 bundles still parse cleanly because the `cloud` field's
-/// internal layout was always wrapped under a `[cloud]` table key —
-/// only the deserializer's Rust type changed.
+/// v2 (May 2026): all per-tab config files (system / dashboard / stats
+/// / cloud) round-trip as parsed `toml::Table` blocks under their
+/// matching key, replacing the v1-era `*_toml = "raw string"` fields.
+/// Bumped when fstab → storage is introduced as a structural rename.
+/// Mount/export rows still round-trip as their own typed arrays
+/// because their schemas are stable and benefit from validation.
 pub fn default_version() -> u32 {
     2
 }
@@ -73,7 +72,7 @@ pub struct ExportEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct FstabEntry {
+pub struct StorageEntry {
     pub source: String,
     pub mountpoint: String,
     pub fstype: String,
@@ -146,7 +145,7 @@ pub async fn export_config(State(state): State<AppState>) -> Response {
 pub struct ImportSummary {
     pub ok: bool,
     pub exports_written: usize,
-    pub fstab_written: usize,
+    pub storage_written: usize,
     pub users_created: usize,
     pub users_skipped: usize,
     pub cloud_accounts: usize,
@@ -162,7 +161,7 @@ impl Default for ImportSummary {
         Self {
             ok: true,
             exports_written: 0,
-            fstab_written: 0,
+            storage_written: 0,
             users_created: 0,
             users_skipped: 0,
             cloud_accounts: 0,
@@ -209,10 +208,10 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
     // try to overwrite them. Importer enforces the same filter, so the
     // bundle is the user-config slice on both ends.
     let fstab_raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
-    let fstab_rows = fstab::rows(&fstab_raw)
+    let storage_rows = fstab::rows(&fstab_raw)
         .into_iter()
         .filter(|r| !fstab::is_protected(r))
-        .map(|r| FstabEntry {
+        .map(|r| StorageEntry {
             source: r.source,
             mountpoint: r.mountpoint,
             fstype: r.fstype,
@@ -235,45 +234,29 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
         Err(e) => return Err(format!("helper unreachable: {e}")),
     };
 
-    // Cloud config — same source-of-truth as /api/cloud/*. Read via
-    // the helper so the file's perms are respected (root-owned, the
-    // server is unprivileged). Errors here are non-fatal because cloud
-    // is optional and the absence of the file is a valid state.
-    let cloud = match bananas_engine::call(
-        &state.helper_socket,
-        &Command::ReadServiceConfig {
-            name: "cloud".into(),
-        },
-    )
-    .await
-    {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => {
-            if output.trim().is_empty() {
-                toml::Table::new()
-            } else {
-                toml::from_str::<toml::Table>(&output).unwrap_or_default()
-            }
-        }
-        _ => toml::Table::new(),
-    };
-
-    let dashboard_toml = read_service_toml(state, "dashboard").await;
-    let system_toml = read_service_toml(state, "system").await;
+    // Service config files — read via the helper so root-owned files
+    // are accessible to the unprivileged webadmin. Each is parsed into
+    // a toml::Table; an absent / empty / unparseable file becomes an
+    // empty table that serializes out via skip_serializing_if so the
+    // resulting bundle stays minimal.
+    let system = read_service_table(state, "system").await;
+    let dashboard = read_service_table(state, "dashboard").await;
+    let stats = read_service_table(state, "stats").await;
+    let cloud = read_service_table(state, "cloud").await;
 
     Ok(ConfigBundle {
         version: default_version(),
         exports: exports_rows,
-        fstab: fstab_rows,
+        storage: storage_rows,
         users,
+        system,
+        dashboard,
+        stats,
         cloud,
-        dashboard_toml,
-        system_toml,
     })
 }
 
-async fn read_service_toml(state: &AppState, name: &str) -> String {
+async fn read_service_table(state: &AppState, name: &str) -> toml::Table {
     match bananas_engine::call(
         &state.helper_socket,
         &Command::ReadServiceConfig {
@@ -284,8 +267,10 @@ async fn read_service_toml(state: &AppState, name: &str) -> String {
     {
         Ok(HelperResponse {
             ok: true, output, ..
-        }) => output,
-        _ => String::new(),
+        }) if !output.trim().is_empty() => {
+            toml::from_str::<toml::Table>(&output).unwrap_or_default()
+        }
+        _ => toml::Table::new(),
     }
 }
 

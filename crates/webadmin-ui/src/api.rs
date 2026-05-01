@@ -328,7 +328,7 @@ async fn helper_status(resp: gloo_net::http::Response) -> Result<(), ApiError> {
 pub struct ImportSummary {
     pub ok: bool,
     pub exports_written: usize,
-    pub fstab_written: usize,
+    pub storage_written: usize,
     #[serde(default)]
     pub users_created: usize,
     pub users_skipped: usize,

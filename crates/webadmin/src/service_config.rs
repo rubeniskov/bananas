@@ -78,21 +78,23 @@ pub async fn put_dashboard(State(state): State<AppState>, Json(req): Json<PutCon
 }
 
 fn default_dashboard_toml() -> String {
-    // Render just the [ui] + [live_socket] sections from the shared
-    // Config — those are the only pieces dashboard.toml owns.
-    let ui = bananas_stats::config::Ui::default();
-    let live = bananas_stats::config::LiveSocket::default();
-    let mut out = String::new();
-    out.push_str(
-        "# /etc/bananas/dashboard.toml — bananas-dashboard appearance + socket subscribe path.\n",
-    );
-    out.push_str("# Sampler-side fields live in stats.toml.\n\n");
-    out.push_str("[ui]\n");
-    out.push_str(&toml::to_string(&ui).unwrap_or_default());
-    out.push('\n');
-    out.push_str("[live_socket]\n");
-    out.push_str(&toml::to_string(&live).unwrap_or_default());
-    out
+    // Flat schema — dashboard.toml owns only render-side fields plus
+    // the live-socket subscribe path. No subsections; the file is the
+    // dashboard config in its entirety.
+    let cfg = serde_json::json!({
+        "width": 800u32,
+        "height": 480u32,
+        "title": "bananas-dashboard",
+        "theme": "auto",
+        "spark_window": 60u32,
+        "refresh_ms": 2000u32,
+        "socket": "/run/bananas/stats.sock",
+    });
+    let body = toml::to_string_pretty(&cfg).unwrap_or_default();
+    format!(
+        "# /etc/bananas/dashboard.toml — bananas-dashboard appearance + socket subscribe path.\n\
+         # Sampler-side fields live in stats.toml.\n\n{body}"
+    )
 }
 
 /// GET handler for /api/system/config.

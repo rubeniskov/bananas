@@ -48,7 +48,8 @@ exclude_names = []
 # Unix socket bananas-stats binds for the live pub/sub feed.
 # bananas-webadmin (web admin /api/stats/live WS) and bananas-dashboard
 # (LCD app) both subscribe here for real-time data, eliminating the
-# read-amplification of polling SQLite from each consumer. Path is
-# below /run/bananas-stats/ (created by the systemd unit's
-# RuntimeDirectory= directive).
-path = "/run/bananas-stats/live.sock"
+# read-amplification of polling SQLite from each consumer. Path lives
+# in the shared /run/bananas/ dir (created by the systemd unit's
+# `RuntimeDirectory=bananas` directive) alongside the engine, webadmin,
+# router, and cloud sockets.
+path = "/run/bananas/stats.sock"

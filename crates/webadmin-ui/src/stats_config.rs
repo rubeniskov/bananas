@@ -52,7 +52,7 @@ struct LiveSocket {
 impl Default for LiveSocket {
     fn default() -> Self {
         Self {
-            path: "/run/bananas-stats/live.sock".into(),
+            path: "/run/bananas/stats.sock".into(),
         }
     }
 }

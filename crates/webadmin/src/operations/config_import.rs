@@ -50,9 +50,9 @@ pub async fn start(
     }
 
     let summary_label = format!(
-        "Importing config: {} export(s), {} fstab, {} user(s)",
+        "Importing config: {} export(s), {} mount(s), {} user(s)",
         bundle.exports.len(),
-        bundle.fstab.len(),
+        bundle.storage.len(),
         bundle.users.len(),
     );
     let op_id = manager
@@ -129,10 +129,10 @@ async fn run_import(
         }
     }
 
-    // ---- fstab -----------------------------------------------------------
-    log!("Applying {} fstab entr(y|ies)…", bundle.fstab.len());
+    // ---- storage (mounts) -----------------------------------------------
+    log!("Applying {} mount entr(y|ies)…", bundle.storage.len());
     let bundle_rows: Vec<fstab::Row> = bundle
-        .fstab
+        .storage
         .iter()
         .filter(|e| !fstab::is_protected_target(&e.mountpoint, &e.fstype, &e.source))
         .map(|e| fstab::Row {
@@ -172,23 +172,26 @@ async fn run_import(
     .await
     {
         Ok(HelperResponse { ok: true, .. }) => {
-            summary.fstab_written = bundle_count;
-            log!("  → fstab written ({} user row(s))", summary.fstab_written);
+            summary.storage_written = bundle_count;
+            log!(
+                "  → storage written ({} user row(s))",
+                summary.storage_written
+            );
         }
         Ok(HelperResponse { error, output, .. }) => {
             summary.ok = false;
             let note = format!(
-                "fstab: {}\n{}",
+                "storage: {}\n{}",
                 error.unwrap_or_else(|| "helper rejected fstab".into()),
                 output
             );
-            log!("  → fstab FAILED: {note}");
+            log!("  → storage FAILED: {note}");
             summary.notes.push(note);
         }
         Err(e) => {
             summary.ok = false;
-            let note = format!("fstab: helper unreachable: {e}");
-            log!("  → fstab FAILED: {note}");
+            let note = format!("storage: helper unreachable: {e}");
+            log!("  → storage FAILED: {note}");
             summary.notes.push(note);
         }
     }
@@ -306,33 +309,34 @@ async fn run_import(
         }
     }
 
-    // ---- dashboard.toml --------------------------------------------------
-    if !bundle.dashboard_toml.trim().is_empty() {
-        log!("Restoring dashboard.toml…");
-        match write_service_toml(&helper_socket, "dashboard", bundle.dashboard_toml.clone()).await {
-            Ok(()) => {
-                summary.notes.push("dashboard.toml restored".into());
-                log!("  → dashboard.toml restored");
-            }
-            Err(note) => {
-                summary.ok = false;
-                log!("  → dashboard FAILED: {note}");
-                summary.notes.push(note);
-            }
+    // ---- service config tables (system / dashboard / stats) -------------
+    for (name, table) in [
+        ("system", &bundle.system),
+        ("dashboard", &bundle.dashboard),
+        ("stats", &bundle.stats),
+    ] {
+        if table.is_empty() {
+            continue;
         }
-    }
-
-    // ---- system.toml -----------------------------------------------------
-    if !bundle.system_toml.trim().is_empty() {
-        log!("Restoring system.toml…");
-        match write_service_toml(&helper_socket, "system", bundle.system_toml.clone()).await {
+        let serialized = match toml::to_string_pretty(table) {
+            Ok(s) => s,
+            Err(e) => {
+                summary.ok = false;
+                let note = format!("{name}: serialize failed: {e}");
+                log!("{note}");
+                summary.notes.push(note);
+                continue;
+            }
+        };
+        log!("Restoring {name}.toml…");
+        match write_service_toml(&helper_socket, name, serialized).await {
             Ok(()) => {
-                summary.notes.push("system.toml restored".into());
-                log!("  → system.toml restored");
+                summary.notes.push(format!("{name}.toml restored"));
+                log!("  → {name}.toml restored");
             }
             Err(note) => {
                 summary.ok = false;
-                log!("  → system FAILED: {note}");
+                log!("  → {name} FAILED: {note}");
                 summary.notes.push(note);
             }
         }

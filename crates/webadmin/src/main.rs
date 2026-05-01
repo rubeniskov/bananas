@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     // bananas-stats is the in-memory source of truth.
     let live_socket_path: PathBuf = std::env::var_os("BANANAS_STATS_LIVE_SOCKET")
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/run/bananas-stats/live.sock".into());
+        .unwrap_or_else(|| "/run/bananas/stats.sock".into());
     live_bus.start_socket(live_socket_path);
 
     let helper_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")

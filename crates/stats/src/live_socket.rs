@@ -27,8 +27,8 @@ use tokio::sync::watch;
 /// `tokio::spawn`s it.
 pub async fn serve(path: PathBuf, rx: watch::Receiver<Snapshot>) -> Result<()> {
     // Make sure the parent dir exists. systemd's RuntimeDirectory=
-    // normally takes care of /run/bananas-stats, but creating it here
-    // lets `cargo run` work on a dev host too.
+    // normally takes care of /run/bananas, but creating it here lets
+    // `cargo run` work on a dev host too.
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -81,18 +81,15 @@ async fn send_snapshot(stream: &mut UnixStream, snap: &Snapshot) -> std::io::Res
 }
 
 /// Default location for the live socket. Mirrors bananas-stats's
-/// systemd `RuntimeDirectory=bananas-stats` so the path lives under
-/// `/run/bananas-stats/` on-device. Dev hosts without that dir fall
+/// systemd `RuntimeDirectory=bananas` (shared with engine / webadmin
+/// / cloud / router) so every BanaNAS daemon's sockets live together
+/// under `/run/bananas/` on-device. Dev hosts without `/run` fall
 /// back to /tmp.
 pub fn default_socket_path() -> PathBuf {
-    let runtime = Path::new("/run/bananas-stats");
-    if runtime.exists() {
-        runtime.join("live.sock")
-    } else if Path::new("/run").exists() {
-        // We'll create /run/bananas-stats below; sane default for the
-        // first-boot case where the dir doesn't exist yet.
-        runtime.join("live.sock")
+    let runtime = Path::new("/run/bananas");
+    if runtime.exists() || Path::new("/run").exists() {
+        runtime.join("stats.sock")
     } else {
-        PathBuf::from("/tmp/bananas-stats-live.sock")
+        PathBuf::from("/tmp/bananas-stats.sock")
     }
 }

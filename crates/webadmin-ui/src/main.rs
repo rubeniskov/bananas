@@ -737,9 +737,9 @@ fn watch_config_import_op(
                         let msg = match summary {
                             Some(s) => {
                                 let mut m = format!(
-                                    "Imported: {} exports, {} fstab entries, {} users restored ({} skipped).",
+                                    "Imported: {} exports, {} mounts, {} users restored ({} skipped).",
                                     s.exports_written,
-                                    s.fstab_written,
+                                    s.storage_written,
                                     s.users_created,
                                     s.users_skipped,
                                 );

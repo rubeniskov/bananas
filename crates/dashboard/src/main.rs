@@ -2,7 +2,7 @@
 //!
 //! Runs as a separate process from the `bananas-stats` daemon and
 //! subscribes to its Unix-socket pub/sub at
-//! `/run/bananas-stats/live.sock`. Each newline-delimited JSON
+//! `/run/bananas/stats.sock`. Each newline-delimited JSON
 //! snapshot the daemon emits is forwarded to a `tokio::sync::watch`
 //! channel that `app.rs` already consumes — so the existing UI driver
 //! stays untouched, but we no longer open SQLite at all (the daemon
@@ -15,9 +15,11 @@
 //! updates back to the event loop.
 
 mod app;
+mod config;
 
 use anyhow::Result;
-use bananas_stats::{config, metrics::Snapshot};
+use bananas_stats::metrics::Snapshot;
+use config::DashboardConfig;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -49,8 +51,8 @@ fn main() -> Result<()> {
         .or_else(default_config_path);
 
     let cfg = match cfg_path.as_ref() {
-        Some(p) if p.exists() => config::Config::load(p)?,
-        _ => config::Config::default(),
+        Some(p) if p.exists() => DashboardConfig::load(p)?,
+        _ => DashboardConfig::default(),
     };
 
     tracing::info!(?cfg, ?local_offset, "starting bananas-dashboard");
@@ -66,7 +68,7 @@ fn main() -> Result<()> {
     // Subscribe to bananas-stats's live socket. Reconnects on failure
     // so a daemon restart doesn't kill the dashboard — the LCD freezes
     // briefly on the last frame, then resumes.
-    let socket_path = cfg.live_socket.path.clone();
+    let socket_path = cfg.socket.clone();
     rt.spawn(async move {
         if let Err(e) = subscribe_loop(&socket_path, snapshot_tx).await {
             tracing::error!(error = ?e, path = %socket_path.display(),
@@ -79,7 +81,7 @@ fn main() -> Result<()> {
     // so the live-reload watcher inside `launch` knows which file to
     // poll for theme / refresh-rate changes
     // (`/etc/bananas/dashboard.toml` on the BPI).
-    app::launch(cfg.ui, cfg_path, snapshot_rx, local_offset)?;
+    app::launch(cfg, cfg_path, snapshot_rx, local_offset)?;
     Ok(())
 }
 

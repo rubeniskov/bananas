@@ -1,7 +1,7 @@
 //! Live-snapshot push over WebSocket (`/api/stats/live`).
 //!
 //! Architecture: ONE background tokio task subscribes to bananas-stats's
-//! Unix-socket pub/sub at `/run/bananas-stats/live.sock`, parses each
+//! Unix-socket pub/sub at `/run/bananas/stats.sock`, parses each
 //! incoming line as a `Snapshot`, and re-broadcasts to a
 //! `tokio::sync::broadcast` channel. Every connected websocket gets
 //! its own broadcast receiver, so 0..N web clients = one socket
