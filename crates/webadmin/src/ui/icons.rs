@@ -201,6 +201,12 @@ fn paths_for(name: &str) -> Element {
             path { d: "m3.3 7 8.7 5 8.7-5" }
             path { d: "m7.5 4.27 9 5.15" }
         },
+        "layout-grid" => rsx! {
+            rect { width: "7", height: "7", x: "3", y: "3", rx: "1" }
+            rect { width: "7", height: "7", x: "14", y: "3", rx: "1" }
+            rect { width: "7", height: "7", x: "14", y: "14", rx: "1" }
+            rect { width: "7", height: "7", x: "3", y: "14", rx: "1" }
+        },
         // Fallback: render an empty group so unknown names don't break layout.
         _ => rsx! { g {} },
     }
