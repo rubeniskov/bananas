@@ -89,9 +89,23 @@ fn main() {
         }
     }
 
-    let status = cmd.status().expect(
-        "dx build failed to spawn — is dx-cli installed and on PATH? Try `pixi run setup-dx`.",
-    );
+    // If dx isn't on PATH this is the cross-rs Slint LCD
+    // cross-build path (build-dashboard-arm pins
+    // `--bin bananas-dashboard`). Only the LCD bin compiles in
+    // that container, and it doesn't reference $OUT_DIR/ui — so
+    // the empty SPA tree is fine here. The web daemon
+    // (bananas-dashboard-web) cross-builds natively in
+    // build-webadmin-arm where dx is always present and the
+    // real SPA bytes get baked in via include_dir!.
+    let status = match cmd.status() {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("cargo:warning=dx not on PATH; skipping SPA build (cross-rs LCD path)");
+            std::fs::create_dir_all(out.join("ui")).ok();
+            return;
+        }
+        Err(e) => panic!("dx build failed to spawn: {e}"),
+    };
     if !status.success() {
         panic!("dx build {bin} failed with exit {status}");
     }
