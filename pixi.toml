@@ -207,7 +207,7 @@ cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/def
 #
 # Cargo's default progress bar is animated and looks ugly in a log file,
 # so we let `--verbose` print the per-crate "Compiling X" lines instead.
-cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/'"
+cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --features slint-app --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/'"
 depends-on = ["setup-cross"]
 
 # --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
@@ -275,29 +275,31 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 [tasks.iterate]
 cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
-# `e2e`: bring up router + webadmin + cloud as native (host-target)
-# binaries with state in a /tmp dir, drive them with playwright. ~30
-# sec/iter vs the 2-3 min cross-build + opkg install + reboot cycle.
-# Covers URL/SPA/MFE/sub-proxy regressions; does NOT cover anything
-# that hits bananas-engine (writes to /etc/exports, opkg upgrades,
-# system reboot) — those need the heavier "Yocto container" harness.
+# `e2e`: bring up engine + router + webadmin + every plugin daemon
+# as native (host-target) processes against an isolated tmpdir +
+# random TCP port, drive them with chromiumoxide (CDP-direct
+# headless chrome, no chromedriver). Each plugin's tests live in
+# its own crate (`crates/<id>/tests/e2e_*.rs`); the shared harness
+# lives in `crates/devtool` (bananas-devtool).
 #
-# Set BANANAS_E2E_KEEP=1 to retain the temp dir + per-daemon log
-# files after the run for debugging.
+# Each `Harness::new()` call is hermetic, so cargo's test runner
+# parallelises freely. Real /api/login replaces the cookie-forgery
+# shortcut the old harness used. Does NOT cover engine privileged
+# ops (opkg upgrades, /etc/exports rewrites, reboot) — those need
+# the heavier Yocto-container harness coming in PR-6.
 [tasks.e2e]
-# Same env-juggling as build-webadmin-arm: unset CARGO/RUSTC + force
-# RUSTUP_TOOLCHAIN=stable so build.rs's nested `dx build` finds the
-# host rustup's wasm32-unknown-unknown target. Pixi's conda rust does
-# not ship a wasm std.
+# `cargo build --workspace --bins` would attempt the SLINT
+# dashboard binary, which is gated behind `required-features =
+# ["slint-app"]` and skipped by default — that's deliberate so the
+# host fontconfig isn't a hard dep here. `--bins` filters by
+# enabled features automatically; the SLINT bin doesn't compile.
 cmd = """bash -c '
 set -e
 unset CARGO RUSTC
 export RUSTUP_TOOLCHAIN=stable
 export PATH="$HOME/.cargo/bin:$PATH"
-cd tests/e2e
-[ -d node_modules ] || npm install --silent
-[ -d "$HOME/.cache/ms-playwright" ] || npx playwright install chromium
-node run.mjs
+cargo build --workspace --bins
+cargo test --workspace --tests
 '"""
 
 [dependencies]

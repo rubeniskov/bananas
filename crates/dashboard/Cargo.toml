@@ -31,7 +31,11 @@ path = "src/ui/main.rs"
 required-features = ["wasm-ui"]
 
 [features]
-default = ["slint-app"]
+# `slint-app` is opt-in — pulling it in by default would force every
+# `cargo test`/`cargo check --workspace` on the host to compile slint
+# + fontconfig, which the e2e harness doesn't need. The production
+# armv7 build (build-dashboard-arm) explicitly opts in.
+default = []
 wasm-ui = []
 slint-app = ["dep:slint", "dep:bananas-stats"]
 
