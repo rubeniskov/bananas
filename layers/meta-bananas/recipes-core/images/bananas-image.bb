@@ -179,6 +179,7 @@ IMAGE_INSTALL += " \
     i2c-tools \
     bananas-router \
     bananas-webadmin \
+    bananas-exports \
     bananas-stats \
     bananas-config \
     bananas-feed-config \

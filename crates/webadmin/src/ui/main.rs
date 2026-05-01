@@ -11,7 +11,6 @@ mod api;
 mod browse;
 mod components;
 mod dashboard_config;
-mod exports;
 mod icons;
 mod login;
 mod mfe;
@@ -393,7 +392,8 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     listed.sort_by(|a, b| a.order.cmp(&b.order).then(a.id.cmp(&b.id)));
                     let host_pages: &[(&str, &str, &str, u32)] = &[
                         ("stats", "Stats", "chart-bar", 10),
-                        ("exports", "Exports", "share-2", 20),
+                        // exports moved out to bananas-exports plugin —
+                        // its NavTab now comes from the manifest loop.
                         ("storage", "Storage", "hard-drive", 30),
                         ("users", "Users", "users", 40),
                     ];
@@ -644,73 +644,79 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                 Page::Updates => rsx! { updates::UpdatesPage {} },
                 Page::Plugin(id) => match id.as_str() {
                     "stats" => rsx! { stats::StatsPage {} },
-                    "exports" => rsx! { exports::ExportsPage {} },
                     "storage" => rsx! { storage::StoragePage {} },
                     "users" => rsx! { users::UsersPage {} },
-                    // Empty branch for MFE plugins (cloud today).
-                    // The mount frame below renders unconditionally
-                    // and toggles via CSS; keeping the runtime mount
-                    // alive across tab switches preserves plugin
-                    // state on flick-back.
+                    // Empty branch for MFE plugins (cloud, exports
+                    // today). The mount frame below renders
+                    // unconditionally and toggles via CSS; keeping
+                    // the runtime mount alive across tab switches
+                    // preserves plugin state on flick-back.
                     _ => rsx! {},
                 },
             }
 
-            // Cloud microfrontend mount + status panel. Always rendered
-            // when the cloud manifest is installed; hidden via CSS when
-            // a different tab is active. The plugin's `main()` mounts
-            // its app into `<div id="cloud-mfe-root">` once the script
-            // tag is injected (see crate::mfe).
+            // One MFE mount frame per installed plugin manifest.
+            // Each frame stays in the DOM across tab switches —
+            // toggled via `display:none` so Dioxus doesn't unmount
+            // the plugin's runtime and we don't lose its state on
+            // every flick back to a host page. The plugin's
+            // `main()` finds its frame by `id="<plugin>-mfe-root"`
+            // (see mfe::mount_id) once the host injects its script
+            // tag (see crate::mfe::inject).
             {
-                let cloud_active = matches!(&*page.read(), Page::Plugin(id) if id == "cloud");
-                let cloud_installed = extensions
-                    .read()
-                    .iter()
-                    .any(|e| e.id.as_str() == "cloud");
-                let cloud_status = mfe_state.read().get("cloud").cloned();
-                let frame_class = if cloud_active {
-                    "mfe-frame"
-                } else {
-                    "mfe-frame hidden"
+                let installed: Vec<api::Extension> = extensions.read().clone();
+                let active_id = match &*page.read() {
+                    Page::Plugin(id) => Some(id.clone()),
+                    _ => None,
                 };
                 rsx! {
-                    if cloud_installed {
-                        div { class: "{frame_class}",
-                            // The plugin replaces these children once
-                            // its runtime mounts. Until then, we show
-                            // a spinner (or an error+retry panel if the
-                            // discovery/inject failed).
-                            div {
-                                id: "cloud-mfe-root",
-                                class: "mfe-mount",
-                                match cloud_status {
-                                    Some(Err(err)) => rsx! {
-                                        div { class: "mfe-loading mfe-failed",
-                                            p { class: "mfe-failed-title", "Cloud module failed to load." }
-                                            pre { class: "mfe-failed-detail", "{err}" }
-                                            button {
-                                                class: "primary",
-                                                onclick: move |_| {
-                                                    if let Some(ext) = extensions
-                                                        .read()
-                                                        .iter()
-                                                        .find(|e| e.id.as_str() == "cloud")
-                                                        .cloned()
-                                                    {
-                                                        mfe_state.write().remove("cloud");
-                                                        activate_plugin(ext.id.clone());
+                    for ext in installed {
+                        {
+                            let id = ext.id.clone();
+                            let label = ext.label.clone().unwrap_or_else(|| id.clone());
+                            let mount_id = mfe::mount_id(&id);
+                            let active = active_id.as_deref() == Some(id.as_str());
+                            let status = mfe_state.read().get(&id).cloned();
+                            let frame_class = if active {
+                                "mfe-frame"
+                            } else {
+                                "mfe-frame hidden"
+                            };
+                            rsx! {
+                                div { class: "{frame_class}",
+                                    div {
+                                        id: "{mount_id}",
+                                        class: "mfe-mount",
+                                        match status {
+                                            Some(Err(err)) => {
+                                                let retry_id = id.clone();
+                                                let retry_label = label.clone();
+                                                rsx! {
+                                                    div { class: "mfe-loading mfe-failed",
+                                                        p { class: "mfe-failed-title", "{retry_label} module failed to load." }
+                                                        pre { class: "mfe-failed-detail", "{err}" }
+                                                        button {
+                                                            class: "primary",
+                                                            onclick: move |_| {
+                                                                mfe_state.write().remove(&retry_id);
+                                                                activate_plugin(retry_id.clone());
+                                                            },
+                                                            "Retry"
+                                                        }
                                                     }
-                                                },
-                                                "Retry"
+                                                }
+                                            }
+                                            _ => {
+                                                let loading_label = label.clone();
+                                                rsx! {
+                                                    div { class: "mfe-loading",
+                                                        components::Spinner { size: 32 }
+                                                        span { "Loading {loading_label} module…" }
+                                                    }
+                                                }
                                             }
                                         }
-                                    },
-                                    _ => rsx! {
-                                        div { class: "mfe-loading",
-                                            components::Spinner { size: 32 }
-                                            span { "Loading Cloud module…" }
-                                        }
-                                    },
+                                    }
                                 }
                             }
                         }

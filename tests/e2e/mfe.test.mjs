@@ -1,39 +1,47 @@
-// MFE handshake works end-to-end: click Cloud → /api/cloud/__mfe_entry
-// fires → script tag injected → cloud-ui mounts inline.
+// MFE handshake works end-to-end for every installed plugin:
+// click the nav tab → `/api/<id>/__mfe_entry` fires → script tag
+// injected → plugin SPA mounts inline at `<id>-mfe-root`.
+const PLUGINS = [
+  { id: 'cloud', label: 'Cloud' },
+  { id: 'exports', label: 'Exports' },
+];
+
 export default async function ({ origin, page }) {
   await page.goto(`${origin}/`, { waitUntil: 'load' });
-  await page.waitForSelector('a:has-text("Cloud")', { timeout: 5000 });
+  await page.waitForSelector('a:has-text("Stats")', { timeout: 5000 });
 
-  // Track requests so we can assert the right discovery path was hit.
-  const reqs = [];
-  page.on('request', r => reqs.push(r.url()));
+  for (const { id, label } of PLUGINS) {
+    const reqs = [];
+    const onRequest = r => reqs.push(r.url());
+    page.on('request', onRequest);
 
-  await page.click('a:has-text("Cloud")');
-  // Give the wasm a moment to boot + the cloud SPA to render.
-  await page.waitForTimeout(2000);
+    await page.click(`a:has-text("${label}")`);
+    // Give the wasm a moment to boot + the plugin SPA to render.
+    await page.waitForTimeout(2000);
 
-  const sawMfeEntry = reqs.some(u => u.endsWith('/api/cloud/__mfe_entry'));
-  if (!sawMfeEntry) {
-    throw new Error('expected GET /api/cloud/__mfe_entry — MFE loader did not handshake');
-  }
+    const sawMfeEntry = reqs.some(u => u.endsWith(`/api/${id}/__mfe_entry`));
+    if (!sawMfeEntry) {
+      throw new Error(`${label}: expected GET /api/${id}/__mfe_entry — MFE loader did not handshake`);
+    }
 
-  const sawAssets = reqs.some(u => u.includes('/assets/cloud/'));
-  if (!sawAssets) {
-    throw new Error('expected GET /assets/cloud/* — cloud SPA assets never loaded');
-  }
+    const sawAssets = reqs.some(u => u.includes(`/assets/${id}/`));
+    if (!sawAssets) {
+      throw new Error(`${label}: expected GET /assets/${id}/* — plugin SPA assets never loaded`);
+    }
 
-  // The cloud-mfe-root div should now have rendered cloud-ui content.
-  const mounted = await page.evaluate(() => {
-    const root = document.getElementById('cloud-mfe-root');
-    return !!root && root.innerHTML.length > 100;
-  });
-  if (!mounted) {
-    throw new Error('cloud-mfe-root has no content — cloud SPA did not mount');
-  }
+    const mountId = `${id}-mfe-root`;
+    const mounted = await page.evaluate(mid => {
+      const root = document.getElementById(mid);
+      return !!root && root.innerHTML.length > 100;
+    }, mountId);
+    if (!mounted) {
+      throw new Error(`${label}: ${mountId} has no content — plugin SPA did not mount`);
+    }
 
-  // URL is still the host's hash route, not the launch-time-rewrite
-  // bug shape `/assets/cloud/assets/cloud`.
-  if (page.url() !== `${origin}/#cloud`) {
-    throw new Error(`expected ${origin}/#cloud, got ${page.url()}`);
+    if (page.url() !== `${origin}/#${id}`) {
+      throw new Error(`${label}: expected ${origin}/#${id}, got ${page.url()}`);
+    }
+
+    page.off('request', onRequest);
   }
 }
