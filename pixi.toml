@@ -253,6 +253,31 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 [tasks.iterate]
 cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
+# `e2e`: bring up router + webadmin + cloud as native (host-target)
+# binaries with state in a /tmp dir, drive them with playwright. ~30
+# sec/iter vs the 2-3 min cross-build + opkg install + reboot cycle.
+# Covers URL/SPA/MFE/sub-proxy regressions; does NOT cover anything
+# that hits bananas-engine (writes to /etc/exports, opkg upgrades,
+# system reboot) — those need the heavier "Yocto container" harness.
+#
+# Set BANANAS_E2E_KEEP=1 to retain the temp dir + per-daemon log
+# files after the run for debugging.
+[tasks.e2e]
+# Same env-juggling as build-webadmin-arm: unset CARGO/RUSTC + force
+# RUSTUP_TOOLCHAIN=stable so build.rs's nested `dx build` finds the
+# host rustup's wasm32-unknown-unknown target. Pixi's conda rust does
+# not ship a wasm std.
+cmd = """bash -c '
+set -e
+unset CARGO RUSTC
+export RUSTUP_TOOLCHAIN=stable
+export PATH="$HOME/.cargo/bin:$PATH"
+cd tests/e2e
+[ -d node_modules ] || npm install --silent
+[ -d "$HOME/.cache/ms-playwright" ] || npx playwright install chromium
+node run.mjs
+'"""
+
 [dependencies]
 python = "==3.11"
 chrpath = "*"

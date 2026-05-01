@@ -26,3 +26,6 @@
 /dist/
 /.claude/
 serve/cloud-ui
+# e2e harness deps — installed via `pixi run e2e`; never committed.
+/tests/e2e/node_modules/
+/tests/e2e/package-lock.json
