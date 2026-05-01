@@ -179,6 +179,7 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
     match crate::operations::config_import::start(
         state.operations.clone(),
         (*state.helper_socket).clone(),
+        (*state.helper_grpc_socket).clone(),
         body,
     )
     .await
@@ -261,20 +262,27 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
 }
 
 async fn read_service_table(state: &AppState, name: &str) -> toml::Table {
-    match bananas_engine::call(
-        &state.helper_socket,
-        &Command::ReadServiceConfig {
+    let channel = match crate::engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(_) => return toml::Table::new(),
+    };
+    let mut client =
+        bananas_proto::engine::v1::engine_service_client::EngineServiceClient::new(channel);
+    match client
+        .read_service_config(bananas_proto::engine::v1::ReadServiceConfigRequest {
             name: name.to_string(),
-        },
-    )
-    .await
+        })
+        .await
     {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) if !output.trim().is_empty() => {
-            toml::from_str::<toml::Table>(&output).unwrap_or_default()
+        Ok(resp) => {
+            let content = resp.into_inner().content;
+            if content.trim().is_empty() {
+                toml::Table::new()
+            } else {
+                toml::from_str::<toml::Table>(&content).unwrap_or_default()
+            }
         }
-        _ => toml::Table::new(),
+        Err(_) => toml::Table::new(),
     }
 }
 

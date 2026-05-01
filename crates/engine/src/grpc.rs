@@ -10,15 +10,16 @@ use std::path::PathBuf;
 
 use bananas_proto::engine::v1::{
     AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
-    ListTimezonesRequest, ListTimezonesResponse, RebootSystemRequest, RebootSystemResponse,
-    SetTimezoneRequest, SetTimezoneResponse,
+    ListTimezonesRequest, ListTimezonesResponse, ReadServiceConfigRequest,
+    ReadServiceConfigResponse, RebootSystemRequest, RebootSystemResponse, SetTimezoneRequest,
+    SetTimezoneResponse, WriteServiceConfigRequest, WriteServiceConfigResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
 
 use crate::{
-    authenticate, change_own_password, list_timezones_vec, reboot_system, set_timezone,
-    verify_shadow_password,
+    authenticate, change_own_password, list_timezones_vec, read_service_config, reboot_system,
+    set_timezone, verify_shadow_password, write_service_config,
 };
 
 /// Engine gRPC service. Holds the same shadow path the
@@ -127,6 +128,46 @@ impl EngineService for EngineGrpc {
             Err(e) => {
                 tracing::warn!(error = %e, "list_timezones failed (gRPC)");
                 Err(Status::internal(format!("list_timezones failed: {e}")))
+            }
+        }
+    }
+
+    async fn read_service_config(
+        &self,
+        req: Request<ReadServiceConfigRequest>,
+    ) -> Result<Response<ReadServiceConfigResponse>, Status> {
+        let name = req.into_inner().name;
+        // Unknown allowlist names are caller-controlled, so they
+        // map to InvalidArgument; anything else is a real fs error.
+        match read_service_config(&name).await {
+            Ok(content) => Ok(Response::new(ReadServiceConfigResponse { content })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(name = %name, error = %msg, "read_service_config failed (gRPC)");
+                if msg.starts_with("unknown service config") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn write_service_config(
+        &self,
+        req: Request<WriteServiceConfigRequest>,
+    ) -> Result<Response<WriteServiceConfigResponse>, Status> {
+        let body = req.into_inner();
+        match write_service_config(&body.name, &body.content).await {
+            Ok(output) => Ok(Response::new(WriteServiceConfigResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(name = %body.name, error = %msg, "write_service_config failed (gRPC)");
+                if msg.starts_with("unknown service config") || msg.starts_with("invalid TOML") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
             }
         }
     }

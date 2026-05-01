@@ -5,11 +5,14 @@
 //! handlers so each new config name is one route, not duplicate code.
 
 use axum::{Json, extract::State, response::Response};
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    ReadServiceConfigRequest, WriteServiceConfigRequest, engine_service_client::EngineServiceClient,
+};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::AppState;
+use crate::engine_grpc;
 use crate::errors::{err_400, err_500};
 
 /// Read the named config file via the helper. `default_toml` is rendered
@@ -20,22 +23,25 @@ pub async fn read(
     name: &'static str,
     default_toml: impl FnOnce() -> String,
 ) -> Response {
-    let cmd = Command::ReadServiceConfig { name: name.into() };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => {
-            let body = if output.trim().is_empty() {
+    let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("helper unreachable: {e}")),
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .read_service_config(ReadServiceConfigRequest { name: name.into() })
+        .await
+    {
+        Ok(resp) => {
+            let content = resp.into_inner().content;
+            let body = if content.trim().is_empty() {
                 default_toml()
             } else {
-                output
+                content
             };
             axum::response::IntoResponse::into_response(Json(json!({ "config": body })))
         }
-        Ok(HelperResponse { error, .. }) => {
-            err_500(error.unwrap_or_else(|| format!("helper rejected ReadServiceConfig({name})")))
-        }
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+        Err(status) => err_500(format!("ReadServiceConfig({name}) failed: {status}")),
     }
 }
 
@@ -48,22 +54,28 @@ pub struct PutConfig {
 /// atomic-replace + post-write systemctl restart (or no-op restart
 /// for configs the consumer reloads in place).
 pub async fn write(state: &AppState, name: &'static str, content: String) -> Response {
-    let cmd = Command::WriteServiceConfig {
-        name: name.into(),
-        content,
+    let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => return err_500(format!("helper unreachable: {e}")),
     };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => axum::response::IntoResponse::into_response(Json(
-            json!({ "ok": true, "output": output }),
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .write_service_config(WriteServiceConfigRequest {
+            name: name.into(),
+            content,
+        })
+        .await
+    {
+        Ok(resp) => axum::response::IntoResponse::into_response(Json(
+            json!({ "ok": true, "output": resp.into_inner().output }),
         )),
-        Ok(HelperResponse { error, output, .. }) => err_400(format!(
-            "{}\n\n{}",
-            error.unwrap_or_else(|| format!("helper rejected WriteServiceConfig({name})")),
-            output
-        )),
-        Err(e) => err_500(format!("helper unreachable: {e}")),
+        // InvalidArgument = bad TOML or unknown name from the
+        // caller; everything else is a real engine fs/systemctl
+        // problem.
+        Err(status) if status.code() == tonic::Code::InvalidArgument => {
+            err_400(status.message().to_string())
+        }
+        Err(status) => err_500(format!("WriteServiceConfig({name}) failed: {status}")),
     }
 }
 

@@ -14,9 +14,9 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use bananas_engine::{Command, Response as HelperResponse};
 use bananas_proto::engine::v1::{
-    ListTimezonesRequest, SetTimezoneRequest, engine_service_client::EngineServiceClient,
+    ListTimezonesRequest, ReadServiceConfigRequest, SetTimezoneRequest,
+    engine_service_client::EngineServiceClient,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -42,23 +42,21 @@ pub struct SystemBlock {
 /// Read /etc/bananas/system.toml via the helper and parse into the
 /// strongly-typed SystemConfig. Missing file = default (no timezone).
 pub async fn read_system_config(state: &AppState) -> Result<SystemConfig, String> {
-    let cmd = Command::ReadServiceConfig {
-        name: "system".into(),
-    };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => {
-            if output.trim().is_empty() {
-                Ok(SystemConfig::default())
-            } else {
-                toml::from_str(&output).map_err(|e| format!("parsing system.toml: {e}"))
-            }
-        }
-        Ok(HelperResponse { error, .. }) => {
-            Err(error.unwrap_or_else(|| "helper rejected ReadServiceConfig(system)".into()))
-        }
-        Err(e) => Err(format!("helper unreachable: {e}")),
+    let channel = engine_grpc::channel(&state.helper_grpc_socket)
+        .await
+        .map_err(|e| format!("helper unreachable: {e}"))?;
+    let mut client = EngineServiceClient::new(channel);
+    let resp = client
+        .read_service_config(ReadServiceConfigRequest {
+            name: "system".into(),
+        })
+        .await
+        .map_err(|status| format!("ReadServiceConfig(system) failed: {status}"))?;
+    let content = resp.into_inner().content;
+    if content.trim().is_empty() {
+        Ok(SystemConfig::default())
+    } else {
+        toml::from_str(&content).map_err(|e| format!("parsing system.toml: {e}"))
     }
 }
 

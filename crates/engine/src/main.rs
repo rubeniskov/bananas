@@ -2174,7 +2174,7 @@ fn service_config_target(name: &str) -> Option<(&'static str, &'static [&'static
     }
 }
 
-async fn read_service_config(name: &str) -> Result<String> {
+pub(crate) async fn read_service_config(name: &str) -> Result<String> {
     let (path, _units) = service_config_target(name)
         .ok_or_else(|| anyhow::anyhow!("unknown service config {name:?}"))?;
     match tokio::fs::read_to_string(path).await {
@@ -2186,7 +2186,7 @@ async fn read_service_config(name: &str) -> Result<String> {
     }
 }
 
-async fn write_service_config(name: &str, content: &str) -> Result<String> {
+pub(crate) async fn write_service_config(name: &str, content: &str) -> Result<String> {
     let (path, units) = service_config_target(name)
         .ok_or_else(|| anyhow::anyhow!("unknown service config {name:?}"))?;
     // Validate as TOML before touching the disk — invalid syntax would

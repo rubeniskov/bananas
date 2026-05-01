@@ -56,6 +56,21 @@ service EngineService {
   // pruned). Backs the Settings → General timezone autocomplete.
   // Maps 1:1 to `Command::ListTimezones`.
   rpc ListTimezones(ListTimezonesRequest) returns (ListTimezonesResponse);
+
+  // Read a known TOML config file under /etc/bananas/. The
+  // `name` field is one of the curated allowlist entries
+  // (`system`, …) — arbitrary paths are rejected. A missing
+  // file maps to an empty `content` string so the UI can show
+  // a fresh editor without a banner.
+  // Maps 1:1 to `Command::ReadServiceConfig`.
+  rpc ReadServiceConfig(ReadServiceConfigRequest) returns (ReadServiceConfigResponse);
+
+  // Write a known TOML config file under /etc/bananas/. Same
+  // allowlist as `ReadServiceConfig`. The engine validates the
+  // content is parseable TOML, writes atomically (sibling tmp +
+  // rename), and restarts any associated systemd units.
+  // Maps 1:1 to `Command::WriteServiceConfig`.
+  rpc WriteServiceConfig(WriteServiceConfigRequest) returns (WriteServiceConfigResponse);
 }
 
 message AuthenticateRequest {
@@ -109,4 +124,26 @@ message ListTimezonesRequest {}
 message ListTimezonesResponse {
   // Sorted list of IANA zone names available on the host.
   repeated string zones = 1;
+}
+
+message ReadServiceConfigRequest {
+  // Allowlisted name (e.g. `system`); not a filesystem path.
+  string name = 1;
+}
+
+message ReadServiceConfigResponse {
+  // Raw TOML file contents. Empty when the file doesn't exist.
+  string content = 1;
+}
+
+message WriteServiceConfigRequest {
+  string name = 1;
+  string content = 2;
+}
+
+message WriteServiceConfigResponse {
+  // Combined output from the write + post-write systemctl
+  // restarts (one line per unit). Empty when no units are
+  // associated with this config name.
+  string output = 1;
 }

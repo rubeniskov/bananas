@@ -19,6 +19,9 @@ use std::path::PathBuf;
 
 use axum::http::StatusCode;
 use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    WriteServiceConfigRequest, engine_service_client::EngineServiceClient,
+};
 use serde_json::json;
 
 use super::{OperationKind, OperationManager, OperationStatus};
@@ -34,6 +37,7 @@ use crate::{exports, fstab};
 pub async fn start(
     manager: OperationManager,
     helper_socket: PathBuf,
+    helper_grpc_socket: PathBuf,
     body: String,
 ) -> Result<u64, (StatusCode, String)> {
     let bundle: ConfigBundle = toml::from_str(&body)
@@ -61,7 +65,7 @@ pub async fn start(
 
     let mgr = manager.clone();
     tokio::spawn(async move {
-        run_import(mgr, helper_socket, op_id, bundle).await;
+        run_import(mgr, helper_socket, helper_grpc_socket, op_id, bundle).await;
     });
     Ok(op_id)
 }
@@ -74,6 +78,7 @@ pub async fn start(
 async fn run_import(
     manager: OperationManager,
     helper_socket: PathBuf,
+    helper_grpc_socket: PathBuf,
     op_id: u64,
     bundle: ConfigBundle,
 ) {
@@ -262,16 +267,8 @@ async fn run_import(
             .map(|a| a.len())
             .unwrap_or(0);
         log!("Restoring cloud config ({accounts_count} account(s), {syncs_count} sync(s))…");
-        match bananas_engine::call(
-            &helper_socket,
-            &HelperCommand::WriteServiceConfig {
-                name: "cloud".into(),
-                content: cloud_toml,
-            },
-        )
-        .await
-        {
-            Ok(HelperResponse { ok: true, .. }) => {
+        match write_service_toml(&helper_grpc_socket, "cloud", cloud_toml).await {
+            Ok(()) => {
                 summary.cloud_accounts = accounts_count;
                 summary.cloud_syncs = syncs_count;
                 log!("  → cloud config written");
@@ -290,19 +287,8 @@ async fn run_import(
                     summary.notes.push(hint);
                 }
             }
-            Ok(HelperResponse { error, output, .. }) => {
+            Err(note) => {
                 summary.ok = false;
-                let note = format!(
-                    "cloud: {}\n{}",
-                    error.unwrap_or_else(|| "helper rejected cloud".into()),
-                    output
-                );
-                log!("  → cloud FAILED: {note}");
-                summary.notes.push(note);
-            }
-            Err(e) => {
-                summary.ok = false;
-                let note = format!("cloud: helper unreachable: {e}");
                 log!("  → cloud FAILED: {note}");
                 summary.notes.push(note);
             }
@@ -329,7 +315,7 @@ async fn run_import(
             }
         };
         log!("Restoring {name}.toml…");
-        match write_service_toml(&helper_socket, name, serialized).await {
+        match write_service_toml(&helper_grpc_socket, name, serialized).await {
             Ok(()) => {
                 summary.notes.push(format!("{name}.toml restored"));
                 log!("  → {name}.toml restored");
@@ -362,26 +348,23 @@ async fn run_import(
 }
 
 async fn write_service_toml(
-    helper_socket: &PathBuf,
+    helper_grpc_socket: &PathBuf,
     name: &str,
     content: String,
 ) -> Result<(), String> {
-    match bananas_engine::call(
-        helper_socket,
-        &HelperCommand::WriteServiceConfig {
+    let channel = crate::engine_grpc::channel(helper_grpc_socket)
+        .await
+        .map_err(|e| format!("{name}: helper unreachable: {e}"))?;
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .write_service_config(WriteServiceConfigRequest {
             name: name.into(),
             content,
-        },
-    )
-    .await
+        })
+        .await
     {
-        Ok(HelperResponse { ok: true, .. }) => Ok(()),
-        Ok(HelperResponse { error, output, .. }) => Err(format!(
-            "{name}: {}\n{}",
-            error.unwrap_or_else(|| format!("helper rejected {name}")),
-            output
-        )),
-        Err(e) => Err(format!("{name}: helper unreachable: {e}")),
+        Ok(_) => Ok(()),
+        Err(status) => Err(format!("{name}: {status}")),
     }
 }
 
