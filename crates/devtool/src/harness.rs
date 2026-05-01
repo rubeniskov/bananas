@@ -299,6 +299,10 @@ fn base_env(tmp: &Path, port: u16) -> Vec<(String, std::ffi::OsString)> {
         ("BANANAS_ROUTER_SOCKET".into(), join("router.sock")),
         ("BANANAS_WEBADMIN_SOCKET".into(), join("webadmin.sock")),
         ("BANANAS_ENGINE_SOCKET".into(), join("engine.sock")),
+        (
+            "BANANAS_ENGINE_GRPC_SOCKET".into(),
+            join("engine-grpc.sock"),
+        ),
         ("BANANAS_CLOUD_SOCKET".into(), join("cloud.sock")),
         ("BANANAS_EXPORTS_SOCKET".into(), join("exports.sock")),
         ("BANANAS_STORAGE_SOCKET".into(), join("storage.sock")),

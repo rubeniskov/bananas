@@ -647,6 +647,10 @@ name = "bananas-engine"
 version = "1.4.0"
 dependencies = [
  "anyhow",
+ "bananas-proto",
+ "futures-util",
+ "hyper-util",
+ "prost",
  "serde",
  "serde_json",
  "serial_test",
@@ -655,6 +659,9 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
+ "tonic",
+ "tonic-prost",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

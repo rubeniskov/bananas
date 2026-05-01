@@ -23,6 +23,16 @@ tracing-subscriber.workspace = true
 sha-crypt.workspace = true
 sha2.workspace = true
 toml.workspace = true
+# tonic server for the gRPC half of the engine socket. The
+# legacy newline-JSON loop on `BANANAS_ENGINE_SOCKET` stays for
+# unmigrated commands; the gRPC mount on
+# `BANANAS_ENGINE_GRPC_SOCKET` carries Authenticate today and
+# more in subsequent PRs.
+bananas-proto = { workspace = true, features = ["server"] }
+tonic = { workspace = true, features = ["server", "router", "transport"] }
+tonic-prost = "0.14"
+prost.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
@@ -35,3 +45,7 @@ serial_test = "3"
 # integration tests link the lib crate (not the bin), so we re-add
 # it here.
 sha-crypt.workspace = true
+# gRPC client for tests/auth_grpc.rs — connects to the engine's
+# tonic Unix socket via a tower service-fn connector.
+tower = "0.5"
+hyper-util = { version = "0.1", features = ["tokio"] }

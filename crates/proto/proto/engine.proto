@@ -1,0 +1,43 @@
+// bananas-engine: privileged-ops daemon RPCs.
+//
+// PR-4 fills in a single RPC — `Authenticate`, the highest-value
+// path because (a) it's hit on every /api/login and (b) it's the
+// most security-sensitive, so type-checked wire shapes matter.
+// The other 27 `Command` enum variants in
+// `crates/engine/src/lib.rs` continue to use the existing
+// newline-JSON Unix socket. They migrate one or two at a time in
+// follow-up PRs as the engine's tonic mount stabilises.
+//
+// Engine binary serves both protocols: the legacy newline-JSON
+// socket at `BANANAS_ENGINE_SOCKET` (unchanged) and a sibling
+// gRPC socket at `BANANAS_ENGINE_GRPC_SOCKET`. Callers pick
+// whichever path is migrated for the RPC they need; the
+// transition stays incremental.
+
+syntax = "proto3";
+
+package bananas.engine.v1;
+
+service EngineService {
+  // Verify a system password by reading /etc/shadow and matching
+  // the stored hash. Replies with `lastchg_zero` so the UI can
+  // surface the "must change password at first login" path.
+  // Maps 1:1 to the existing `Command::Authenticate` variant; the
+  // legacy newline-JSON path is the source of truth until every
+  // caller is migrated to gRPC.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+}
+
+message AuthenticateRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthenticateResponse {
+  // True for /etc/shadow's third field == 0 — the "chage -d 0"
+  // sentinel that means "must rotate password before any session
+  // is granted". The current Command::Authenticate response uses
+  // a magic "password_expired" error string for this; protobuf
+  // gives us a real boolean instead.
+  bool lastchg_zero = 1;
+}

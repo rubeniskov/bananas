@@ -12,12 +12,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{AuthenticateRequest, engine_service_client::EngineServiceClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use bananas_server_common::{COOKIE_NAME, Session, SessionKey, extract_cookie};
 
-use crate::AppState;
+use crate::{AppState, engine_grpc};
 
 /// Endpoints exempt from the auth middleware (must match the path AFTER
 /// the /api nest prefix is stripped).
@@ -56,12 +57,39 @@ pub async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>)
             .into_response();
     }
 
-    let cmd = Command::Authenticate {
-        username: req.username.clone(),
-        password: req.password,
+    // Authenticate via tonic-on-Unix (PR-4 of the gRPC migration).
+    // Wire shape:
+    //   - Ok(lastchg_zero=false) → password good, normal session.
+    //   - Ok(lastchg_zero=true)  → password good, but /etc/shadow's
+    //     lastchg field is 0 ("must rotate"). The SPA recognises the
+    //     `password_expired` error string and routes to /password.
+    //   - Err(Unauthenticated)   → wrong password. Surfaced as 401.
+    //   - Err(other)             → engine unreachable / transport.
+    //     Surfaced as 502 to match the legacy newline-JSON path.
+    let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "ok": false, "error": format!("helper unreachable: {e}") })),
+            )
+                .into_response();
+        }
     };
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, .. }) => {
+    let mut client = EngineServiceClient::new(channel);
+    let rpc = client
+        .authenticate(AuthenticateRequest {
+            username: req.username.clone(),
+            password: req.password,
+        })
+        .await;
+    match rpc {
+        Ok(resp) if resp.get_ref().lastchg_zero => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "ok": false, "error": "password_expired" })),
+        )
+            .into_response(),
+        Ok(_) => {
             let ttl = if req.remember {
                 TTL_REMEMBER_SECS
             } else {
@@ -80,17 +108,14 @@ pub async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>)
             )
                 .into_response()
         }
-        Ok(HelperResponse { error, .. }) => (
+        Err(status) if status.code() == tonic::Code::Unauthenticated => (
             StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "ok": false,
-                "error": error.unwrap_or_else(|| "invalid credentials".into())
-            })),
+            Json(json!({ "ok": false, "error": "invalid credentials" })),
         )
             .into_response(),
-        Err(e) => (
+        Err(status) => (
             StatusCode::BAD_GATEWAY,
-            Json(json!({ "ok": false, "error": format!("helper unreachable: {e}") })),
+            Json(json!({ "ok": false, "error": format!("helper unreachable: {status}") })),
         )
             .into_response(),
     }

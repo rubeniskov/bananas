@@ -34,6 +34,7 @@ use tower_http::trace::TraceLayer;
 mod auth;
 mod config;
 mod embedded;
+mod engine_grpc;
 mod errors;
 mod extensions;
 mod grpc;
@@ -79,6 +80,11 @@ impl PluginAssetMap {
 #[derive(Clone)]
 pub struct AppState {
     pub helper_socket: Arc<PathBuf>,
+    /// Path to the engine's tonic Unix socket. Used by gRPC-migrated
+    /// RPCs (currently only `EngineService::Authenticate`); every
+    /// other privileged op still goes through `helper_socket` until
+    /// its `Command` variant is migrated to gRPC.
+    pub helper_grpc_socket: Arc<PathBuf>,
     pub session_key: Arc<SessionKey>,
     pub operations: operations::OperationManager,
 }
@@ -106,6 +112,10 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
+    let helper_grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/engine-grpc.sock".into());
+
     let operations_journal: PathBuf = std::env::var_os("BANANAS_OPERATIONS_JOURNAL")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/var/lib/bananas/operations.json".into());
@@ -120,6 +130,7 @@ async fn main() -> Result<()> {
 
     let state = AppState {
         helper_socket: Arc::new(helper_socket),
+        helper_grpc_socket: Arc::new(helper_grpc_socket),
         session_key: Arc::new(session_key),
         operations,
     };

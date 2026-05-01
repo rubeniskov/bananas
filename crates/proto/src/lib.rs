@@ -31,3 +31,9 @@ pub mod cloud {
         include!(concat!(env!("OUT_DIR"), "/bananas.cloud.v1.rs"));
     }
 }
+
+pub mod engine {
+    pub mod v1 {
+        include!(concat!(env!("OUT_DIR"), "/bananas.engine.v1.rs"));
+    }
+}

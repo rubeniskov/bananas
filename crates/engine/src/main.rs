@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use bananas_engine::{Command, Response};
 use serde_json::json;
 
+mod grpc;
 mod opkg;
 use tokio::{
     fs,
@@ -82,8 +83,24 @@ async fn main() -> Result<()> {
 
     let cx = Cx {
         exports: exports_path,
-        shadow: shadow_path,
+        shadow: shadow_path.clone(),
     };
+
+    // Spawn the gRPC half on its own Unix socket. Sibling of the
+    // newline-JSON socket; lives at `BANANAS_ENGINE_GRPC_SOCKET`.
+    // PR-4 ships only Authenticate; the legacy line-JSON socket
+    // continues to handle every other Command variant.
+    let grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/run/bananas/engine-grpc.sock".into());
+    {
+        let shadow_for_grpc = shadow_path.clone();
+        tokio::spawn(async move {
+            if let Err(e) = grpc::serve(grpc_socket, shadow_for_grpc).await {
+                tracing::error!(error=%e, "engine gRPC mount exited");
+            }
+        });
+    }
 
     loop {
         let (stream, _) = match listener.accept().await {
@@ -638,7 +655,7 @@ const ADMIN_GROUP: &str = "bananas-admin";
 /// is authorized (root or a member of `bananas-admin`). Only `$6$`
 /// (SHA-512) hashes are accepted — that's what the BanaNAS image
 /// produces via `mkpasswd -m sha-512`.
-async fn authenticate(username: &str, password: &str, shadow_path: &Path) -> Result<()> {
+pub(crate) async fn authenticate(username: &str, password: &str, shadow_path: &Path) -> Result<()> {
     let entry = verify_shadow_password(username, password, shadow_path).await?;
 
     // The shadow file's third field is "days since 1970-01-01 of the last
@@ -670,7 +687,7 @@ struct ShadowEntry {
 /// can also inspect the expiry field. Used by both `authenticate` and
 /// `change_own_password` — the latter wants to accept the password
 /// even when expired so the user can rotate it.
-async fn verify_shadow_password(
+pub(crate) async fn verify_shadow_password(
     username: &str,
     password: &str,
     shadow_path: &Path,
