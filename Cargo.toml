@@ -72,7 +72,7 @@ slint-build = "1.16"
 
 # UI (wasm) deps — pinned at the workspace level so the bananas-webadmin crate
 # doesn't drift from the rest of the tree on a `cargo update`.
-dioxus = { version = "0.7", features = ["web", "router"] }
+dioxus = { version = "0.7", features = ["web"] }
 gloo-net = { version = "0.6", features = ["http"] }
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
