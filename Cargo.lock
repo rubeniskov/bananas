@@ -516,6 +516,7 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-devtool",
  "bananas-engine",
  "bananas-server-common",
  "console_error_panic_hook",
@@ -563,6 +564,7 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-devtool",
  "bananas-engine",
  "bananas-server-common",
  "bananas-stats",
@@ -629,6 +631,7 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-devtool",
  "bananas-engine",
  "bananas-server-common",
  "console_error_panic_hook",
@@ -687,6 +690,7 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-devtool",
  "bananas-engine",
  "bananas-server-common",
  "console_error_panic_hook",
@@ -723,6 +727,7 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-devtool",
  "bananas-engine",
  "bananas-server-common",
  "console_error_panic_hook",
@@ -751,6 +756,7 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bananas-devtool",
  "bananas-engine",
  "bananas-server-common",
  "console_error_panic_hook",
