@@ -1,7 +1,10 @@
 // MFE handshake works end-to-end for every installed plugin:
-// click the nav tab → `/api/<id>/__mfe_entry` fires → script tag
-// injected → plugin SPA mounts inline at `<id>-mfe-root`.
+// either via the initial-load auto-activation (default tab) or
+// after a NavTab click. Each plugin's `/api/<id>/__mfe_entry`
+// fires, the script tag injects, the plugin SPA mounts at
+// `<id>-mfe-root`, and the URL settles at `/#<id>`.
 const PLUGINS = [
+  { id: 'stats', label: 'Stats' },
   { id: 'cloud', label: 'Cloud' },
   { id: 'exports', label: 'Exports' },
   { id: 'storage', label: 'Storage' },
@@ -9,17 +12,29 @@ const PLUGINS = [
 ];
 
 export default async function ({ origin, page }) {
+  // Start capturing network requests BEFORE the goto so we see the
+  // default-tab auto-activation (`stats` lands first because the
+  // host SPA defaults to Page::Plugin("stats") on bare /).
+  const reqs = [];
+  const onRequest = r => reqs.push(r.url());
+  page.on('request', onRequest);
+
   await page.goto(`${origin}/`, { waitUntil: 'load' });
   await page.waitForSelector('a:has-text("Stats")', { timeout: 5000 });
+  await page.waitForTimeout(1500);
 
   for (const { id, label } of PLUGINS) {
-    const reqs = [];
-    const onRequest = r => reqs.push(r.url());
-    page.on('request', onRequest);
-
-    await page.click(`a:has-text("${label}")`);
-    // Give the wasm a moment to boot + the plugin SPA to render.
-    await page.waitForTimeout(2000);
+    // Only click if the plugin isn't already the active tab; the
+    // default tab auto-activates so its handshake already fired
+    // during goto.
+    const alreadyActive = await page.evaluate(
+      slug => window.location.hash === `#${slug}`,
+      id,
+    );
+    if (!alreadyActive) {
+      await page.click(`a:has-text("${label}")`);
+      await page.waitForTimeout(2000);
+    }
 
     const sawMfeEntry = reqs.some(u => u.endsWith(`/api/${id}/__mfe_entry`));
     if (!sawMfeEntry) {
@@ -43,7 +58,7 @@ export default async function ({ origin, page }) {
     if (page.url() !== `${origin}/#${id}`) {
       throw new Error(`${label}: expected ${origin}/#${id}, got ${page.url()}`);
     }
-
-    page.off('request', onRequest);
   }
+
+  page.off('request', onRequest);
 }

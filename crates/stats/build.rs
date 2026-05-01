@@ -1,0 +1,194 @@
+//! Build the cloud SPA via `dx build` and stage the output under
+//! `$OUT_DIR/ui/` so `src/embedded.rs` can `include_dir!` it into the
+//! daemon binary. Same shape as `prost-build` for protobufs: generated
+//! artifacts never touch the source tree.
+//!
+//! Two non-obvious bits:
+//!
+//! 1. **wasm32 self-build skip**: when `dx` itself recurses into cargo
+//!    to compile the SPA bin for `wasm32-unknown-unknown`, this very
+//!    build.rs runs again with `TARGET=wasm32-…`. We must no-op there
+//!    or get an infinite-recursion deadlock. The `wasm32-` guard at
+//!    the top is the loop-breaker.
+//!
+//! 2. **Recursive cargo via dx**: dx wraps cargo for the wasm32 build,
+//!    which writes to `target/wasm32-unknown-unknown/…` — a different
+//!    arch subdir from the outer cargo's host-target subdir. The
+//!    outer's package-cache lock is released while build.rs runs, so
+//!    the nested cargo does not deadlock.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+fn main() {
+    // Skip when building the SPA bin itself (TARGET=wasm32-…). The
+    // outer daemon build only ever has TARGET=<host or armv7>.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if target.starts_with("wasm32-") {
+        return;
+    }
+
+    // Re-run when SPA sources or the Dioxus.toml/index.html shells
+    // change. Daemon-only edits under src/api.rs etc. don't touch
+    // these paths so build.rs stays skipped and incremental cargo
+    // links stay fast.
+    println!("cargo:rerun-if-changed=src/ui");
+    println!("cargo:rerun-if-changed=assets");
+    println!("cargo:rerun-if-changed=Dioxus.toml");
+    println!("cargo:rerun-if-changed=index.html");
+
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR set by cargo"));
+    let ui_out = out.join("ui");
+
+    // Wipe previous embed copy — dx is happy to overwrite, but stale
+    // .br/.gz companions from a prior build would otherwise sit in
+    // the include_dir tree and bloat the binary.
+    let _ = std::fs::remove_dir_all(&ui_out);
+
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR set by cargo");
+    let pkg = std::env::var("CARGO_PKG_NAME").expect("CARGO_PKG_NAME set by cargo");
+    // Stats has both a collector daemon (`bananas-stats`) and a
+    // web daemon (`bananas-stats-web`); the SPA bin is named after
+    // the web daemon, not the package, so the conventional
+    // `<pkg>-ui` name doesn't match. Hardcode it for this crate.
+    let bin = format!("{pkg}-web-ui");
+
+    // Wipe stale content-hashed assets from prior dx invocations.
+    // dx itself doesn't clean its asset subdirs between runs, so old
+    // `*-<hash>.wasm` siblings accumulate and would inflate the
+    // embedded tree. We only touch the assets/ and wasm/ subdirs —
+    // wiping the whole `public/` tree breaks dx's expectation that
+    // its parent dirs exist.
+    let workspace_target = std::path::Path::new(&manifest_dir)
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("target"))
+        .expect("locate workspace target/");
+    let dx_public = workspace_target
+        .join("dx")
+        .join(&bin)
+        .join("release")
+        .join("web")
+        .join("public");
+    let _ = std::fs::remove_dir_all(dx_public.join("assets"));
+    let _ = std::fs::remove_dir_all(dx_public.join("wasm"));
+
+    // dx-cli wraps cargo internally; it writes outputs under
+    // `<workspace>/target/dx/<pkg>/release/web/public/`. We can't
+    // redirect that with a flag (dx 0.7 only takes `--target` for
+    // the target triple), so just consume the path it picks.
+    let mut cmd = Command::new("dx");
+    cmd.args([
+        "build",
+        "--release",
+        "--package",
+        &pkg,
+        "--bin",
+        &bin,
+        "--platform",
+        "web",
+        "--features",
+        "wasm-ui",
+    ])
+    .current_dir(&manifest_dir);
+
+    // Strip cargo-zigbuild's armv7-targeted env vars before invoking
+    // dx — the nested cargo inside dx is for wasm32, and zigbuild's
+    // CC/LINKER/RUSTFLAGS overrides break that build with "Failed to
+    // write executable" because they rewire its output paths.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("CARGO_TARGET_ARMV7_")
+            || key.starts_with("CARGO_TARGET_AARCH64_")
+            || key == "CARGO_BUILD_TARGET"
+            || key == "CARGO_BUILD_TARGET_DIR"
+            || key == "CARGO_TARGET_DIR"
+            || key == "RUSTFLAGS"
+            || key == "CARGO_ENCODED_RUSTFLAGS"
+            || (key.starts_with("CC_") && key.contains("armv7"))
+            || (key.starts_with("CXX_") && key.contains("armv7"))
+            || (key.starts_with("AR_") && key.contains("armv7"))
+        {
+            cmd.env_remove(key);
+        }
+    }
+
+    let status = cmd.status().expect(
+        "dx build failed to spawn — is dx-cli installed and on PATH? Try `pixi run setup-dx`.",
+    );
+    if !status.success() {
+        panic!("dx build {bin} failed with exit {status}");
+    }
+
+    if !dx_public.exists() {
+        panic!(
+            "dx build succeeded but expected output dir is missing: {}",
+            dx_public.display()
+        );
+    }
+    let public = &dx_public;
+
+    // Copy public/ → $OUT_DIR/ui/ so include_dir!("$OUT_DIR/ui") finds
+    // a self-contained, hash-stable tree.
+    let mut copy_opts = fs_extra::dir::CopyOptions::new();
+    copy_opts.overwrite = true;
+    copy_opts.copy_inside = true;
+    fs_extra::dir::copy(&public, &ui_out, &copy_opts).expect("copying dx output to OUT_DIR/ui");
+
+    // Pre-compress every text/wasm file with brotli (q11) and gzip
+    // (level 9). The serving handler picks the right variant based
+    // on Accept-Encoding — same shape as ServeDir's
+    // .precompressed_br().precompressed_gzip() did when reading from
+    // /usr/share/bananas/cloud-ui/.
+    precompress_tree(&ui_out);
+}
+
+/// Walk `root` and write `.br` + `.gz` companions next to every file
+/// whose extension is in the precompress set. Skips files that are
+/// already compressed (any `.br`/`.gz`) so re-runs are idempotent.
+fn precompress_tree(root: &std::path::Path) {
+    const TARGET_EXT: &[&str] = &["wasm", "js", "css", "svg", "html"];
+    fn walk(p: &std::path::Path) {
+        for entry in std::fs::read_dir(p).expect("read_dir during precompress") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            let ft = entry.file_type().expect("file type");
+            if ft.is_dir() {
+                walk(&path);
+            } else if ft.is_file() {
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                if TARGET_EXT.contains(&ext) {
+                    compress_one(&path);
+                }
+            }
+        }
+    }
+    walk(root);
+}
+
+fn compress_one(path: &std::path::Path) {
+    // brotli -Z (=quality 11) keeps companions; -k preserve, -f overwrite.
+    let br = Command::new("brotli")
+        .args(["-Z", "-k", "-f"])
+        .arg(path)
+        .status();
+    if !br.map(|s| s.success()).unwrap_or(false) {
+        eprintln!(
+            "cargo:warning=brotli failed for {} — embedded build will skip .br variant",
+            path.display()
+        );
+    }
+    let gz = Command::new("gzip")
+        .args(["-9", "-k", "-f"])
+        .arg(path)
+        .status();
+    if !gz.map(|s| s.success()).unwrap_or(false) {
+        eprintln!(
+            "cargo:warning=gzip failed for {} — embedded build will skip .gz variant",
+            path.display()
+        );
+    }
+}

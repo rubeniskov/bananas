@@ -7,10 +7,12 @@
 //! - `config`  — TOML config types (sampling intervals, retention windows,
 //!   device filters, network filters, UI prefs)
 //!
-//! Two binaries depend on this lib: the daemon at `bin/main.rs` (writer)
-//! and `crates/dashboard` (reader, LCD UI). The HTTP admin
-//! (`crates/webadmin`) also reads through these queries to expose
-//! `/api/stats/*`.
+//! Native-only — the wasm SPA bin (`bananas-stats-web-ui`) lives in this
+//! same package as a separate `[[bin]]` and does not consume the lib;
+//! gating the whole module with `cfg(not(target_arch = "wasm32"))`
+//! keeps tokio, rusqlite, and friends out of the wasm32 dep tree.
+
+#![cfg(not(target_arch = "wasm32"))]
 
 pub mod config;
 pub mod live_socket;

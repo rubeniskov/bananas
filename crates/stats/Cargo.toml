@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "BanaNAS sampler daemon — collects /proc + /sys metrics into a WAL-mode SQLite store. Library is also consumed by bananas-webadmin (for /api/stats/*) and bananas-dashboard (for the LCD UI)."
+description = "BanaNAS sampler daemon (collector) + web plugin daemon. The collector writes /proc + /sys metrics into a WAL-mode SQLite store; the web daemon (bananas-stats-web) serves /api/stats/* + the wasm SPA. Library is also consumed by bananas-dashboard (LCD UI)."
 
 [lib]
 path = "src/lib.rs"
@@ -14,20 +14,70 @@ path = "src/lib.rs"
 name = "bananas-stats"
 path = "src/bin/main.rs"
 
+# Web plugin daemon — answers /api/stats/* (forwarded by
+# bananas-router) and /assets/stats/* (forwarded by webadmin's
+# sub-proxy). Reads from the same SQLite DB the collector writes
+# and subscribes to the collector's live socket for WS push.
+[[bin]]
+name = "bananas-stats-web"
+path = "src/web/main.rs"
+
+# Wasm SPA — the Stats tab in the host webadmin shell. Built by
+# `dx build --features wasm-ui --bin bananas-stats-web-ui --platform web`.
+[[bin]]
+name = "bananas-stats-web-ui"
+path = "src/ui/main.rs"
+required-features = ["wasm-ui"]
+
+[features]
+default = []
+wasm-ui = []
+
 [dependencies]
-tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
+
+# Lib + native-bin deps. Excluded from the wasm SPA build so it
+# doesn't drag in tokio/mio (mio has no wasm support) or
+# rusqlite. The wasm SPA bin doesn't `use bananas_stats`, so the
+# lib doesn't build for wasm32 anyway, but Cargo still resolves
+# the dep tree per-target — gating prevents the resolution from
+# trying mio for wasm.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
 toml.workspace = true
 time.workspace = true
-tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
+axum = { workspace = true, features = ["ws", "macros"] }
+tower-http.workspace = true
+bananas-engine.workspace = true
+bananas-server-common.workspace = true
+include_dir = "0.7"
+futures-util.workspace = true
+
+# SPA-only deps.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus.workspace = true
+gloo-net = { workspace = true, features = ["http", "websocket"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+futures = "0.3"
+toml.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+tracing-wasm.workspace = true
+console_error_panic_hook.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix.workspace = true
+
+[build-dependencies]
+fs_extra = "1.3"
 
 [dev-dependencies]
 tempfile = "3"

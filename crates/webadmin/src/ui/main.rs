@@ -8,23 +8,15 @@
 use dioxus::prelude::*;
 
 mod api;
-mod browse;
 mod components;
 mod dashboard_config;
 mod icons;
 mod login;
 mod mfe;
-mod mounts;
-mod nfs_help;
-mod permissions;
 mod settings;
-mod stats;
-mod stats_config;
-mod storage;
 mod theme;
 mod tooltip;
 mod updates;
-mod users;
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
@@ -390,12 +382,10 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
                     // crates ship.
                     let mut listed = extensions.read().clone();
                     listed.sort_by(|a, b| a.order.cmp(&b.order).then(a.id.cmp(&b.id)));
-                    let host_pages: &[(&str, &str, &str, u32)] = &[
-                        ("stats", "Stats", "chart-bar", 10),
-                        // exports + storage + users moved out to
-                        // plugins — their NavTabs come from the
-                        // manifest loop.
-                    ];
+                    // All feature tabs (stats, exports, storage,
+                    // users, cloud, …) come from the manifest loop
+                    // post-extraction; no host fallback list.
+                    let host_pages: &[(&str, &str, &str, u32)] = &[];
                     let mut nav_items: Vec<(String, String, String, u32)> = host_pages
                         .iter()
                         .filter(|(id, _, _, _)| {
@@ -641,15 +631,12 @@ fn SignedInShell(props: SignedInShellProps) -> Element {
             match &*page.read() {
                 Page::Settings => rsx! { settings::SettingsPage {} },
                 Page::Updates => rsx! { updates::UpdatesPage {} },
-                Page::Plugin(id) => match id.as_str() {
-                    "stats" => rsx! { stats::StatsPage {} },
-                    // Empty branch for MFE plugins (cloud, exports,
-                    // storage, users today). The mount frame below
-                    // renders unconditionally and toggles via CSS;
-                    // keeping the runtime mount alive across tab
-                    // switches preserves plugin state on flick-back.
-                    _ => rsx! {},
-                },
+                // Every plugin tab is MFE-mounted post-extraction;
+                // no in-process host page rendering. The mount
+                // frame below renders unconditionally and toggles
+                // via CSS, keeping the runtime mount alive across
+                // tab switches so plugin state survives flick-back.
+                Page::Plugin(_) => rsx! {},
             }
 
             // One MFE mount frame per installed plugin manifest.

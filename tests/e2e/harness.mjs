@@ -74,6 +74,14 @@ api_prefix = "/api/users"
 order = 40
 icon = "users"
 `);
+    await fs.writeFile(path.join(ext, 'stats.toml'),
+      `id = "stats"
+label = "Stats"
+socket = "${this.tmp}/stats-web.sock"
+api_prefix = "/api/stats"
+order = 10
+icon = "chart-bar"
+`);
 
     // Pre-create the session.key (32 random bytes) — the daemons
     // would generate one on demand, but having it before they boot
@@ -89,7 +97,7 @@ icon = "users"
   }
 
   async build() {
-    console.log('[harness] cargo build -p bananas-{router,webadmin,cloud,exports,storage,users}');
+    console.log('[harness] cargo build -p bananas-{router,webadmin,cloud,exports,storage,users,stats(web)}');
     await runToCompletion('cargo', [
       'build',
       '-p', 'bananas-router',
@@ -98,6 +106,8 @@ icon = "users"
       '-p', 'bananas-exports',
       '-p', 'bananas-storage',
       '-p', 'bananas-users',
+      '-p', 'bananas-stats',
+      '--bin', 'bananas-stats-web',
     ], { cwd: REPO });
   }
 
@@ -130,6 +140,7 @@ icon = "users"
       BANANAS_EXPORTS_SOCKET: path.join(this.tmp, 'exports.sock'),
       BANANAS_STORAGE_SOCKET: path.join(this.tmp, 'storage.sock'),
       BANANAS_USERS_SOCKET: path.join(this.tmp, 'users.sock'),
+      BANANAS_STATS_WEB_SOCKET: path.join(this.tmp, 'stats-web.sock'),
       BANANAS_SESSION_KEY: path.join(this.tmp, 'session.key'),
       BANANAS_LISTEN_ADDR: TCP_ADDR,
       BANANAS_ENGINE_SOCKET: path.join(this.tmp, 'engine.sock'),
@@ -146,6 +157,7 @@ icon = "users"
     this.spawnDaemon('bananas-exports', env);
     this.spawnDaemon('bananas-storage', env);
     this.spawnDaemon('bananas-users', env);
+    this.spawnDaemon('bananas-stats-web', env);
 
     // Wait for the public TCP listener — a /healthz on the public
     // app sub-proxies through router→webadmin sock→handler, which

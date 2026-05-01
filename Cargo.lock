@@ -637,6 +637,18 @@ name = "bananas-stats"
 version = "1.4.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "bananas-engine",
+ "bananas-server-common",
+ "console_error_panic_hook",
+ "dioxus",
+ "fs_extra",
+ "futures",
+ "futures-util",
+ "gloo-net",
+ "gloo-timers",
+ "include_dir",
+ "js-sys",
  "nix 0.31.2",
  "pretty_assertions",
  "rusqlite",
@@ -647,8 +659,13 @@ dependencies = [
  "time",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
+ "tracing-wasm",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

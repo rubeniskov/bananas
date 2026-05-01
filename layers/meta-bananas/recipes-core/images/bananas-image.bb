@@ -183,6 +183,7 @@ IMAGE_INSTALL += " \
     bananas-storage \
     bananas-users \
     bananas-stats \
+    bananas-stats-web \
     bananas-config \
     bananas-feed-config \
 "
