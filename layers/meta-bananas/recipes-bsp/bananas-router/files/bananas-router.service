@@ -3,9 +3,10 @@ Description=BanaNAS internal API gateway (Unix socket)
 # Doesn't need any specific extension to be up — startup logs missing
 # manifests but keeps serving (with 404s) so a bad manifest never
 # bricks the API surface. The public TCP listener belongs to
-# bananas-webadmin; this daemon only listens on /run/bananas/router.sock.
-After=network-online.target
-Wants=network-online.target
+# bananas-webadmin; this daemon only listens on /run/bananas/router.sock,
+# so we don't wait for network-online.target — that adds 5–10 s of boot
+# for nothing (same reasoning as bananas-engine.service).
+After=local-fs.target
 RuntimeDirectory=bananas
 RuntimeDirectoryMode=0755
 

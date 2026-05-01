@@ -1,10 +1,11 @@
 [Unit]
 Description=BanaNAS web admin (public TCP face + internal API daemon)
-# Needs network up for the TCP listener, and bananas-engine for the
-# privileged-op socket. Plugin daemons (cloud, future) are reached
-# via bananas-router's Unix socket — no ordering dep here, since a
-# missing plugin just produces 404s on the asset proxy.
-After=network-online.target local-fs.target bananas-engine.service
+# Needs network up for the TCP listener, bananas-engine for the
+# privileged-op socket, and bananas-router so /api/* sub-proxy calls
+# don't 502 during the first few hundred ms of boot. Plugin daemons
+# (cloud, exports, …) are reached *through* router; a slow-starting
+# plugin just produces 404s on the asset proxy until its socket is up.
+After=network-online.target local-fs.target bananas-engine.service bananas-router.service
 Wants=network-online.target
 Requires=bananas-engine.service
 
