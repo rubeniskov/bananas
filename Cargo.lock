@@ -573,6 +573,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bananas-devtool"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "rand 0.9.4",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha-crypt",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bananas-engine"
 version = "1.4.0"
 dependencies = [
@@ -745,6 +760,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "axum",
+ "bananas-devtool",
  "bananas-engine",
  "bananas-server-common",
  "bananas-stats",
@@ -764,6 +780,7 @@ dependencies = [
  "js-sys",
  "libc",
  "rand 0.9.4",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

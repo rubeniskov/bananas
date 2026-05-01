@@ -79,3 +79,12 @@ fs_extra = "1.3"
 
 [dev-dependencies]
 tempfile = "3"
+# e2e harness shared across the workspace — see crates/devtool. The
+# test crate is gated on cfg(not(target_arch = "wasm32")) by virtue
+# of dev-dependencies only being compiled for the host target, so
+# this doesn't pull host-only crates into the wasm-ui build.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+bananas-devtool = { path = "../devtool" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.12", default-features = false, features = ["cookies", "rustls-tls"] }
+anyhow.workspace = true
