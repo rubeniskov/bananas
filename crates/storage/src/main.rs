@@ -40,6 +40,9 @@ pub struct AppState {
     pub helper_socket: Arc<PathBuf>,
     pub session_key: Arc<SessionKey>,
     pub storage_cache: storage::StorageCache,
+    /// /etc/fstab in production; redirected to a tmpdir fixture
+    /// by the e2e harness via `BANANAS_FSTAB_PATH`.
+    pub fstab_path: Arc<PathBuf>,
 }
 
 #[tokio::main]
@@ -65,10 +68,18 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine.sock".into());
 
+    // /etc/fstab path. Configurable so the test harness can point
+    // storage at a tmpdir fstab fixture without touching the real
+    // system file. Defaults to /etc/fstab in production.
+    let fstab_path: PathBuf = std::env::var_os("BANANAS_FSTAB_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/etc/fstab".into());
+
     let state = AppState {
         helper_socket: Arc::new(helper_socket),
         session_key: Arc::new(session_key),
         storage_cache: storage::StorageCache::new(),
+        fstab_path: Arc::new(fstab_path),
     };
 
     let api = Router::new()
@@ -166,8 +177,8 @@ impl From<&fstab::Opts> for FstabOpts {
     }
 }
 
-async fn get_fstab() -> impl IntoResponse {
-    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+async fn get_fstab(State(state): State<AppState>) -> impl IntoResponse {
+    let raw = std::fs::read_to_string(state.fstab_path.as_ref().as_path()).unwrap_or_default();
     let parsed_rows = fstab::rows(&raw);
     let preview = fstab::serialize(&parsed_rows);
     let rows: Vec<FstabRow> = parsed_rows
@@ -266,14 +277,14 @@ async fn post_fstab(State(state): State<AppState>, Json(req): Json<AddFstab>) ->
         dump: req.dump,
         pass: req.pass,
     };
-    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let raw = std::fs::read_to_string(state.fstab_path.as_ref().as_path()).unwrap_or_default();
     let mut rows = fstab::rows(&raw);
     rows.push(new_row);
     apply_fstab(&state, &rows).await
 }
 
 async fn delete_fstab(State(state): State<AppState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let raw = std::fs::read_to_string(state.fstab_path.as_ref().as_path()).unwrap_or_default();
     let mut rows = fstab::rows(&raw);
     if idx >= rows.len() {
         return api_err(StatusCode::NOT_FOUND, format!("row {idx} not found"));
@@ -305,7 +316,7 @@ async fn put_fstab(
     if req.fstype.trim().is_empty() {
         return api_err(StatusCode::BAD_REQUEST, "filesystem type is required");
     }
-    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let raw = std::fs::read_to_string(state.fstab_path.as_ref().as_path()).unwrap_or_default();
     let mut rows = fstab::rows(&raw);
     if idx >= rows.len() {
         return api_err(StatusCode::NOT_FOUND, format!("row {idx} not found"));
@@ -353,7 +364,7 @@ async fn put_fstab(
 }
 
 async fn apply_fstab(state: &AppState, rows: &[fstab::Row]) -> axum::response::Response {
-    let raw = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let raw = std::fs::read_to_string(state.fstab_path.as_ref().as_path()).unwrap_or_default();
     let mut header = String::new();
     for line in raw.lines() {
         let trimmed = line.trim();

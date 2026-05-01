@@ -203,23 +203,25 @@ fn ExportRowView(props: ExportRowViewProps) -> Element {
             td { code { "{r.host}" } }
             td { OptionBadges { opts: r.parsed.clone() } }
             td { class: "row-actions",
-                button {
-                    class: "btn-icon edit",
-                    "data-tip": "Edit this export",
-                    onclick: move |_| props.on_edit.call(()),
-                    Icon { name: "pencil" }
-                }
-                button {
-                    class: "btn-icon perms",
-                    "data-tip": "Edit owner / group / mode for this directory.",
-                    onclick: move |_| props.on_perms.call(()),
-                    Icon { name: "lock" }
-                }
-                button {
-                    class: "btn-icon delete",
-                    "data-tip": "Delete this export",
-                    onclick: move |_| props.on_delete.call(idx),
-                    Icon { name: "trash-2" }
+                div { class: "actions",
+                    button {
+                        class: "btn-icon edit",
+                        "data-tip": "Edit this export",
+                        onclick: move |_| props.on_edit.call(()),
+                        Icon { name: "pencil" }
+                    }
+                    button {
+                        class: "btn-icon perms",
+                        "data-tip": "Edit owner / group / mode for this directory.",
+                        onclick: move |_| props.on_perms.call(()),
+                        Icon { name: "lock" }
+                    }
+                    button {
+                        class: "btn-icon delete",
+                        "data-tip": "Delete this export",
+                        onclick: move |_| props.on_delete.call(idx),
+                        Icon { name: "trash-2" }
+                    }
                 }
             }
         }

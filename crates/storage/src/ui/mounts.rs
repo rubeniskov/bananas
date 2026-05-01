@@ -221,12 +221,14 @@ fn FstabRowView(props: FstabRowViewProps) -> Element {
     rsx! {
         tr { class: "{row_class}",
             td { class: "source-cell",
-                code { "{r.source}" }
-                if r.protected {
-                    span { class: "badge sys",
-                        "data-tip": "System mount managed by the OS — the server refuses to edit or delete this row.",
-                        Icon { name: "lock" }
-                        " system"
+                div { class: "source",
+                    code { "{r.source}" }
+                    if r.protected {
+                        span { class: "badge sys",
+                            "data-tip": "System mount managed by the OS — the server refuses to edit or delete this row.",
+                            Icon { name: "lock" }
+                            " system"
+                        }
                     }
                 }
             }
@@ -236,34 +238,36 @@ fn FstabRowView(props: FstabRowViewProps) -> Element {
             td { code { "{r.dump}" } }
             td { code { "{r.pass}" } }
             td { class: "row-actions",
-                // Protected (system) mounts get no actions — the server
-                // refuses edit/delete and we don't expose chmod on /,
-                // /proc, /sys, … through the UI either. Show a muted
-                // "—" so the cell still has visible content and the
-                // table layout stays consistent across rows.
-                if r.protected {
-                    span { class: "row-actions-empty",
-                        "data-tip": "Protected system mount — managed by the OS. The UI cannot edit, delete, or chmod this entry.",
-                        "—"
-                    }
-                } else {
-                    button {
-                        class: "btn-icon edit",
-                        "data-tip": "Edit this fstab entry",
-                        onclick: move |_| props.on_edit.call(()),
-                        Icon { name: "pencil" }
-                    }
-                    button {
-                        class: "btn-icon perms",
-                        "data-tip": "Edit owner / group / mode for this mountpoint.",
-                        onclick: move |_| props.on_perms.call(()),
-                        Icon { name: "lock" }
-                    }
-                    button {
-                        class: "btn-icon delete",
-                        "data-tip": "Delete this fstab entry",
-                        onclick: move |_| props.on_delete.call(idx),
-                        Icon { name: "trash-2" }
+                div { class: "actions",
+                    // Protected (system) mounts get no actions — the server
+                    // refuses edit/delete and we don't expose chmod on /,
+                    // /proc, /sys, … through the UI either. Show a muted
+                    // "—" so the cell still has visible content and the
+                    // table layout stays consistent across rows.
+                    if r.protected {
+                        span { class: "row-actions-empty",
+                            "data-tip": "Protected system mount — managed by the OS. The UI cannot edit, delete, or chmod this entry.",
+                            "—"
+                        }
+                    } else {
+                        button {
+                            class: "btn-icon edit",
+                            "data-tip": "Edit this fstab entry",
+                            onclick: move |_| props.on_edit.call(()),
+                            Icon { name: "pencil" }
+                        }
+                        button {
+                            class: "btn-icon perms",
+                            "data-tip": "Edit owner / group / mode for this mountpoint.",
+                            onclick: move |_| props.on_perms.call(()),
+                            Icon { name: "lock" }
+                        }
+                        button {
+                            class: "btn-icon delete",
+                            "data-tip": "Delete this fstab entry",
+                            onclick: move |_| props.on_delete.call(idx),
+                            Icon { name: "trash-2" }
+                        }
                     }
                 }
             }

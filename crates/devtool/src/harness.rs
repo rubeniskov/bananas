@@ -105,6 +105,8 @@ impl Harness {
         write_session_key(tmp.path())?;
         write_shadow_with_test_root(tmp.path())?;
         std::fs::write(tmp.path().join("exports"), "").context("write empty exports")?;
+        std::fs::write(tmp.path().join("fstab"), default_fstab_fixture())
+            .context("write default fstab fixture")?;
 
         let env_base = base_env(tmp.path(), port);
 
@@ -273,6 +275,7 @@ fn base_env(tmp: &Path, port: u16) -> Vec<(String, std::ffi::OsString)> {
         ),
         ("BANANAS_EXPORTS_PATH".into(), join("exports")),
         ("BANANAS_SHADOW_PATH".into(), join("shadow")),
+        ("BANANAS_FSTAB_PATH".into(), join("fstab")),
         ("BANANAS_STATS_DB".into(), join("stats.db")),
         ("BANANAS_STATS_LIVE_SOCKET".into(), join("stats-live.sock")),
         ("BANANAS_OPERATIONS_JOURNAL".into(), join("operations.json")),
@@ -312,6 +315,31 @@ icon = "{icon}"
         std::fs::write(dir.join(format!("{id}.toml")), toml)?;
     }
     Ok(())
+}
+
+/// Default fstab fixture written into every Harness's tmpdir.
+/// Mirrors a real BPI's /etc/fstab — the protected list expands
+/// to include every kernel virtual fs + cgroup mount the BPI
+/// shows when the operator toggles "Show protected mounts" so
+/// table-layout regressions surface on a representative row
+/// count, not just the 3 entries a minimal fixture would.
+fn default_fstab_fixture() -> &'static str {
+    "# Auto-written by bananas-devtool::Harness for tests.\n\
+     proc            /proc           proc       defaults                              0 0\n\
+     sysfs           /sys            sysfs      defaults                              0 0\n\
+     devtmpfs        /dev            devtmpfs   defaults                              0 0\n\
+     devpts          /dev/pts        devpts     defaults,gid=5,mode=620               0 0\n\
+     tmpfs           /dev/shm        tmpfs      defaults                              0 0\n\
+     tmpfs           /run            tmpfs      defaults,mode=755                     0 0\n\
+     tmpfs           /tmp            tmpfs      defaults                              0 0\n\
+     tmpfs           /var/volatile   tmpfs      defaults                              0 0\n\
+     cgroup2         /sys/fs/cgroup  cgroup2    defaults                              0 0\n\
+     debugfs         /sys/kernel/debug debugfs  defaults                              0 0\n\
+     LABEL=ROOT      /               ext4       defaults,noatime                      0 1\n\
+     LABEL=BOOT      /boot           vfat       defaults,noatime                      0 2\n\
+     LABEL=media     /srv/media      ext4       defaults,noatime,nofail               0 2\n\
+     LABEL=services  /srv/services   ext4       defaults,noatime,nofail               0 2\n\
+     UUID=11111111-1111-1111-1111-111111111111  /mnt/extra  ext4  defaults,noatime,nofail  0 2\n"
 }
 
 /// Plugins whose binary name has a `-web` suffix listen on a socket

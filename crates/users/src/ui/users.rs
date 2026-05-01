@@ -289,26 +289,28 @@ fn UserRow(props: UserRowProps) -> Element {
                 }
             }
             td { class: "row-actions",
-                if !u.system && !admin_locked {
-                    button {
-                        class: "{admin_btn_class}",
-                        "data-tip": "{admin_btn_tip}",
-                        onclick: move |_| props.on_toggle_admin.call(!is_admin),
-                        Icon { name: admin_btn_icon }
+                div { class: "actions",
+                    if !u.system && !admin_locked {
+                        button {
+                            class: "{admin_btn_class}",
+                            "data-tip": "{admin_btn_tip}",
+                            onclick: move |_| props.on_toggle_admin.call(!is_admin),
+                            Icon { name: admin_btn_icon }
+                        }
                     }
-                }
-                button {
-                    class: "btn-icon edit",
-                    "data-tip": "Change this user's password",
-                    onclick: move |_| props.on_password.call(()),
-                    Icon { name: "key-round" }
-                }
-                if !u.system {
                     button {
-                        class: "btn-icon delete",
-                        "data-tip": "Delete user (and home dir)",
-                        onclick: move |_| props.on_delete.call(()),
-                        Icon { name: "trash-2" }
+                        class: "btn-icon edit",
+                        "data-tip": "Change this user's password",
+                        onclick: move |_| props.on_password.call(()),
+                        Icon { name: "key-round" }
+                    }
+                    if !u.system {
+                        button {
+                            class: "btn-icon delete",
+                            "data-tip": "Delete user (and home dir)",
+                            onclick: move |_| props.on_delete.call(()),
+                            Icon { name: "trash-2" }
+                        }
                     }
                 }
             }

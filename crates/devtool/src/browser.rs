@@ -21,6 +21,7 @@ use anyhow::{Context, Result, anyhow};
 use chromiumoxide::{
     Browser as ChromiumBrowser, browser::BrowserConfig,
     cdp::browser_protocol::network::CookieParam, page::Page as ChromiumPage,
+    page::ScreenshotParams,
 };
 use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
@@ -174,6 +175,23 @@ impl Page {
     /// (`() => …`). Mirrors playwright's `page.evaluate`.
     pub async fn evaluate<T: DeserializeOwned>(&self, js: &str) -> Result<T> {
         Ok(self.inner.evaluate_function(js).await?.into_value()?)
+    }
+
+    /// Save a full-page PNG screenshot to `path`. Useful from
+    /// regression tests that want a visual artifact alongside the
+    /// failure message — e.g. layout bugs that pass JS-level
+    /// assertions but visibly break the rendered table. The
+    /// `screenshots/` directory at the repo root is the
+    /// conventional dump target; tests should `mkdir_p` it
+    /// themselves so the path stays self-contained.
+    pub async fn save_screenshot_png(&self, path: &std::path::Path) -> Result<()> {
+        let params = ScreenshotParams::builder()
+            .full_page(true)
+            .omit_background(false)
+            .build();
+        let bytes = self.inner.screenshot(params).await?;
+        std::fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+        Ok(())
     }
 
     /// Poll `predicate_js` (a JS arrow function returning a truthy

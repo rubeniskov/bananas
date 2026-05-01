@@ -653,11 +653,21 @@ nav.app-nav label.button-like:hover {
   font-size: 13px;
   padding: 5px 12px;
 }
+/* Right-aligned cluster of icon buttons in a table row. The flex
+ * layout MUST live on a child div, not the TD itself — `display:
+ * flex` on a `<td>` opts the cell out of the table-row layout in
+ * Chrome, which manifests as alternating row heights when the
+ * table contains many rows. */
 td.row-actions {
-  display: flex;
+  text-align: right;
+  white-space: nowrap;
+}
+td.row-actions > .actions {
+  display: inline-flex;
   gap: 4px;
   align-items: center;
   justify-content: flex-end;
+  vertical-align: middle;
 }
 td.row-actions button.ghost {
   font-size: 12px;
@@ -909,8 +919,11 @@ pre.run-log {
   vertical-align: middle;
 }
 /* fstab "Source" cell: source code on the left, system badge pinned to
-   the right edge so the source text column stays aligned across rows. */
-td.source-cell {
+ * the right edge so the source text column stays aligned across rows.
+ * Same caveat as `td.row-actions`: the flex layout MUST sit on a
+ * child div, not the TD — otherwise the cell stops participating in
+ * the table grid and rows alternate heights. */
+td.source-cell > .source {
   display: flex;
   align-items: center;
   justify-content: space-between;

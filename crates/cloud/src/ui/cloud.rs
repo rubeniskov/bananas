@@ -463,17 +463,19 @@ fn AccountRow(props: AccountRowProps) -> Element {
             }
             td { span { class: "{token_class}", "{token_text}" } }
             td { class: "row-actions",
-                button {
-                    class: "btn-icon edit",
-                    "data-tip": "Edit this account (rotate token, change provider).",
-                    onclick: move |_| props.on_edit.call(()),
-                    Icon { name: "pencil" }
-                }
-                button {
-                    class: "btn-icon delete",
-                    "data-tip": "Remove this account (and any sync entries pointing at it).",
-                    onclick: move |_| props.on_delete.call(()),
-                    Icon { name: "trash-2" }
+                div { class: "actions",
+                    button {
+                        class: "btn-icon edit",
+                        "data-tip": "Edit this account (rotate token, change provider).",
+                        onclick: move |_| props.on_edit.call(()),
+                        Icon { name: "pencil" }
+                    }
+                    button {
+                        class: "btn-icon delete",
+                        "data-tip": "Remove this account (and any sync entries pointing at it).",
+                        onclick: move |_| props.on_delete.call(()),
+                        Icon { name: "trash-2" }
+                    }
                 }
             }
         }
@@ -506,23 +508,25 @@ fn SyncRow(props: SyncRowProps) -> Element {
             td { span { class: "muted", "{direction_arrow} {s.direction}" } }
             td { code { "{s.schedule}" } }
             td { class: "row-actions",
-                button {
-                    class: "btn-icon ok",
-                    "data-tip": "Run this sync now (manual trigger).",
-                    onclick: move |_| props.on_run.call(()),
-                    Icon { name: "rotate-cw" }
-                }
-                button {
-                    class: "btn-icon edit",
-                    "data-tip": "Edit this sync entry",
-                    onclick: move |_| props.on_edit.call(()),
-                    Icon { name: "pencil" }
-                }
-                button {
-                    class: "btn-icon delete",
-                    "data-tip": "Remove this sync entry",
-                    onclick: move |_| props.on_delete.call(()),
-                    Icon { name: "trash-2" }
+                div { class: "actions",
+                    button {
+                        class: "btn-icon ok",
+                        "data-tip": "Run this sync now (manual trigger).",
+                        onclick: move |_| props.on_run.call(()),
+                        Icon { name: "rotate-cw" }
+                    }
+                    button {
+                        class: "btn-icon edit",
+                        "data-tip": "Edit this sync entry",
+                        onclick: move |_| props.on_edit.call(()),
+                        Icon { name: "pencil" }
+                    }
+                    button {
+                        class: "btn-icon delete",
+                        "data-tip": "Remove this sync entry",
+                        onclick: move |_| props.on_delete.call(()),
+                        Icon { name: "trash-2" }
+                    }
                 }
             }
         }
