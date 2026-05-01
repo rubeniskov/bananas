@@ -133,4 +133,5 @@ Recommended mount options to use when adding entries via the UI: `defaults,noati
 ## Conventions
 
 - Yocto release line is `scarthgap`. If you bump it, update every `refspec` in `kas.yml` together and re-test the bbappends — version-pinned appends like `elfutils_0.191.bbappend` and `dtc_1.7.0.bbappend` will silently stop applying when the upstream recipe version changes.
+- **Watch for wrynose (Yocto 6.0 LTS) branches to ship.** Verified 2026-05-02: poky/meta-openembedded/meta-sunxi/meta-arm only have branches up to walnascar; wrynose docs exist but the branches don't yet. When `git ls-remote https://git.yoctoproject.org/poky refs/heads/wrynose` returns a SHA, revisit the bake stack: bump every `kas.yml` refspec to `wrynose`, drop the `meta-lts-mixins` repo entry (rust 1.94+ ships natively), and audit the version-pinned bbappends. Until then we stay on scarthgap with `meta-lts-mixins/scarthgap/rust` pinning rust 1.92.
 - `pixi.lock` is marked `merge=binary linguist-generated=true -diff` in `.gitattributes`; regenerate it via `pixi` rather than hand-editing or attempting a 3-way merge.
