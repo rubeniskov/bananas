@@ -89,9 +89,23 @@ fn main() {
         }
     }
 
-    let status = cmd.status().expect(
-        "dx build failed to spawn — is dx-cli installed and on PATH? Try `pixi run setup-dx`.",
-    );
+    // If dx isn't on PATH, this is almost always a cross-rs
+    // container that pulled this crate as a transitive lib-only
+    // dep — the wasm SPA tree is dead code in that compilation
+    // unit. Emit a cargo:warning and skip rather than panicking;
+    // the host-target invocation always has dx and produces the
+    // canonical SPA tree for the daemon binary.
+    let status = match cmd.status() {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "cargo:warning=dx not on PATH; skipping SPA build (lib-only consumer assumed)"
+            );
+            std::fs::create_dir_all(out.join("ui")).ok();
+            return;
+        }
+        Err(e) => panic!("dx build failed to spawn: {e}"),
+    };
     if !status.success() {
         panic!("dx build {bin} failed with exit {status}");
     }
