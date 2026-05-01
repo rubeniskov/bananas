@@ -861,7 +861,7 @@ fn ensure_password_safe(password: &str) -> Result<()> {
     Ok(())
 }
 
-async fn list_users(include_hashes: bool) -> Result<String> {
+pub(crate) async fn list_users(include_hashes: bool) -> Result<String> {
     let passwd = fs::read_to_string("/etc/passwd")
         .await
         .context("reading /etc/passwd")?;
@@ -955,7 +955,7 @@ async fn list_users(include_hashes: bool) -> Result<String> {
     Ok(serde_json::to_string(&json!({ "users": users }))?)
 }
 
-async fn create_user(
+pub(crate) async fn create_user(
     username: &str,
     password: &str,
     full_name: Option<&str>,

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use bananas_proto::engine::v1::{
     AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
+    CreateUserRequest, CreateUserResponse, ExportUsersRequest, ExportUsersResponse,
     InstalledPackage as ProtoInstalledPackage, ListTimezonesRequest, ListTimezonesResponse,
     OpkgListInstalledRequest, OpkgListInstalledResponse, OpkgListUpgradableRequest,
     OpkgListUpgradableResponse, OpkgUpdateRequest, OpkgUpdateResponse, OpkgUpgradeRequest,
@@ -24,9 +25,9 @@ use tonic::{Request, Response, Status};
 
 use crate::Cx;
 use crate::{
-    authenticate, change_own_password, list_timezones_vec, opkg, read_service_config,
-    reboot_system, set_timezone, verify_shadow_password, write_exports, write_fstab,
-    write_service_config,
+    authenticate, change_own_password, create_user, list_timezones_vec, list_users, opkg,
+    read_service_config, reboot_system, set_timezone, verify_shadow_password, write_exports,
+    write_fstab, write_service_config,
 };
 
 /// Engine gRPC service. Holds the same `Cx` (on-disk paths) the
@@ -314,6 +315,56 @@ impl EngineService for EngineGrpc {
                 tracing::warn!(error = %msg, "write_fstab failed (gRPC)");
                 if msg.contains("line ") || msg.starts_with("invalid") {
                     Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn export_users(
+        &self,
+        _req: Request<ExportUsersRequest>,
+    ) -> Result<Response<ExportUsersResponse>, Status> {
+        match list_users(true).await {
+            Ok(users_json) => Ok(Response::new(ExportUsersResponse { users_json })),
+            Err(e) => {
+                tracing::warn!(error = %e, "export_users failed (gRPC)");
+                Err(Status::internal(format!("export_users: {e}")))
+            }
+        }
+    }
+
+    async fn create_user(
+        &self,
+        req: Request<CreateUserRequest>,
+    ) -> Result<Response<CreateUserResponse>, Status> {
+        let body = req.into_inner();
+        let full_name = if body.full_name.is_empty() {
+            None
+        } else {
+            Some(body.full_name.as_str())
+        };
+        match create_user(
+            &body.username,
+            &body.password,
+            full_name,
+            body.admin,
+            body.password_is_hash,
+        )
+        .await
+        {
+            Ok(()) => Ok(Response::new(CreateUserResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "create_user failed (gRPC)");
+                // Caller-visible bad-input → InvalidArgument; an
+                // already-existing user is FailedPrecondition so a
+                // bundle restore can distinguish skipped from broken.
+                if msg.starts_with("invalid") || msg.contains("password") {
+                    Err(Status::invalid_argument(msg))
+                } else if msg.contains("already exists") {
+                    Err(Status::already_exists(msg))
                 } else {
                     Err(Status::internal(msg))
                 }

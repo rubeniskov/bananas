@@ -50,7 +50,6 @@ sha2.workspace = true
 base64.workspace = true
 rand.workspace = true
 libc.workspace = true
-bananas-engine.workspace = true
 bananas-server-common.workspace = true
 futures-util.workspace = true
 async-stream.workspace = true

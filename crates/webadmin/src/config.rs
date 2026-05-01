@@ -14,7 +14,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{ExportUsersRequest, engine_service_client::EngineServiceClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -178,7 +178,6 @@ pub async fn import_config(State(state): State<AppState>, body: String) -> Respo
     // progress UI across browser refreshes / server restarts.
     match crate::operations::config_import::start(
         state.operations.clone(),
-        (*state.helper_socket).clone(),
         (*state.helper_grpc_socket).clone(),
         body,
     )
@@ -226,17 +225,19 @@ async fn build_bundle(state: &AppState) -> Result<ConfigBundle, String> {
         })
         .collect();
 
-    // Users via the helper — ExportUsers includes shadow hashes so the
+    // Users via the engine — ExportUsers includes shadow hashes so the
     // backup actually round-trips a working account. /api/users continues
     // to use ListUsers, which omits hashes.
-    let users = match bananas_engine::call(&state.helper_socket, &Command::ExportUsers).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => parse_users_payload(&output),
-        Ok(HelperResponse { error, .. }) => {
-            return Err(error.unwrap_or_else(|| "helper rejected export-users".into()));
-        }
-        Err(e) => return Err(format!("helper unreachable: {e}")),
+    let users = {
+        let channel = crate::engine_grpc::channel(&state.helper_grpc_socket)
+            .await
+            .map_err(|e| format!("helper unreachable: {e}"))?;
+        let mut client = EngineServiceClient::new(channel);
+        let resp = client
+            .export_users(ExportUsersRequest {})
+            .await
+            .map_err(|status| format!("export_users: {status}"))?;
+        parse_users_payload(&resp.into_inner().users_json)
     };
 
     // Service config files — read via the helper so root-owned files

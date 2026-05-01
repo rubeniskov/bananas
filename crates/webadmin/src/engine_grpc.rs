@@ -2,10 +2,10 @@
 //! socket (`BANANAS_ENGINE_GRPC_SOCKET`, default
 //! `/run/bananas/engine-grpc.sock`).
 //!
-//! Engine still serves the legacy newline-JSON socket too — the
-//! gRPC migration is per-RPC. PR-4 covers `Authenticate` only;
-//! every other call in webadmin keeps using
-//! `bananas_engine::call(&Command::…)` until its RPC migrates.
+//! Webadmin only speaks gRPC to the engine; the legacy newline-JSON
+//! `BANANAS_ENGINE_SOCKET` is still hosted by the engine binary so
+//! out-of-tree consumers can keep using it, but no callsite in this
+//! crate ferries through it.
 
 use std::path::{Path, PathBuf};
 

@@ -111,6 +111,25 @@ service EngineService {
   // newly-added entries activate without a reboot. Maps 1:1 to
   // `Command::WriteFstab`.
   rpc WriteFstab(WriteFstabRequest) returns (WriteFstabResponse);
+
+  // Dump every system user as a JSON document, including the
+  // `/etc/shadow` hash (caller proves elevated trust by being
+  // able to reach the engine socket at all). Used by the
+  // config-bundle export to round-trip user accounts. Wire shape
+  // is the legacy JSON-encoded string so the consumer's existing
+  // serde parsing continues to work — a future revision can
+  // promote the document to a typed `repeated User` once the
+  // users page is rewritten on top of gRPC.
+  // Maps 1:1 to `Command::ExportUsers`.
+  rpc ExportUsers(ExportUsersRequest) returns (ExportUsersResponse);
+
+  // Create a new system user. `password_is_hash=true` accepts
+  // a pre-computed `$6$...` shadow hash (used by the config
+  // bundle restore path so plaintext passwords never leave the
+  // backup file); false runs the value through `chpasswd` to
+  // hash it. `admin=true` adds the user to `bananas-admin`.
+  // Maps 1:1 to `Command::CreateUser`.
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
 }
 
 message AuthenticateRequest {
@@ -273,3 +292,29 @@ message WriteFstabResponse {
   // Captured `mount -a` stdout/stderr.
   string output = 1;
 }
+
+message ExportUsersRequest {}
+
+message ExportUsersResponse {
+  // JSON-encoded `{"users": [...]}` document — same shape the
+  // legacy newline-JSON `Command::ExportUsers` returned in its
+  // `output` field. Stays opaque on the wire until the users
+  // page itself migrates to gRPC.
+  string users_json = 1;
+}
+
+message CreateUserRequest {
+  string username = 1;
+  // Either a plaintext password or a `$6$...` shadow hash,
+  // depending on `password_is_hash`.
+  string password = 2;
+  // GECOS / "real name" field. Empty string maps to no value
+  // (protobuf can't distinguish "" from "absent" without a
+  // companion bool, and an empty GECOS is the same as no GECOS
+  // anyway).
+  string full_name = 3;
+  bool admin = 4;
+  bool password_is_hash = 5;
+}
+
+message CreateUserResponse {}

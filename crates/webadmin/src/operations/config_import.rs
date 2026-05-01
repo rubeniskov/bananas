@@ -18,9 +18,8 @@
 use std::path::PathBuf;
 
 use axum::http::StatusCode;
-use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
 use bananas_proto::engine::v1::{
-    WriteExportsRequest, WriteFstabRequest, WriteServiceConfigRequest,
+    CreateUserRequest, WriteExportsRequest, WriteFstabRequest, WriteServiceConfigRequest,
     engine_service_client::EngineServiceClient,
 };
 use serde_json::json;
@@ -37,7 +36,6 @@ use crate::{exports, fstab};
 /// the SSE log.
 pub async fn start(
     manager: OperationManager,
-    helper_socket: PathBuf,
     helper_grpc_socket: PathBuf,
     body: String,
 ) -> Result<u64, (StatusCode, String)> {
@@ -66,7 +64,7 @@ pub async fn start(
 
     let mgr = manager.clone();
     tokio::spawn(async move {
-        run_import(mgr, helper_socket, helper_grpc_socket, op_id, bundle).await;
+        run_import(mgr, helper_grpc_socket, op_id, bundle).await;
     });
     Ok(op_id)
 }
@@ -78,7 +76,6 @@ pub async fn start(
 /// shape.
 async fn run_import(
     manager: OperationManager,
-    helper_socket: PathBuf,
     helper_grpc_socket: PathBuf,
     op_id: u64,
     bundle: ConfigBundle,
@@ -176,32 +173,32 @@ async fn run_import(
             summary.notes.push(note);
             continue;
         };
-        let cmd = HelperCommand::CreateUser {
-            username: entry.username.clone(),
-            password: hash.clone(),
-            full_name: entry.full_name.clone(),
-            admin: entry.admin,
-            password_is_hash: true,
-        };
-        match bananas_engine::call(&helper_socket, &cmd).await {
-            Ok(HelperResponse { ok: true, .. }) => {
+        match grpc_create_user(
+            &helper_grpc_socket,
+            &entry.username,
+            hash,
+            entry.full_name.as_deref().unwrap_or(""),
+            entry.admin,
+        )
+        .await
+        {
+            Ok(()) => {
                 summary.users_created += 1;
                 log!("  → {} created", entry.username);
             }
-            Ok(HelperResponse { error, .. }) => {
+            // already-exists is a soft skip; transport / argument
+            // failure flips summary.ok so the bundle reports the
+            // import as partial.
+            Err(GrpcCreateUserError::AlreadyExists) => {
                 summary.users_skipped += 1;
-                let note = format!(
-                    "{}: {}",
-                    entry.username,
-                    error.unwrap_or_else(|| "helper rejected create".into())
-                );
+                let note = format!("{}: already exists", entry.username);
                 log!("  → {note}");
                 summary.notes.push(note);
             }
-            Err(e) => {
+            Err(GrpcCreateUserError::Other(msg)) => {
                 summary.ok = false;
                 summary.users_skipped += 1;
-                let note = format!("{}: helper unreachable: {e}", entry.username);
+                let note = format!("{}: {msg}", entry.username);
                 log!("  → {note}");
                 summary.notes.push(note);
             }
@@ -330,6 +327,43 @@ async fn write_service_toml(
     {
         Ok(_) => Ok(()),
         Err(status) => Err(format!("{name}: {status}")),
+    }
+}
+
+enum GrpcCreateUserError {
+    /// The user already exists. The config-import flow treats
+    /// this as a soft skip rather than a hard failure so a
+    /// re-run of an idempotent backup doesn't fail loudly.
+    AlreadyExists,
+    Other(String),
+}
+
+async fn grpc_create_user(
+    helper_grpc_socket: &PathBuf,
+    username: &str,
+    password_hash: &str,
+    full_name: &str,
+    admin: bool,
+) -> Result<(), GrpcCreateUserError> {
+    let channel = crate::engine_grpc::channel(helper_grpc_socket)
+        .await
+        .map_err(|e| GrpcCreateUserError::Other(format!("helper unreachable: {e}")))?;
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .create_user(CreateUserRequest {
+            username: username.into(),
+            password: password_hash.into(),
+            full_name: full_name.into(),
+            admin,
+            password_is_hash: true,
+        })
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(status) if status.code() == tonic::Code::AlreadyExists => {
+            Err(GrpcCreateUserError::AlreadyExists)
+        }
+        Err(status) => Err(GrpcCreateUserError::Other(status.message().to_string())),
     }
 }
 

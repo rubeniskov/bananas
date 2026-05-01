@@ -79,11 +79,10 @@ impl PluginAssetMap {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub helper_socket: Arc<PathBuf>,
-    /// Path to the engine's tonic Unix socket. Used by gRPC-migrated
-    /// RPCs (currently only `EngineService::Authenticate`); every
-    /// other privileged op still goes through `helper_socket` until
-    /// its `Command` variant is migrated to gRPC.
+    /// Path to the engine's tonic Unix socket. Every privileged op
+    /// dials it through `engine_grpc::channel(...)`; webadmin no
+    /// longer speaks the legacy newline-JSON protocol after the
+    /// PR-5 migration retired the last caller.
     pub helper_grpc_socket: Arc<PathBuf>,
     pub session_key: Arc<SessionKey>,
     pub operations: operations::OperationManager,
@@ -108,10 +107,6 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "/var/lib/bananas/session.key".into());
     let session_key = SessionKey::load_or_create(&session_key_path)?;
 
-    let helper_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "/run/bananas/engine.sock".into());
-
     let helper_grpc_socket: PathBuf = std::env::var_os("BANANAS_ENGINE_GRPC_SOCKET")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine-grpc.sock".into());
@@ -120,7 +115,7 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "/var/lib/bananas/operations.json".into());
     let operations = operations::OperationManager::load(operations_journal).await;
-    // Per-kind reinstaters: ask the helper if any opkg upgrade is
+    // Per-kind reinstaters: ask the engine if any opkg upgrade is
     // still in flight from a previous server lifetime. If yes, the
     // matching journal entry is reattached with a fresh log watcher.
     operations::opkg::reinstate(&operations, &helper_grpc_socket).await;
@@ -129,7 +124,6 @@ async fn main() -> Result<()> {
     operations.flush_orphan_running().await;
 
     let state = AppState {
-        helper_socket: Arc::new(helper_socket),
         helper_grpc_socket: Arc::new(helper_grpc_socket),
         session_key: Arc::new(session_key),
         operations,

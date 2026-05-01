@@ -857,7 +857,6 @@ dependencies = [
  "async-stream",
  "axum",
  "bananas-devtool",
- "bananas-engine",
  "bananas-proto",
  "bananas-server-common",
  "bananas-stats",
