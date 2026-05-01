@@ -10,16 +10,19 @@ use std::path::PathBuf;
 
 use bananas_proto::engine::v1::{
     AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
-    ListTimezonesRequest, ListTimezonesResponse, ReadServiceConfigRequest,
+    InstalledPackage as ProtoInstalledPackage, ListTimezonesRequest, ListTimezonesResponse,
+    OpkgListInstalledRequest, OpkgListInstalledResponse, OpkgListUpgradableRequest,
+    OpkgListUpgradableResponse, OpkgUpdateRequest, OpkgUpdateResponse, ReadServiceConfigRequest,
     ReadServiceConfigResponse, RebootSystemRequest, RebootSystemResponse, SetTimezoneRequest,
-    SetTimezoneResponse, WriteServiceConfigRequest, WriteServiceConfigResponse,
+    SetTimezoneResponse, UpgradablePackage as ProtoUpgradablePackage, WriteServiceConfigRequest,
+    WriteServiceConfigResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
 
 use crate::{
-    authenticate, change_own_password, list_timezones_vec, read_service_config, reboot_system,
-    set_timezone, verify_shadow_password, write_service_config,
+    authenticate, change_own_password, list_timezones_vec, opkg, read_service_config,
+    reboot_system, set_timezone, verify_shadow_password, write_service_config,
 };
 
 /// Engine gRPC service. Holds the same shadow path the
@@ -168,6 +171,62 @@ impl EngineService for EngineGrpc {
                 } else {
                     Err(Status::internal(msg))
                 }
+            }
+        }
+    }
+
+    async fn opkg_update(
+        &self,
+        _req: Request<OpkgUpdateRequest>,
+    ) -> Result<Response<OpkgUpdateResponse>, Status> {
+        match opkg::update().await {
+            Ok(output) => Ok(Response::new(OpkgUpdateResponse { output })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_update failed (gRPC)");
+                Err(Status::internal(format!("opkg update: {e}")))
+            }
+        }
+    }
+
+    async fn opkg_list_upgradable(
+        &self,
+        _req: Request<OpkgListUpgradableRequest>,
+    ) -> Result<Response<OpkgListUpgradableResponse>, Status> {
+        match opkg::list_upgradable().await {
+            Ok(rows) => Ok(Response::new(OpkgListUpgradableResponse {
+                packages: rows
+                    .into_iter()
+                    .map(|p| ProtoUpgradablePackage {
+                        name: p.name,
+                        installed: p.installed,
+                        candidate: p.candidate,
+                    })
+                    .collect(),
+            })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_list_upgradable failed (gRPC)");
+                Err(Status::internal(format!("opkg list-upgradable: {e}")))
+            }
+        }
+    }
+
+    async fn opkg_list_installed(
+        &self,
+        _req: Request<OpkgListInstalledRequest>,
+    ) -> Result<Response<OpkgListInstalledResponse>, Status> {
+        match opkg::list_installed().await {
+            Ok(rows) => Ok(Response::new(OpkgListInstalledResponse {
+                packages: rows
+                    .into_iter()
+                    .map(|p| ProtoInstalledPackage {
+                        name: p.name,
+                        version: p.version,
+                    })
+                    .collect(),
+            })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_list_installed failed (gRPC)");
+                Err(Status::internal(format!("opkg list-installed: {e}")))
             }
         }
     }

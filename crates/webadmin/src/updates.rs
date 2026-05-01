@@ -31,11 +31,14 @@ use axum::{
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
 };
-use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
+use bananas_proto::engine::v1::{
+    OpkgListInstalledRequest, OpkgListUpgradableRequest, OpkgUpdateRequest,
+    engine_service_client::EngineServiceClient,
+};
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 
-use crate::{AppState, operations};
+use crate::{AppState, engine_grpc, operations};
 
 /// Only packages whose name starts with this prefix are exposed via
 /// the API. Keeps the SPA's view focused on what BanaNAS itself
@@ -68,14 +71,27 @@ pub async fn get_version(State(state): State<AppState>) -> Json<InstalledVersion
 }
 
 async fn installed_packages(state: &AppState) -> Option<Vec<InstalledPackage>> {
-    let resp = bananas_engine::call(&state.helper_socket, &HelperCommand::OpkgListInstalled)
+    let channel = engine_grpc::channel(&state.helper_grpc_socket).await.ok()?;
+    let mut client = EngineServiceClient::new(channel);
+    match client
+        .opkg_list_installed(OpkgListInstalledRequest {})
         .await
-        .ok()?;
-    if !resp.ok {
-        tracing::warn!(error=?resp.error, "opkg list-installed failed");
-        return None;
+    {
+        Ok(resp) => Some(
+            resp.into_inner()
+                .packages
+                .into_iter()
+                .map(|p| InstalledPackage {
+                    name: p.name,
+                    version: p.version,
+                })
+                .collect(),
+        ),
+        Err(status) => {
+            tracing::warn!(error = %status, "opkg list-installed failed");
+            None
+        }
     }
-    serde_json::from_str(&resp.output).ok()
 }
 
 // ─── /api/updates/check ─────────────────────────────────────────────
@@ -100,37 +116,40 @@ pub struct UpdatesCheckResponse {
 pub async fn get_updates_check(
     State(state): State<AppState>,
 ) -> Result<Json<UpdatesCheckResponse>, (StatusCode, String)> {
+    let channel = engine_grpc::channel(&state.helper_grpc_socket)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")))?;
+    let mut client = EngineServiceClient::new(channel);
+
+    // Refresh the metadata cache; failures (offline feed, rate
+    // limit, DNS hiccup) are non-fatal — list_upgradable still
+    // works against whatever's cached, and the SPA shows the
+    // soft-error banner alongside the (possibly stale) list.
     let mut error: Option<String> = None;
-    if let Err(e) = run_helper_simple(&state, HelperCommand::OpkgUpdate).await {
-        error = Some(format!("opkg update: {e}"));
+    if let Err(status) = client.opkg_update(OpkgUpdateRequest {}).await {
+        error = Some(format!("opkg update: {status}"));
     }
 
-    let upgradable: Vec<UpgradablePackage> = match bananas_engine::call(
-        &state.helper_socket,
-        &HelperCommand::OpkgListUpgradable,
-    )
-    .await
-    {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => serde_json::from_str(&output).unwrap_or_default(),
-        Ok(HelperResponse { error: e, .. }) => {
-            return Err((
+    let upgradable = client
+        .opkg_list_upgradable(OpkgListUpgradableRequest {})
+        .await
+        .map_err(|status| {
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "opkg list-upgradable: {}",
-                    e.unwrap_or_else(|| "unknown error".into())
-                ),
-            ));
-        }
-        Err(e) => {
-            return Err((StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")));
-        }
-    };
+                format!("opkg list-upgradable: {status}"),
+            )
+        })?
+        .into_inner()
+        .packages;
 
     let mut packages: Vec<UpgradablePackage> = upgradable
         .into_iter()
         .filter(|p| p.name.starts_with(PACKAGE_PREFIX))
+        .map(|p| UpgradablePackage {
+            name: p.name,
+            installed: p.installed,
+            candidate: p.candidate,
+        })
         .collect();
     packages.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -256,14 +275,4 @@ fn emit(seq: &mut u64, phase: &'static str, text: String) -> Result<Event, Infal
 
 fn close_event(payload: &'static str) -> Result<Event, Infallible> {
     Ok(Event::default().event("close").data(payload))
-}
-
-// ─── helpers ────────────────────────────────────────────────────────
-
-async fn run_helper_simple(state: &AppState, cmd: HelperCommand) -> anyhow::Result<String> {
-    let resp = bananas_engine::call(&state.helper_socket, &cmd).await?;
-    if !resp.ok {
-        anyhow::bail!(resp.error.unwrap_or_else(|| "helper rejected".into()));
-    }
-    Ok(resp.output)
 }

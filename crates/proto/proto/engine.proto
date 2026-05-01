@@ -71,6 +71,21 @@ service EngineService {
   // rename), and restarts any associated systemd units.
   // Maps 1:1 to `Command::WriteServiceConfig`.
   rpc WriteServiceConfig(WriteServiceConfigRequest) returns (WriteServiceConfigResponse);
+
+  // Refresh opkg's package metadata cache (`opkg update`). Hits
+  // the configured feed; failures here usually mean the network
+  // is offline. Maps 1:1 to `Command::OpkgUpdate`.
+  rpc OpkgUpdate(OpkgUpdateRequest) returns (OpkgUpdateResponse);
+
+  // Enumerate every opkg package whose installed version is
+  // older than the candidate in the cached metadata. The wire
+  // shape is now typed (`repeated UpgradablePackage`) instead of
+  // a JSON-encoded string. Maps 1:1 to `Command::OpkgListUpgradable`.
+  rpc OpkgListUpgradable(OpkgListUpgradableRequest) returns (OpkgListUpgradableResponse);
+
+  // Enumerate every installed package. Same wire-shape upgrade
+  // as ListUpgradable. Maps 1:1 to `Command::OpkgListInstalled`.
+  rpc OpkgListInstalled(OpkgListInstalledRequest) returns (OpkgListInstalledResponse);
 }
 
 message AuthenticateRequest {
@@ -146,4 +161,34 @@ message WriteServiceConfigResponse {
   // restarts (one line per unit). Empty when no units are
   // associated with this config name.
   string output = 1;
+}
+
+message OpkgUpdateRequest {}
+
+message OpkgUpdateResponse {
+  // Captured stdout+stderr from `opkg update`.
+  string output = 1;
+}
+
+message OpkgListUpgradableRequest {}
+
+message UpgradablePackage {
+  string name = 1;
+  string installed = 2;
+  string candidate = 3;
+}
+
+message OpkgListUpgradableResponse {
+  repeated UpgradablePackage packages = 1;
+}
+
+message OpkgListInstalledRequest {}
+
+message InstalledPackage {
+  string name = 1;
+  string version = 2;
+}
+
+message OpkgListInstalledResponse {
+  repeated InstalledPackage packages = 1;
 }
