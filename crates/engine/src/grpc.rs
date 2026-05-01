@@ -16,20 +16,25 @@ use bananas_proto::engine::v1::{
     OpkgUpgradeResponse, OpkgUpgradeStatusRequest, OpkgUpgradeStatusResponse,
     ReadServiceConfigRequest, ReadServiceConfigResponse, RebootSystemRequest, RebootSystemResponse,
     SetTimezoneRequest, SetTimezoneResponse, UpgradablePackage as ProtoUpgradablePackage,
+    WriteExportsRequest, WriteExportsResponse, WriteFstabRequest, WriteFstabResponse,
     WriteServiceConfigRequest, WriteServiceConfigResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
 
+use crate::Cx;
 use crate::{
     authenticate, change_own_password, list_timezones_vec, opkg, read_service_config,
-    reboot_system, set_timezone, verify_shadow_password, write_service_config,
+    reboot_system, set_timezone, verify_shadow_password, write_exports, write_fstab,
+    write_service_config,
 };
 
-/// Engine gRPC service. Holds the same shadow path the
-/// newline-JSON dispatch threads through `Cx`.
+/// Engine gRPC service. Holds the same `Cx` (on-disk paths) the
+/// newline-JSON dispatch threads through; passed by value so the
+/// service is `Clone` friendly when tonic spawns per-request
+/// futures.
 pub struct EngineGrpc {
-    pub shadow_path: PathBuf,
+    pub cx: Cx,
 }
 
 #[tonic::async_trait]
@@ -44,7 +49,7 @@ impl EngineService for EngineGrpc {
         // password_expired sentinel as a structured field. Errors
         // collapse into a single generic message — same redaction
         // policy as the legacy path.
-        match authenticate(&body.username, &body.password, &self.shadow_path).await {
+        match authenticate(&body.username, &body.password, &self.cx.shadow).await {
             Ok(()) => Ok(Response::new(AuthenticateResponse {
                 lastchg_zero: false,
             })),
@@ -73,7 +78,7 @@ impl EngineService for EngineGrpc {
             &body.username,
             &body.old_password,
             &body.new_password,
-            &self.shadow_path,
+            &self.cx.shadow,
         )
         .await
         {
@@ -274,12 +279,53 @@ impl EngineService for EngineGrpc {
             }
         }
     }
+
+    async fn write_exports(
+        &self,
+        req: Request<WriteExportsRequest>,
+    ) -> Result<Response<WriteExportsResponse>, Status> {
+        let content = req.into_inner().content;
+        match write_exports(&content, &self.cx.exports).await {
+            Ok(output) => Ok(Response::new(WriteExportsResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "write_exports failed (gRPC)");
+                // The validator surfaces every line-shape error
+                // with a `line N:` prefix; treat those as
+                // caller-supplied bad-input.
+                if msg.contains("line ") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn write_fstab(
+        &self,
+        req: Request<WriteFstabRequest>,
+    ) -> Result<Response<WriteFstabResponse>, Status> {
+        let content = req.into_inner().content;
+        match write_fstab(&content).await {
+            Ok(output) => Ok(Response::new(WriteFstabResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "write_fstab failed (gRPC)");
+                if msg.contains("line ") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
 }
 
 /// Bind the gRPC Unix socket and serve the EngineService. Called
 /// from `main` as a separate `tokio::spawn` so the legacy
 /// newline-JSON listener continues to run on the original socket.
-pub async fn serve(grpc_socket: PathBuf, shadow_path: PathBuf) -> anyhow::Result<()> {
+pub async fn serve(grpc_socket: PathBuf, cx: Cx) -> anyhow::Result<()> {
     if grpc_socket.exists() {
         let _ = std::fs::remove_file(&grpc_socket);
     }
@@ -291,7 +337,7 @@ pub async fn serve(grpc_socket: PathBuf, shadow_path: PathBuf) -> anyhow::Result
     std::fs::set_permissions(&grpc_socket, std::fs::Permissions::from_mode(0o660))?;
     tracing::info!(socket=%grpc_socket.display(), "engine gRPC listening");
 
-    let svc = EngineGrpc { shadow_path };
+    let svc = EngineGrpc { cx };
     let incoming = futures_util::stream::unfold(listener, |listener| async move {
         match listener.accept().await {
             Ok((stream, _addr)) => Some((Ok::<_, std::io::Error>(stream), listener)),

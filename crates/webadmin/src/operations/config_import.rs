@@ -20,7 +20,8 @@ use std::path::PathBuf;
 use axum::http::StatusCode;
 use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
 use bananas_proto::engine::v1::{
-    WriteServiceConfigRequest, engine_service_client::EngineServiceClient,
+    WriteExportsRequest, WriteFstabRequest, WriteServiceConfigRequest,
+    engine_service_client::EngineServiceClient,
 };
 use serde_json::json;
 
@@ -104,31 +105,13 @@ async fn run_import(
         })
         .collect();
     let exports_content = exports::serialize(&export_rows);
-    match bananas_engine::call(
-        &helper_socket,
-        &HelperCommand::WriteExports {
-            content: exports_content,
-        },
-    )
-    .await
-    {
-        Ok(HelperResponse { ok: true, .. }) => {
+    match grpc_write_exports(&helper_grpc_socket, exports_content).await {
+        Ok(()) => {
             summary.exports_written = export_rows.len();
             log!("  → exports written ({} row(s))", summary.exports_written);
         }
-        Ok(HelperResponse { error, output, .. }) => {
+        Err(note) => {
             summary.ok = false;
-            let note = format!(
-                "exports: {}\n{}",
-                error.unwrap_or_else(|| "helper rejected exports".into()),
-                output
-            );
-            log!("  → exports FAILED: {note}");
-            summary.notes.push(note);
-        }
-        Err(e) => {
-            summary.ok = false;
-            let note = format!("exports: helper unreachable: {e}");
             log!("  → exports FAILED: {note}");
             summary.notes.push(note);
         }
@@ -168,34 +151,16 @@ async fn run_import(
     let mut fstab_rows = protected_rows;
     fstab_rows.extend(bundle_rows);
     let fstab_content = format!("{}{}", header, fstab::serialize(&fstab_rows));
-    match bananas_engine::call(
-        &helper_socket,
-        &HelperCommand::WriteFstab {
-            content: fstab_content,
-        },
-    )
-    .await
-    {
-        Ok(HelperResponse { ok: true, .. }) => {
+    match grpc_write_fstab(&helper_grpc_socket, fstab_content).await {
+        Ok(()) => {
             summary.storage_written = bundle_count;
             log!(
                 "  → storage written ({} user row(s))",
                 summary.storage_written
             );
         }
-        Ok(HelperResponse { error, output, .. }) => {
+        Err(note) => {
             summary.ok = false;
-            let note = format!(
-                "storage: {}\n{}",
-                error.unwrap_or_else(|| "helper rejected fstab".into()),
-                output
-            );
-            log!("  → storage FAILED: {note}");
-            summary.notes.push(note);
-        }
-        Err(e) => {
-            summary.ok = false;
-            let note = format!("storage: helper unreachable: {e}");
             log!("  → storage FAILED: {note}");
             summary.notes.push(note);
         }
@@ -366,6 +331,30 @@ async fn write_service_toml(
         Ok(_) => Ok(()),
         Err(status) => Err(format!("{name}: {status}")),
     }
+}
+
+async fn grpc_write_exports(helper_grpc_socket: &PathBuf, content: String) -> Result<(), String> {
+    let channel = crate::engine_grpc::channel(helper_grpc_socket)
+        .await
+        .map_err(|e| format!("exports: helper unreachable: {e}"))?;
+    let mut client = EngineServiceClient::new(channel);
+    client
+        .write_exports(WriteExportsRequest { content })
+        .await
+        .map(|_| ())
+        .map_err(|status| format!("exports: {status}"))
+}
+
+async fn grpc_write_fstab(helper_grpc_socket: &PathBuf, content: String) -> Result<(), String> {
+    let channel = crate::engine_grpc::channel(helper_grpc_socket)
+        .await
+        .map_err(|e| format!("storage: helper unreachable: {e}"))?;
+    let mut client = EngineServiceClient::new(channel);
+    client
+        .write_fstab(WriteFstabRequest { content })
+        .await
+        .map(|_| ())
+        .map_err(|status| format!("storage: {status}"))
 }
 
 /// Quick filesystem probe — does /etc/bananas/extensions.d/cloud.toml

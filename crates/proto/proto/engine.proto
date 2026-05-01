@@ -99,6 +99,18 @@ service EngineService {
   // file; `since` lets the caller request only new bytes. Maps
   // 1:1 to `Command::OpkgUpgradeStatus`.
   rpc OpkgUpgradeStatus(OpkgUpgradeStatusRequest) returns (OpkgUpgradeStatusResponse);
+
+  // Replace `/etc/exports` atomically. The engine validates the
+  // syntax, ensures every export path exists on disk
+  // (auto-mkdir), injects `fsid=` for re-exports when running
+  // on an NFS-rooted host, and runs `exportfs -ra`. Maps 1:1 to
+  // `Command::WriteExports`.
+  rpc WriteExports(WriteExportsRequest) returns (WriteExportsResponse);
+
+  // Replace `/etc/fstab` atomically and run `mount -a` so any
+  // newly-added entries activate without a reboot. Maps 1:1 to
+  // `Command::WriteFstab`.
+  rpc WriteFstab(WriteFstabRequest) returns (WriteFstabResponse);
 }
 
 message AuthenticateRequest {
@@ -241,4 +253,23 @@ message OpkgUpgradeStatusResponse {
   // True iff `exit_code` carries a real value; protobuf's int32
   // can't distinguish 0 from "unset" without this companion bool.
   bool has_exit_code = 5;
+}
+
+message WriteExportsRequest {
+  string content = 1;
+}
+
+message WriteExportsResponse {
+  // Combined output: validate + auto-mkdir log + fsid-inject
+  // log + `exportfs -ra` stdout/stderr.
+  string output = 1;
+}
+
+message WriteFstabRequest {
+  string content = 1;
+}
+
+message WriteFstabResponse {
+  // Captured `mount -a` stdout/stderr.
+  string output = 1;
 }

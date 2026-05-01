@@ -94,9 +94,9 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| "/run/bananas/engine-grpc.sock".into());
     {
-        let shadow_for_grpc = shadow_path.clone();
+        let cx_for_grpc = cx.clone();
         tokio::spawn(async move {
-            if let Err(e) = grpc::serve(grpc_socket, shadow_for_grpc).await {
+            if let Err(e) = grpc::serve(grpc_socket, cx_for_grpc).await {
                 tracing::error!(error=%e, "engine gRPC mount exited");
             }
         });
@@ -124,9 +124,9 @@ async fn main() -> Result<()> {
 /// they can exercise the auth path without root privileges or
 /// touching the real /etc/shadow.
 #[derive(Clone)]
-struct Cx {
-    exports: PathBuf,
-    shadow: PathBuf,
+pub(crate) struct Cx {
+    pub(crate) exports: PathBuf,
+    pub(crate) shadow: PathBuf,
 }
 
 async fn handle(stream: UnixStream, cx: &Cx) -> Result<()> {
@@ -332,7 +332,7 @@ async fn dispatch(cmd: Command, cx: &Cx) -> Response {
     }
 }
 
-async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
+pub(crate) async fn write_exports(content: &str, exports_path: &Path) -> Result<String> {
     validate_exports(content)?;
     // Make sure every export path actually exists on disk before we let
     // nfs-server try to stat it. The image used to pre-create /srv/media
@@ -1574,7 +1574,7 @@ fn is_valid_block_device(device: &str) -> bool {
     name.starts_with("sd") || name.starts_with("nvme") || name.starts_with("mmcblk")
 }
 
-async fn write_fstab(content: &str) -> Result<String> {
+pub(crate) async fn write_fstab(content: &str) -> Result<String> {
     validate_fstab(content)?;
     // Each user-managed fstab row needs its mountpoint to exist on disk,
     // otherwise systemd-fstab-generator's auto-mount unit fails on the
