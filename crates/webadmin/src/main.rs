@@ -37,15 +37,14 @@ mod fstab;
 mod operations;
 mod permissions;
 mod service_config;
-mod session;
 mod stats;
 mod stats_ws;
 mod storage;
 mod system;
 mod updates;
 mod users;
+use bananas_server_common::SessionKey;
 use exports::{Opts, Row, Squash};
-use session::SessionKey;
 
 #[derive(Clone)]
 pub struct AppState {

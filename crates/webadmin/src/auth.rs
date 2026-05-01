@@ -15,10 +15,9 @@ use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{
-    AppState,
-    session::{COOKIE_NAME, Session, SessionKey, extract_cookie},
-};
+use bananas_server_common::{COOKIE_NAME, Session, SessionKey, extract_cookie};
+
+use crate::AppState;
 
 /// Endpoints exempt from the auth middleware (must match the path AFTER
 /// the /api nest prefix is stripped).

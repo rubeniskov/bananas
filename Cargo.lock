@@ -494,6 +494,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bananas-cloud"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bananas-engine",
+ "bananas-server-common",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 1.1.2+spec-1.1.0",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "bananas-config"
 version = "1.4.0"
 dependencies = [
@@ -561,6 +579,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bananas-server-common"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "hmac",
+ "rand 0.9.4",
+ "sha2",
+ "tracing",
+]
+
+[[package]]
 name = "bananas-stats"
 version = "1.4.0"
 dependencies = [
@@ -587,6 +617,7 @@ dependencies = [
  "async-stream",
  "axum",
  "bananas-engine",
+ "bananas-server-common",
  "bananas-stats",
  "base64",
  "futures-util",

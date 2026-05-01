@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/router", "crates/webadmin", "crates/engine", "crates/webadmin-ui", "crates/stats", "crates/dashboard", "crates/config"]
+members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/webadmin-ui", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud"]
 exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
 resolver = "3"
 
@@ -19,6 +19,7 @@ license = "MIT"
 # Internal crates — referenced by `package.workspace = true` from members so
 # the path is defined exactly once.
 bananas-engine = { path = "crates/engine" }
+bananas-server-common = { path = "crates/server-common" }
 bananas-webadmin = { path = "crates/webadmin" }
 bananas-webadmin-ui = { path = "crates/webadmin-ui" }
 bananas-stats = { path = "crates/stats" }
