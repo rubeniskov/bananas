@@ -189,7 +189,7 @@ pub async fn post_updates_install(
 ) -> Result<(StatusCode, Json<InstallAccepted>), (StatusCode, String)> {
     let op_id = operations::opkg::start(
         state.operations.clone(),
-        (*state.helper_socket).clone(),
+        (*state.helper_grpc_socket).clone(),
         req.packages,
     )
     .await?;

@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
     // Per-kind reinstaters: ask the helper if any opkg upgrade is
     // still in flight from a previous server lifetime. If yes, the
     // matching journal entry is reattached with a fresh log watcher.
-    operations::opkg::reinstate(&operations, &helper_socket).await;
+    operations::opkg::reinstate(&operations, &helper_grpc_socket).await;
     // Flush any Running entry no reinstater claimed. After this point,
     // the only Running ops are ones genuinely backed by live work.
     operations.flush_orphan_running().await;

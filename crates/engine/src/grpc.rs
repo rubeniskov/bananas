@@ -12,10 +12,11 @@ use bananas_proto::engine::v1::{
     AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
     InstalledPackage as ProtoInstalledPackage, ListTimezonesRequest, ListTimezonesResponse,
     OpkgListInstalledRequest, OpkgListInstalledResponse, OpkgListUpgradableRequest,
-    OpkgListUpgradableResponse, OpkgUpdateRequest, OpkgUpdateResponse, ReadServiceConfigRequest,
-    ReadServiceConfigResponse, RebootSystemRequest, RebootSystemResponse, SetTimezoneRequest,
-    SetTimezoneResponse, UpgradablePackage as ProtoUpgradablePackage, WriteServiceConfigRequest,
-    WriteServiceConfigResponse,
+    OpkgListUpgradableResponse, OpkgUpdateRequest, OpkgUpdateResponse, OpkgUpgradeRequest,
+    OpkgUpgradeResponse, OpkgUpgradeStatusRequest, OpkgUpgradeStatusResponse,
+    ReadServiceConfigRequest, ReadServiceConfigResponse, RebootSystemRequest, RebootSystemResponse,
+    SetTimezoneRequest, SetTimezoneResponse, UpgradablePackage as ProtoUpgradablePackage,
+    WriteServiceConfigRequest, WriteServiceConfigResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
@@ -227,6 +228,49 @@ impl EngineService for EngineGrpc {
             Err(e) => {
                 tracing::warn!(error = %e, "opkg_list_installed failed (gRPC)");
                 Err(Status::internal(format!("opkg list-installed: {e}")))
+            }
+        }
+    }
+
+    async fn opkg_upgrade(
+        &self,
+        req: Request<OpkgUpgradeRequest>,
+    ) -> Result<Response<OpkgUpgradeResponse>, Status> {
+        let packages = req.into_inner().packages;
+        match opkg::upgrade(&packages).await {
+            Ok(output) => Ok(Response::new(OpkgUpgradeResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "opkg_upgrade failed (gRPC)");
+                // The engine's `upgrade()` rejects re-entry while a
+                // unit is already active. Surface that as
+                // FailedPrecondition so the webadmin can map it to
+                // HTTP 409 Conflict.
+                if msg.contains("already") {
+                    Err(Status::failed_precondition(msg))
+                } else {
+                    Err(Status::internal(format!("opkg upgrade: {msg}")))
+                }
+            }
+        }
+    }
+
+    async fn opkg_upgrade_status(
+        &self,
+        req: Request<OpkgUpgradeStatusRequest>,
+    ) -> Result<Response<OpkgUpgradeStatusResponse>, Status> {
+        let since = req.into_inner().since;
+        match opkg::upgrade_status(since).await {
+            Ok(s) => Ok(Response::new(OpkgUpgradeStatusResponse {
+                state: s.state,
+                log: s.log,
+                log_offset: s.log_offset,
+                exit_code: s.exit_code.unwrap_or(-1),
+                has_exit_code: s.exit_code.is_some(),
+            })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_upgrade_status failed (gRPC)");
+                Err(Status::internal(format!("opkg upgrade-status: {e}")))
             }
         }
     }

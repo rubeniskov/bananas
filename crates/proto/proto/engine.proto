@@ -86,6 +86,19 @@ service EngineService {
   // Enumerate every installed package. Same wire-shape upgrade
   // as ListUpgradable. Maps 1:1 to `Command::OpkgListInstalled`.
   rpc OpkgListInstalled(OpkgListInstalledRequest) returns (OpkgListInstalledResponse);
+
+  // Spawn the transient `bananas-opkg-upgrade.service` to run
+  // `opkg upgrade <packages>` in the background. Returns
+  // immediately once systemd-run has acknowledged; the caller
+  // polls OpkgUpgradeStatus to track progress and emit log
+  // delta. Maps 1:1 to `Command::OpkgUpgrade`.
+  rpc OpkgUpgrade(OpkgUpgradeRequest) returns (OpkgUpgradeResponse);
+
+  // Read the current state of the transient upgrade unit. The
+  // engine appends opkg's stdout/stderr to a sentinel-tailed log
+  // file; `since` lets the caller request only new bytes. Maps
+  // 1:1 to `Command::OpkgUpgradeStatus`.
+  rpc OpkgUpgradeStatus(OpkgUpgradeStatusRequest) returns (OpkgUpgradeStatusResponse);
 }
 
 message AuthenticateRequest {
@@ -191,4 +204,41 @@ message InstalledPackage {
 
 message OpkgListInstalledResponse {
   repeated InstalledPackage packages = 1;
+}
+
+message OpkgUpgradeRequest {
+  // Each name must already be in the bananas-* allowlist; the
+  // webadmin layer enforces that before calling. The engine
+  // refuses to spawn a second transient unit while one is
+  // active (returns `FailedPrecondition` on conflict).
+  repeated string packages = 1;
+}
+
+message OpkgUpgradeResponse {
+  // Output from `systemd-run`, captured for diagnostics.
+  string output = 1;
+}
+
+message OpkgUpgradeStatusRequest {
+  // Byte offset already consumed; the engine returns log bytes
+  // from `since` to current EOF.
+  uint64 since = 1;
+}
+
+message OpkgUpgradeStatusResponse {
+  // One of: `idle`, `active`, `done`, `failed`.
+  string state = 1;
+  // Log delta from the requested `since` offset. Empty when the
+  // caller is already caught up.
+  string log = 2;
+  // Current log size in bytes. Echo back as `since` on the next
+  // call to keep the cursor moving.
+  uint64 log_offset = 3;
+  // Populated once the unit has exited (the `[bananas-opkg-exit=N]`
+  // sentinel is present). Encoded as int32 with -1 sentinel for
+  // "not yet present" so the protobuf wire format stays stable.
+  int32 exit_code = 4;
+  // True iff `exit_code` carries a real value; protobuf's int32
+  // can't distinguish 0 from "unset" without this companion bool.
+  bool has_exit_code = 5;
 }

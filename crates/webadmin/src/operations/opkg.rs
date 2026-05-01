@@ -20,23 +20,24 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bananas_engine::{Command as HelperCommand, Response as HelperResponse};
-use serde::Deserialize;
+use bananas_proto::engine::v1::{
+    OpkgUpgradeRequest, OpkgUpgradeStatusRequest, engine_service_client::EngineServiceClient,
+};
 use serde_json::json;
 
 use super::{OperationKind, OperationManager, OperationState, OperationStatus};
+use crate::engine_grpc;
 
 const POLL: Duration = Duration::from_millis(500);
 const PACKAGE_PREFIX: &str = "bananas-";
 
-/// Helper status payload — mirrored locally to avoid pulling
-/// `bananas_engine::opkg` types into the server crate.
-#[derive(Debug, Deserialize)]
+/// Locally-typed mirror of the gRPC `OpkgUpgradeStatusResponse`,
+/// with `exit_code` re-collapsed to `Option<i32>` so the rest of
+/// the watcher reads the same way it did under the JSON path.
 struct UpgradeStatus {
     state: String,
     log: String,
     log_offset: u64,
-    #[serde(default)]
     exit_code: Option<i32>,
 }
 
@@ -45,7 +46,7 @@ struct UpgradeStatus {
 /// Returns the new op_id immediately.
 pub async fn start(
     manager: OperationManager,
-    helper_socket: PathBuf,
+    helper_grpc_socket: PathBuf,
     packages: Vec<String>,
 ) -> Result<u64, (axum::http::StatusCode, String)> {
     use axum::http::StatusCode;
@@ -61,20 +62,24 @@ pub async fn start(
         }
     }
 
-    let cmd = HelperCommand::OpkgUpgrade {
-        packages: packages.clone(),
-    };
-    match bananas_engine::call(&helper_socket, &cmd).await {
-        Ok(HelperResponse { ok: true, .. }) => {}
-        Ok(HelperResponse { error, .. }) => {
-            return Err((
-                StatusCode::CONFLICT,
-                error.unwrap_or_else(|| "helper rejected upgrade".into()),
-            ));
-        }
-        Err(e) => {
-            return Err((StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")));
-        }
+    let channel = engine_grpc::channel(&helper_grpc_socket)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("helper unreachable: {e}")))?;
+    let mut client = EngineServiceClient::new(channel);
+    if let Err(status) = client
+        .opkg_upgrade(OpkgUpgradeRequest {
+            packages: packages.clone(),
+        })
+        .await
+    {
+        // FailedPrecondition = a unit is already active. Map to
+        // 409 Conflict so the SPA's existing handler keeps working.
+        let code = if status.code() == tonic::Code::FailedPrecondition {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+        return Err((code, status.message().to_string()));
     }
 
     let label = format!("Upgrading {} package(s)", packages.len());
@@ -86,7 +91,7 @@ pub async fn start(
         )
         .await;
 
-    spawn_watcher(manager, helper_socket, op_id, 0);
+    spawn_watcher(manager, helper_grpc_socket, op_id, 0);
     Ok(op_id)
 }
 
@@ -95,19 +100,10 @@ pub async fn start(
 /// `/api/operations/active` view picks it up cleanly. If no, do
 /// nothing — `flush_orphan_running` will mop up any Running
 /// OpkgUpgrade in the journal.
-pub async fn reinstate(manager: &OperationManager, helper_socket: &PathBuf) {
-    let cmd = HelperCommand::OpkgUpgradeStatus { since: 0 };
-    let status = match bananas_engine::call(helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => match serde_json::from_str::<UpgradeStatus>(&output) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error=%e, "OpkgUpgradeStatus malformed at startup; skipping reinstate");
-                return;
-            }
-        },
-        Ok(_) | Err(_) => {
+pub async fn reinstate(manager: &OperationManager, helper_grpc_socket: &PathBuf) {
+    let status = match poll_status(helper_grpc_socket, 0).await {
+        Some(s) => s,
+        None => {
             tracing::debug!("helper unreachable at startup; skipping opkg reinstate");
             return;
         }
@@ -139,7 +135,26 @@ pub async fn reinstate(manager: &OperationManager, helper_socket: &PathBuf) {
         }
     };
 
-    spawn_watcher(manager.clone(), helper_socket.clone(), op_id, since);
+    spawn_watcher(manager.clone(), helper_grpc_socket.clone(), op_id, since);
+}
+
+/// Single helper that dials the engine's gRPC socket and pulls the
+/// upgrade status. Returns `None` on transport / RPC errors —
+/// callers decide whether to retry or fail loudly.
+async fn poll_status(helper_grpc_socket: &PathBuf, since: u64) -> Option<UpgradeStatus> {
+    let channel = engine_grpc::channel(helper_grpc_socket).await.ok()?;
+    let mut client = EngineServiceClient::new(channel);
+    let resp = client
+        .opkg_upgrade_status(OpkgUpgradeStatusRequest { since })
+        .await
+        .ok()?
+        .into_inner();
+    Some(UpgradeStatus {
+        state: resp.state,
+        log: resp.log,
+        log_offset: resp.log_offset,
+        exit_code: resp.has_exit_code.then_some(resp.exit_code),
+    })
 }
 
 /// Background task that polls helper.OpkgUpgradeStatus, appends new
@@ -147,7 +162,12 @@ pub async fn reinstate(manager: &OperationManager, helper_socket: &PathBuf) {
 /// transient unit terminates. Survives helper unavailability windows
 /// (server restarts the helper as part of the upgrade itself) by
 /// retrying with a small backoff.
-fn spawn_watcher(manager: OperationManager, helper_socket: PathBuf, op_id: u64, mut since: u64) {
+fn spawn_watcher(
+    manager: OperationManager,
+    helper_grpc_socket: PathBuf,
+    op_id: u64,
+    mut since: u64,
+) {
     tokio::spawn(async move {
         // Track consecutive helper-unreachable polls so we can give up
         // eventually rather than poll forever if the helper has gone
@@ -167,22 +187,12 @@ fn spawn_watcher(manager: OperationManager, helper_socket: PathBuf, op_id: u64, 
         const MAX_IDLE_POLLS: u32 = 20; // ~10 s at 500 ms
 
         loop {
-            let cmd = HelperCommand::OpkgUpgradeStatus { since };
-            let status = match bananas_engine::call(&helper_socket, &cmd).await {
-                Ok(HelperResponse {
-                    ok: true, output, ..
-                }) => {
+            let status = match poll_status(&helper_grpc_socket, since).await {
+                Some(s) => {
                     consecutive_fail = 0;
-                    match serde_json::from_str::<UpgradeStatus>(&output) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::warn!(error=%e, "malformed OpkgUpgradeStatus");
-                            tokio::time::sleep(POLL).await;
-                            continue;
-                        }
-                    }
+                    s
                 }
-                _ => {
+                None => {
                     consecutive_fail += 1;
                     if consecutive_fail >= MAX_CONSEC_FAIL {
                         manager
