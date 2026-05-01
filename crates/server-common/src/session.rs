@@ -22,44 +22,78 @@ pub const COOKIE_NAME: &str = "bananas_session";
 pub struct SessionKey(Vec<u8>);
 
 impl SessionKey {
+    /// Load `path` or atomically create it if missing. Race-safe
+    /// across multiple daemons starting in parallel: the first to
+    /// open the file with `O_CREAT|O_EXCL` writes the canonical
+    /// key; everyone else loses the create race, falls through to
+    /// reading the same bytes the winner wrote (with a brief
+    /// retry loop in case the winner is still mid-fsync).
+    ///
+    /// Without this, plugin daemons booting alongside webadmin
+    /// occasionally landed with mismatched keys, signing-in via
+    /// /api/login produced a cookie webadmin accepted but storage
+    /// or exports rejected — manifesting as a `/  ↔  /#stats`
+    /// reload loop after sign-in.
     pub fn load_or_create(path: &Path) -> Result<Self> {
-        match std::fs::read(path) {
-            Ok(bytes) if bytes.len() >= 32 => {
+        // Fast path: file already there with full content.
+        if let Ok(bytes) = std::fs::read(path) {
+            if bytes.len() >= 32 {
                 tracing::info!(path=%path.display(), "loaded existing session key");
-                Ok(Self(bytes))
+                return Ok(Self(bytes));
             }
-            Ok(_) => {
-                tracing::warn!(
-                    path=%path.display(),
-                    "session key file too short, regenerating"
-                );
-                Self::generate_and_save(path)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!(path=%path.display(), "generating new session key");
-                Self::generate_and_save(path)
-            }
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
-    }
 
-    fn generate_and_save(path: &Path) -> Result<Self> {
-        use rand::TryRngCore;
-        let mut bytes = [0u8; 32];
-        rand::rngs::OsRng
-            .try_fill_bytes(&mut bytes)
-            .map_err(|e| anyhow::anyhow!("OsRng: {e}"))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
+
+        // Atomic create: only one process succeeds.
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).ok();
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
         }
-        Ok(Self(bytes.to_vec()))
+
+        match opts.open(path) {
+            Ok(mut f) => {
+                use rand::TryRngCore;
+                let mut bytes = [0u8; 32];
+                rand::rngs::OsRng
+                    .try_fill_bytes(&mut bytes)
+                    .map_err(|e| anyhow::anyhow!("OsRng: {e}"))?;
+                f.write_all(&bytes)
+                    .with_context(|| format!("writing {}", path.display()))?;
+                f.sync_all().ok();
+                tracing::info!(path=%path.display(), "generated new session key (won create race)");
+                Ok(Self(bytes.to_vec()))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Lost the race. The winner is mid-write or done;
+                // spin a few times until we see a full key.
+                for _ in 0..50 {
+                    if let Ok(bytes) = std::fs::read(path) {
+                        if bytes.len() >= 32 {
+                            tracing::info!(
+                                path=%path.display(),
+                                "loaded session key (lost create race, read winner's bytes)"
+                            );
+                            return Ok(Self(bytes));
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                anyhow::bail!(
+                    "session key at {} stayed unreadable for 2.5 s after losing create race",
+                    path.display()
+                )
+            }
+            Err(e) => Err(e).with_context(|| format!("creating {}", path.display())),
+        }
     }
 }
 
