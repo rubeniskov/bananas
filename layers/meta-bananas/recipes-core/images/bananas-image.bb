@@ -181,6 +181,7 @@ IMAGE_INSTALL += " \
     bananas-webadmin \
     bananas-exports \
     bananas-storage \
+    bananas-users \
     bananas-stats \
     bananas-config \
     bananas-feed-config \

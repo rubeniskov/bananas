@@ -5,6 +5,7 @@ const PLUGINS = [
   { id: 'cloud', label: 'Cloud' },
   { id: 'exports', label: 'Exports' },
   { id: 'storage', label: 'Storage' },
+  { id: 'users', label: 'Users' },
 ];
 
 export default async function ({ origin, page }) {

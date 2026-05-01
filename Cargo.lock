@@ -680,6 +680,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "bananas-users"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bananas-engine",
+ "bananas-server-common",
+ "console_error_panic_hook",
+ "dioxus",
+ "fs_extra",
+ "gloo-net",
+ "gloo-timers",
+ "include_dir",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-wasm",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "bananas-webadmin"
 version = "1.4.0"
 dependencies = [
