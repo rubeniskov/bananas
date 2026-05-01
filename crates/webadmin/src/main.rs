@@ -27,7 +27,7 @@ use axum::{
     response::IntoResponse,
     routing::{any, get, post},
 };
-use bananas_engine::{Command, Response as HelperResponse};
+use bananas_proto::engine::v1::{RebootSystemRequest, engine_service_client::EngineServiceClient};
 use serde_json::json;
 use tower_http::trace::TraceLayer;
 
@@ -337,26 +337,26 @@ async fn plugin_asset_proxy(
 // system + updates + operations + config import/export +
 // extension discovery — see the route block in `main()` above.
 
-/// Forward the `RebootSystem` helper command. The helper returns
-/// before systemd actually fires the reboot, so we get a normal 200
-/// back; the browser then sees the connection drop a beat later.
+/// Forward `RebootSystem` to the engine over gRPC. The engine
+/// returns synchronously (systemd waits for the reboot unit to
+/// run before pulling the trigger), so we get a normal 200 back;
+/// the browser sees the connection drop a beat later.
 async fn post_reboot(State(state): State<AppState>) -> impl IntoResponse {
-    let cmd = Command::RebootSystem;
-    match bananas_engine::call(&state.helper_socket, &cmd).await {
-        Ok(HelperResponse {
-            ok: true, output, ..
-        }) => Json(json!({ "ok": true, "output": output })).into_response(),
-        Ok(HelperResponse { error, output, .. }) => api_err(
+    let channel = match engine_grpc::channel(&state.helper_grpc_socket).await {
+        Ok(c) => c,
+        Err(e) => {
+            return api_err(
+                StatusCode::BAD_GATEWAY,
+                format!("could not reach helper: {e}"),
+            );
+        }
+    };
+    let mut client = EngineServiceClient::new(channel);
+    match client.reboot_system(RebootSystemRequest {}).await {
+        Ok(resp) => Json(json!({ "ok": true, "output": resp.into_inner().output })).into_response(),
+        Err(status) => api_err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "{}\n\n{}",
-                error.as_deref().unwrap_or("reboot failed"),
-                output
-            ),
-        ),
-        Err(e) => api_err(
-            StatusCode::BAD_GATEWAY,
-            format!("could not reach helper: {e}"),
+            format!("reboot failed: {status}"),
         ),
     }
 }

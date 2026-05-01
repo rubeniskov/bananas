@@ -2094,7 +2094,7 @@ async fn cancel_cloud_sync(idx: usize) -> Result<String> {
 /// to finish before actually pulling the trigger, so our reply makes
 /// it back to bananas-webadmin before the network drops. The browser
 /// just sees a connection close shortly after the apply banner.
-async fn reboot_system() -> Result<String> {
+pub(crate) async fn reboot_system() -> Result<String> {
     let out = TokioCommand::new("systemctl")
         .arg("reboot")
         .stdout(Stdio::piped())

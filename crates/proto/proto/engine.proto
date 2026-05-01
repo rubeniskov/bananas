@@ -35,6 +35,13 @@ service EngineService {
   // Errors collapse to `Unauthenticated` with the same redaction
   // policy as Authenticate so callers can't probe usernames.
   rpc ChangeOwnPassword(ChangeOwnPasswordRequest) returns (ChangeOwnPasswordResponse);
+
+  // Schedule a system reboot via `systemctl reboot`. The reply
+  // returns synchronously — systemd waits for the reboot unit to
+  // run before pulling the trigger — so the caller can render an
+  // "applied" banner before the connection closes. Maps 1:1 to
+  // `Command::RebootSystem`.
+  rpc RebootSystem(RebootSystemRequest) returns (RebootSystemResponse);
 }
 
 message AuthenticateRequest {
@@ -61,4 +68,13 @@ message ChangeOwnPasswordResponse {
   // No structured reply needed — success is encoded in the gRPC
   // status itself. Reserved for future fields (e.g. the new
   // lastchg day count) without breaking the wire format.
+}
+
+message RebootSystemRequest {}
+
+message RebootSystemResponse {
+  // Captured stdout+stderr from `systemctl reboot` (typically a
+  // single "Reboot scheduled" line — kept verbatim so the UI can
+  // surface unit-failure detail if any).
+  string output = 1;
 }

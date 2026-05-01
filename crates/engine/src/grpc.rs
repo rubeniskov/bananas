@@ -10,11 +10,12 @@ use std::path::PathBuf;
 
 use bananas_proto::engine::v1::{
     AuthenticateRequest, AuthenticateResponse, ChangeOwnPasswordRequest, ChangeOwnPasswordResponse,
+    RebootSystemRequest, RebootSystemResponse,
     engine_service_server::{EngineService, EngineServiceServer},
 };
 use tonic::{Request, Response, Status};
 
-use crate::{authenticate, change_own_password, verify_shadow_password};
+use crate::{authenticate, change_own_password, reboot_system, verify_shadow_password};
 
 /// Engine gRPC service. Holds the same shadow path the
 /// newline-JSON dispatch threads through `Cx`.
@@ -71,6 +72,22 @@ impl EngineService for EngineGrpc {
             Err(e) => {
                 tracing::warn!(user=%body.username, error=%e, "change_own_password failed (gRPC)");
                 Err(Status::unauthenticated("invalid credentials"))
+            }
+        }
+    }
+
+    async fn reboot_system(
+        &self,
+        _req: Request<RebootSystemRequest>,
+    ) -> Result<Response<RebootSystemResponse>, Status> {
+        // Distinct from auth: failure here is a real systemd
+        // problem, not a security boundary, so we surface the
+        // captured stderr for the UI to render.
+        match reboot_system().await {
+            Ok(output) => Ok(Response::new(RebootSystemResponse { output })),
+            Err(e) => {
+                tracing::warn!(error=%e, "reboot_system failed (gRPC)");
+                Err(Status::internal(format!("reboot failed: {e}")))
             }
         }
     }
