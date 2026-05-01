@@ -207,7 +207,7 @@ cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/def
 #
 # Cargo's default progress bar is animated and looks ugly in a log file,
 # so we let `--verbose` print the per-crate "Compiling X" lines instead.
-cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --features slint-app --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/'"
+cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --bin bananas-dashboard --features slint-app --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/'"
 depends-on = ["setup-cross"]
 
 # --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
