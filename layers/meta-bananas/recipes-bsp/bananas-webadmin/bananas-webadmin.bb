@@ -1,10 +1,10 @@
-SUMMARY = "BanaNAS web admin: bananas-webadmin (HTTP UI) + bananas-engine (root)"
+SUMMARY = "BanaNAS web admin: bananas-webadmin (HTTP UI + embedded SPA) + bananas-engine (root)"
 DESCRIPTION = "Two prebuilt Rust binaries cross-compiled on the host with \
 cargo-zigbuild for armv7-unknown-linux-gnueabihf. The unprivileged HTTP daemon \
-listens on :8080, serves the wasm SPA from /usr/share/bananas/webadmin/ \
-(shipped by the sibling bananas-webadmin-ui package), and reaches the privileged \
-bananas-engine over a Unix socket for everything that needs root (NFS exports, \
-fstab, users, service configs, opkg upgrades, smartctl, lsblk, reboot). \
+listens on :8080, serves the wasm SPA out of bytes baked into its own binary \
+via include_dir!, and reaches the privileged bananas-engine over a Unix socket \
+for everything that needs root (NFS exports, fstab, users, service configs, \
+opkg upgrades, smartctl, lsblk, reboot). \
 Run `pixi run build-webadmin-arm` before `pixi run build` to stage the binaries \
 in serve/bin/."
 
@@ -20,9 +20,10 @@ inherit systemd useradd
 
 # Pull binaries from serve/bin/ (top-level repo path; COREBASE is poky/,
 # so ../serve/bin is correct) and the unit files from the local files/
-# dir. The wasm SPA bundle ships as its own bananas-webadmin-ui package
-# (RDEPENDS below) so SPA-only updates don't churn this IPK + restart
-# the HTTP daemon.
+# dir. The wasm SPA used to ship as a sibling bananas-webadmin-ui IPK;
+# it's now embedded directly in the daemon binary via include_dir!
+# (see crates/webadmin/build.rs + src/embedded.rs), so an opkg upgrade
+# of bananas-webadmin atomically rolls the daemon and its UI together.
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
 SRC_URI = "file://bananas-engine.service \
            file://bananas-webadmin.service \
@@ -46,12 +47,11 @@ INSANE_SKIP:${PN} += "arch already-stripped"
 SYSTEMD_SERVICE:${PN} = "bananas-engine.service bananas-webadmin.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
-# The HTTP daemon serves the SPA from /usr/share/bananas/webadmin/.
-# Pull bananas-webadmin-ui in transitively so installing this package
-# also installs the SPA bundle. Splitting the SPA into its own package
-# means SPA-only updates skip the daemon restart (ServeDir re-stats
-# files per request).
-RDEPENDS:${PN} += "bananas-webadmin-ui bananas-router"
+# The HTTP daemon now serves the SPA from bytes embedded directly in
+# its binary via include_dir!, so there's no separate -ui package to
+# RDEPENDS on any more. The router still proxies the public TCP port
+# down to this daemon's Unix socket.
+RDEPENDS:${PN} += "bananas-router"
 
 USERADD_PACKAGES = "${PN}"
 # `bananas`: the unprivileged service user.

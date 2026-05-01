@@ -17,19 +17,20 @@ use anyhow::Result;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::StatusCode,
     middleware::from_fn_with_state,
-    response::{Html, IntoResponse},
+    response::IntoResponse,
     routing::{delete, get, post, put},
 };
 use bananas_engine::{Command, Response as HelperResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 
 mod auth;
 mod config;
 mod dirs;
+mod embedded;
 mod exports;
 mod extensions;
 mod fstab;
@@ -123,23 +124,6 @@ async fn main() -> Result<()> {
     // Skips silently if /etc/bananas/system.toml already has a tz set.
     system::spawn_first_boot_geoip(state.clone());
 
-    let ui_dir: PathBuf = std::env::var_os("BANANAS_WEBADMIN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "/usr/share/bananas/webadmin".into());
-    let index_html_path = Arc::new(ui_dir.join("index.html"));
-
-    // Sanity-check at startup so we surface a missing file immediately
-    // (without the warning, the SPA would just 404 silently on the
-    // first page load). The actual read happens per request inside the
-    // fallback handler — see below.
-    if let Err(e) = std::fs::metadata(&*index_html_path) {
-        tracing::warn!(
-            path = %index_html_path.display(),
-            error = %e,
-            "UI index.html is not readable at startup — SPA fallback will 500 until it appears"
-        );
-    }
-
     // Public endpoints (login + healthz) and auth-required endpoints share
     // the same /api router. The middleware below permits the public ones
     // and 401s everything else without a valid session cookie.
@@ -200,58 +184,15 @@ async fn main() -> Result<()> {
         .route_layer(from_fn_with_state(state.clone(), auth::require_session))
         .with_state(state);
 
-    // Mount /assets/* as a ServeDir. Two perf knobs:
-    //   1. .precompressed_br() / .precompressed_gzip() — when a `.br`
-    //      or `.gz` companion file sits next to a regular asset and
-    //      the client advertises Accept-Encoding, the precompressed
-    //      blob is sent as-is. The build-webadmin pixi task creates
-    //      these companions; the wasm shrinks ~3×.
-    //   2. Cache-Control: immutable + 1y max-age. Safe because dx-cli
-    //      hash-suffixes every asset filename (e.g.
-    //      `bananas-webadmin_bg-dxh6a6811895f9a3f7.wasm`), so any
-    //      content change ships under a new URL. Repeat page loads
-    //      drop to a single round-trip for index.html.
-    let assets = ServeDir::new(ui_dir.join("assets"))
-        .precompressed_br()
-        .precompressed_gzip();
-
+    // Serve the SPA bundle from bytes embedded in this binary.
+    // `build.rs` ran `dx build --bin bananas-webadmin-ui` and staged
+    // the output (with .br / .gz companions) under $OUT_DIR/ui/, which
+    // `embedded.rs` pulls in via include_dir!. Asset URLs that hit
+    // the embedded tree directly get an immutable Cache-Control;
+    // SPA deep-links fall back to index.html (no-cache).
     let app = Router::new()
         .nest("/api", api)
-        .nest_service(
-            "/assets",
-            tower::ServiceBuilder::new()
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static("public, max-age=31536000, immutable"),
-                ))
-                .service(assets),
-        )
-        // Read index.html per request so a `bananas-webadmin` IPK
-        // upgrade is picked up without restarting bananas-webadmin. The
-        // file is small (<1 KB after dx bundle) and the fallback is
-        // hit only on full-page loads / unmatched routes — never on
-        // hashed assets, which ServeDir handles directly. Still much
-        // cheaper than the cost of restarting the server.
-        .fallback(get(move || {
-            let path = index_html_path.clone();
-            async move {
-                match tokio::fs::read_to_string(&*path).await {
-                    Ok(html) => (
-                        StatusCode::OK,
-                        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                        Html(html),
-                    ),
-                    Err(e) => {
-                        tracing::warn!(path = %path.display(), error = %e, "SPA fallback read failed");
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                            Html(String::from("UI bundle missing on disk")),
-                        )
-                    }
-                }
-            }
-        }))
+        .fallback(get(serve_ui))
         .layer(TraceLayer::new_for_http());
 
     // Listen on a Unix socket if BANANAS_WEBADMIN_SOCKET is set; otherwise
@@ -275,13 +216,13 @@ async fn main() -> Result<()> {
         // process has access via filesystem permissions.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
-        tracing::info!(socket = %path.display(), ui = %ui_dir.display(), "listening (unix)");
+        tracing::info!(socket = %path.display(), "listening (unix)");
         axum::serve(listener, app).await?;
     } else {
         let addr: SocketAddr = std::env::var("BANANAS_LISTEN_ADDR")
             .unwrap_or_else(|_| "0.0.0.0:8080".into())
             .parse()?;
-        tracing::info!(%addr, ui=%ui_dir.display(), "listening (tcp)");
+        tracing::info!(%addr, "listening (tcp)");
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;
     }
@@ -870,4 +811,14 @@ async fn get_browse(Query(p): Query<BrowseParams>) -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+/// Fallback handler — anything not matched by `/api/*` falls through
+/// here, which means it's a static-asset or SPA-route request.
+/// `embedded::serve` resolves the path against the in-binary tree and
+/// picks the right content-encoding variant; webadmin mounts at `/`,
+/// so we hand the URI through unchanged.
+async fn serve_ui(req: axum::extract::Request) -> axum::response::Response {
+    let path = req.uri().path().to_string();
+    embedded::serve(&path, &req)
 }

@@ -633,8 +633,16 @@ dependencies = [
  "bananas-server-common",
  "bananas-stats",
  "base64",
+ "console_error_panic_hook",
+ "dioxus",
+ "fs_extra",
+ "futures",
  "futures-util",
+ "gloo-net",
+ "gloo-timers",
  "hmac",
+ "include_dir",
+ "js-sys",
  "libc",
  "rand 0.9.4",
  "serde",
@@ -647,22 +655,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "bananas-webadmin-ui"
-version = "1.4.0"
-dependencies = [
- "console_error_panic_hook",
- "dioxus",
- "futures",
- "gloo-net",
- "gloo-timers",
- "js-sys",
- "serde",
- "serde_json",
- "toml 1.1.2+spec-1.1.0",
- "tracing",
  "tracing-wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",
