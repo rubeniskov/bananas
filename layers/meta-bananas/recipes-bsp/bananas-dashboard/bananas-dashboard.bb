@@ -22,11 +22,11 @@ SRC_URI = "file://bananas-dashboard \
 
 S = "${WORKDIR}"
 
-# Slint LCD app is bananapro-only. The RPi target uses
+# Slint LCD app is bananas-bpi-only. The RPi target uses
 # bananas-dashboard-web (the SPA daemon) for the same data set; an
 # aarch64 cross-build of Slint + fontconfig sysroot is a v2.1 follow-up
 # (Cross.toml only has the armv7 multiarch entries today).
-COMPATIBLE_MACHINE = "(bananapro)"
+COMPATIBLE_MACHINE = "(bananas-bpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 

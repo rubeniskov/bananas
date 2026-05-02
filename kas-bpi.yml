@@ -3,7 +3,11 @@ header:
   includes:
     - kas-base.yml
 
-machine: bananapro
+# Banana Pro (BPI-M1+ / sun7i-a20) overlay. MACHINE name `bananas-bpi`
+# mirrors the `bananas-rpi` unified-RPi MACHINE — both are bananas-flavour
+# names that point at our own conf/machine/ files (no name clash with
+# meta-sunxi, which only ships `bananapi`).
+machine: bananas-bpi
 
 repos:
   meta-sunxi:
@@ -13,10 +17,10 @@ repos:
       .:
 
 local_conf_header:
-  bananapro-image: |
+  bananas-bpi-image: |
     # Output an SD-card-flashable wic image alongside the rootfs tarball.
-    # The release pipeline tars the .wic into bananas-image-armv7.tar.gz
-    # so operators get one consistent .tar.gz format across every release
+    # The release pipeline tars the .wic into bananas-image-bpi.tar.gz so
+    # operators get one consistent .tar.gz format across every release
     # asset; the rootfs tar.gz itself stays around for the iterate loop's
     # NFS netboot path.
     IMAGE_FSTYPES = "wic tar.gz"

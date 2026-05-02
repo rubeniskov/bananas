@@ -37,8 +37,8 @@ pixi run build      # full Yocto bake (≈30 min cold cache)
 
 The deliverables land at:
 
-- `build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz` — rootfs only, used by the iterate loop's NFS netboot path.
-- `build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.wic` — full SD-card image (U-Boot SPL + boot partition + rootfs), `dd`-able.
+- `build/tmp/deploy/images/bananas-bpi/bananas-image-bananas-bpi.rootfs.tar.gz` — rootfs only, used by the iterate loop's NFS netboot path.
+- `build/tmp/deploy/images/bananas-bpi/bananas-image-bananas-bpi.rootfs.wic` — full SD-card image (U-Boot SPL + boot partition + rootfs), `dd`-able.
 
 The build is reproducible if you keep `Cargo.lock` and the layer pins in `kas.yml` unchanged.
 

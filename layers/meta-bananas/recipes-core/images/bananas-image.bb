@@ -226,7 +226,7 @@ IMAGE_INSTALL += " \
 # the kernel spams "brcmfmac: F1 signature read fail" + retries every few
 # seconds at boot. RPi targets ship the firmware via meta-raspberrypi's
 # linux-firmware-rpidistro-bcm43* packages and do NOT want this blacklist.
-IMAGE_INSTALL:append:bananapro = " bananas-modprobe"
+IMAGE_INSTALL:append:bananas-bpi = " bananas-modprobe"
 
 # Optional CIFS/Samba (comment in if needed)
 # IMAGE_INSTALL += " samba samba-client cifs-utils"

@@ -82,7 +82,7 @@ The two-pass `pixi run build` (`bitbake -c rootfs -f bananas-image && bitbake ba
 
 ### Where the bake fails most often
 
-- **Provider conflicts** (`Nothing PROVIDES virtual/X`): something flips a `PREFERRED_PROVIDER` based on `MACHINEOVERRIDES`. Check `bananapro.conf` order — overrides set *after* `require sun7i.inc` won't propagate to includes inside that require chain.
+- **Provider conflicts** (`Nothing PROVIDES virtual/X`): something flips a `PREFERRED_PROVIDER` based on `MACHINEOVERRIDES`. Check `bananas-bpi.conf` order — overrides set *after* `require sun7i.inc` won't propagate to includes inside that require chain.
 - **Patch-status QA** (`Missing Upstream-Status in patch`): every patch in `SRC_URI` needs `Upstream-Status: …` in the header. Use `Inappropriate [<reason>]` for repo-specific changes.
 - **`file-rdeps`**: a binary's NEEDED entry has no provider in `RDEPENDS`. Yocto's package names sometimes have SONAME suffixes (`libdrm` → no, `libdrm` is the package name; the file is `libdrm2.ipk`). Read `build/tmp/deploy/ipk/<machine>/` if unsure what's actually built.
 
@@ -149,10 +149,10 @@ Co-authored-by trailers are encouraged when the change is collaborative.
 
 ## Hardware target
 
-This repo is **specifically scoped to the LeMaker BananaPro / BPI-M1+ (Allwinner A20)**. PRs that introduce another machine config are welcome but should keep the bananapro path the canonical one:
+This repo currently bakes two MACHINEs: `bananas-bpi` (LeMaker BananaPro / BPI-M1+ — Allwinner A20, armv7) and `bananas-rpi` (unified Raspberry Pi 3/4/5 — aarch64). PRs that introduce another machine config are welcome but should keep both existing paths green:
 
-- New `MACHINE_FEATURES` should be guarded behind a machine override that doesn't fire on `bananapro`.
-- New per-machine recipes should `COMPATIBLE_MACHINE = "(bananapro|<your-machine>)"`.
+- New `MACHINE_FEATURES` should be guarded behind a machine override that doesn't fire on `bananas-bpi` / `bananas-rpi` unless explicitly intended.
+- New per-machine recipes should widen `COMPATIBLE_MACHINE = "(bananas-bpi|bananas-rpi|<your-machine>)"`.
 
 ---
 

@@ -190,7 +190,7 @@ jobs:
         run: scripts/bump-cargo-version.sh ${{ steps.nextver.outputs.next }}
 
       # ─── Build all the artifacts the release will publish ─────────
-      # Two cross-compile sweeps in sequence: armv7 for the bananapro
+      # Two cross-compile sweeps in sequence: armv7 for the bananas-bpi
       # bake, aarch64 for the bananas-rpi bake. Each produces every
       # daemon (webadmin, engine, router, cloud, exports, storage,
       # users, stats-web, dashboard-web) via cargo-zigbuild and stages
@@ -203,19 +203,19 @@ jobs:
           rustup target add aarch64-unknown-linux-gnu
           rustup target add wasm32-unknown-unknown
 
-      - name: build-webadmin-arm (bananapro / armv7)
+      - name: build-webadmin-arm (bananas-bpi / armv7)
         run: pixi run build-webadmin-arm
 
-      - name: build-stats-arm (bananapro / armv7)
+      - name: build-stats-arm (bananas-bpi / armv7)
         run: pixi run build-stats-arm
 
       # cross-rs needs Docker; ubuntu-latest has it preinstalled.
-      # bananas-dashboard (Slint) is bananapro-only; aarch64 sysroot
+      # bananas-dashboard (Slint) is bananas-bpi-only; aarch64 sysroot
       # work for Slint is a v2.1 follow-up.
-      - name: build-dashboard-arm (bananapro / armv7)
+      - name: build-dashboard-arm (bananas-bpi / armv7)
         run: pixi run build-dashboard-arm
 
-      - name: build-config-arm (bananapro / armv7)
+      - name: build-config-arm (bananas-bpi / armv7)
         run: pixi run build-config-arm
 
       - name: build-webadmin-arm64 (bananas-rpi / aarch64)
@@ -231,7 +231,7 @@ jobs:
       # The bananas-rclone.bb recipe's FILESEXTRAPATHS pulls from there;
       # without these the bake fails with "Unable to get checksum for
       # bananas-rclone SRC_URI entry rclone: file could not be found".
-      - name: setup-rclone-arm (bananapro / armv7)
+      - name: setup-rclone-arm (bananas-bpi / armv7)
         run: pixi run setup-rclone-arm
 
       - name: setup-rclone-arm64 (bananas-rpi / aarch64)
@@ -259,13 +259,13 @@ jobs:
       # the web UI on first boot.
       #
       # Two bakes per release run, sharing one sstate cache:
-      #   1. bananapro (kas.yml → kas-bananapro.yml) — armv7 SD-card image
+      #   1. bananas-bpi (kas-bpi.yml) — armv7 SD-card image
       #   2. bananas-rpi (kas-rpi.yml) — unified RPi 3/4/5 image
       # tmp/deploy/images/<MACHINE>/ is per-machine, so neither overwrites
-      # the other. Bake order is bananapro first because its IPK feed
+      # the other. Bake order is bananas-bpi first because its IPK feed
       # populates the cortexa7t2hf-neon dir that several downstream
       # steps grep for.
-      - name: Bake Yocto image (bananapro)
+      - name: Bake Yocto image (bananas-bpi)
         run: pixi run build
 
       - name: Bake Yocto image (bananas-rpi)
@@ -300,12 +300,12 @@ jobs:
           # `--transform` strips the `.rootfs` infix so the extracted
           # file has a clean dd-friendly name. Operator workflow on the
           # receiving side:
-          #   tar -xzf bananas-image-bananapro.tar.gz
-          #   sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
-          tar -czhf dist/bananas-image-bananapro.tar.gz \
-              --transform 's,^bananas-image-bananapro.rootfs.wic$,bananas-image-bananapro.wic,' \
-              -C build/tmp/deploy/images/bananapro \
-              bananas-image-bananapro.rootfs.wic
+          #   tar -xzf bananas-image-bpi.tar.gz
+          #   sudo dd if=bananas-image-bpi.wic of=/dev/sdX bs=4M status=progress conv=fsync
+          tar -czhf dist/bananas-image-bpi.tar.gz \
+              --transform 's,^bananas-image-bananas-bpi.rootfs.wic$,bananas-image-bpi.wic,' \
+              -C build/tmp/deploy/images/bananas-bpi \
+              bananas-image-bananas-bpi.rootfs.wic
 
           # bananas-rpi uses the rpi-sdimg image type (separate FAT
           # firmware partition + ext4 rootfs, laid out the way RPi's
@@ -354,7 +354,7 @@ jobs:
 
           mkdir -p feed-publish/feed/latest
           PKGS="bananas-webadmin bananas-router bananas-engine bananas-cloud bananas-exports bananas-storage bananas-users bananas-stats bananas-stats-web bananas-dashboard bananas-dashboard-web bananas-config bananas-feed-config bananas-modprobe bananas-rclone"
-          for arch in all bananapro bananas-rpi cortexa7t2hf-neon cortexa53; do
+          for arch in all bananas-bpi bananas-rpi cortexa7t2hf-neon cortexa53; do
             src="build/tmp/deploy/ipk/$arch"
             [ -d "$src" ] || continue
             dst="feed-publish/feed/latest/$arch"

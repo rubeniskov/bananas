@@ -19,7 +19,7 @@ SRC_URI = "file://bananas-dashboard-web.service \
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro|bananas-rpi)"
+COMPATIBLE_MACHINE = "(bananas-bpi|bananas-rpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 
