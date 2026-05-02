@@ -35,8 +35,8 @@ SRC_URI = "file://bananas-engine.service \
 S = "${WORKDIR}"
 
 # These binaries are armv7-unknown-linux-gnueabihf — only valid for the
-# bananapro machine.
-COMPATIBLE_MACHINE = "(bananapro|bananas-rpi)"
+# bananas-bpi machine.
+COMPATIBLE_MACHINE = "(bananas-bpi|bananas-rpi)"
 
 # The release binaries are already stripped by zig; QA pass would strip
 # again, then complain. Skip the strip + the arch check (Yocto's `file`

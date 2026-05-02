@@ -126,14 +126,14 @@ Slint app rendered on the 5″ RGB panel — CPU + memory bars in the header, ne
 
 ### 1. Grab the SD image
 
-Head to the [latest release](https://github.com/rubeniskov/bananas/releases/latest) and download `bananas-image-armv7.tar.gz`. That tarball wraps a single `.wic` file ready to be `dd`-ed straight onto a card — U-Boot SPL, kernel, dtb, and rootfs all baked in.
+Head to the [latest release](https://github.com/rubeniskov/bananas/releases/latest) and download `bananas-image-bpi.tar.gz`. That tarball wraps a single `.wic` file ready to be `dd`-ed straight onto a card — U-Boot SPL, kernel, dtb, and rootfs all baked in.
 
 ### 2. Flash it
 
 Find your SD device (replace `/dev/sdX` below — `lsblk` will show it under the right size). One-liner that streams straight from the tarball into `dd`, no intermediate `.wic` file:
 
 ```bash
-tar -xzOf bananas-image-armv7.tar.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync && sync
+tar -xzOf bananas-image-bpi.tar.gz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync && sync
 ```
 
 `-O` makes `tar` extract to stdout; `dd` reads it from stdin. Saves ~575 MB of disk on the host and is the same throughput as the two-step version.
@@ -143,8 +143,8 @@ tar -xzOf bananas-image-armv7.tar.gz | sudo dd of=/dev/sdX bs=4M status=progress
 If you'd rather verify the inner `.wic` before flashing (or you want to keep a copy on disk):
 
 ```bash
-tar -xzf bananas-image-armv7.tar.gz
-sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
+tar -xzf bananas-image-bpi.tar.gz
+sudo dd if=bananas-image-bpi.wic of=/dev/sdX bs=4M status=progress conv=fsync
 sync
 ```
 
@@ -155,13 +155,13 @@ Insert the card, plug in Ethernet, power on. The first boot:
 - U-Boot shows the BanaNAS splash on the LCD if one is attached.
 - A psplash progress bar covers the kernel → userspace handoff.
 - The rootfs auto-grows to fill the rest of the SD card (one-time, NFS netboots are skipped automatically).
-- mDNS publishes the box as `bananapro.local` via avahi.
+- mDNS publishes the box as `bananas-bpi.local` via avahi.
 
-Find the LAN IP via `ping bananapro.local` or your router's DHCP table.
+Find the LAN IP via `ping bananas-bpi.local` or your router's DHCP table.
 
 ### 4. Sign in to the web admin
 
-Browse to **`http://bananapro.local:8080/`** (or the IP). First sign-in is **`root` / `bananas`**, the placeholder credential the image ships with. The login form immediately bounces you into a "Set a new password to continue" screen — the placeholder stops working the moment you rotate it. After rotation:
+Browse to **`http://bananas-bpi.local:8080/`** (or the IP). First sign-in is **`root` / `bananas`**, the placeholder credential the image ships with. The login form immediately bounces you into a "Set a new password to continue" screen — the placeholder stops working the moment you rotate it. After rotation:
 
 1. **Mount points** tab → add fstab entries for any SATA / USB disk you have plugged in. The image ships with no defaults; the UI handles `mkdir`, fstab edit, and `systemctl daemon-reload`.
 2. **Exports** tab → declare which paths to share over NFS and to what client / CIDR. Same deal — the image ships an empty `/etc/exports`, the UI rewrites it via the privileged helper.
@@ -174,7 +174,7 @@ Browse to **`http://bananapro.local:8080/`** (or the IP). First sign-in is **`ro
 The default image stays lean and ships only the NAS-essentials. The rest of the `bananas-*` plugin set is in the public opkg feed and installs in seconds:
 
 ```bash
-ssh root@bananapro.local
+ssh root@bananas-bpi.local
 opkg update
 opkg install bananas-cloud           # Google Drive / Dropbox / S3 sync (pulls bananas-rclone)
 opkg install bananas-dashboard       # Slint LCD app + per-tab web SPA
@@ -241,7 +241,7 @@ flowchart LR
 
 | Layer | Priority | What's there |
 |-------|----------|--------------|
-| `meta-bananas` (this repo) | 8 | Distro `bananas`, machine `bananapro`, all the BanaNAS-specific recipes (server, helper, stats, dashboard, modprobe blacklist, U-Boot splash, psplash override, mesa-gl x11-strip bbappend, …). |
+| `meta-bananas` (this repo) | 8 | Distro `bananas`, machine `bananas-bpi`, all the BanaNAS-specific recipes (server, helper, stats, dashboard, modprobe blacklist, U-Boot splash, psplash override, mesa-gl x11-strip bbappend, …). |
 | `meta-sunxi` | 10 | Allwinner BSP — kernel patches, U-Boot defconfig, machine fragments. |
 | `meta-openembedded/{meta-oe,meta-python,meta-networking,meta-filesystems}` | 6 | Recipes for `ttf-dejavu`, runtime libs, fonts, … |
 | `meta-arm` | 5 | ARM-specific bits. |

@@ -114,7 +114,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - machine: bananapro
+          - machine: bananas-bpi
             tune: cortexa7t2hf-neon
             rust_target: armv7-unknown-linux-gnueabihf
             elf_grep: "ARM"           # `file` prints "ARM, EABI5..." for armv7

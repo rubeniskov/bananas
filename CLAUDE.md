@@ -83,7 +83,7 @@ kas shell kas.yml -c 'bitbake -c <task> <recipe>'    # single task: cleansstate,
 
 `kas.yml` is the single source of truth for layer composition. It pins:
 
-- **machine**: `bananapro` (defined in this repo at `layers/meta-bananas/conf/machine/bananapro.conf`). meta-sunxi only ships a `bananapi` machine which targets the original M1 with a different DTB (`sun7i-a20-bananapi.dtb`); our config requires the BPI-M1+ DTB (`sun7i-a20-bananapro.dtb`) and U-Boot config (`Bananapro_defconfig`) to drive the onboard SDIO WiFi, the LCD, and other Pro-specific peripherals.
+- **machine**: `bananas-bpi` (defined in this repo at `layers/meta-bananas/conf/machine/bananas-bpi.conf`). The MACHINE name `bananas-bpi` mirrors the `bananas-rpi` unified-RPi MACHINE — both are bananas-flavour names that the kas overlays select (`kas-bpi.yml` / `kas-rpi.yml`). meta-sunxi only ships a `bananapi` machine which targets the original M1 with a different DTB (`sun7i-a20-bananapi.dtb`); our config requires the BPI-M1+ DTB (`sun7i-a20-bananapro.dtb`) and U-Boot config (`Bananapro_defconfig`) to drive the onboard SDIO WiFi, the LCD, and other Pro-specific peripherals.
 - **distro**: `bananas` (defined in this repo at `layers/meta-bananas/conf/distro/bananas.conf`)
 - **target**: `bananas-image`
 - Upstream layers locked to the `scarthgap` Yocto release.
@@ -100,7 +100,7 @@ Layout:
 - `conf/distro/bananas.conf` — distro definition; inherits `poky.conf` and selects systemd + NFS/SSH/IPv6/zeroconf/opengl features.
 - `recipes-core/images/bananas-image.bb` — the image recipe. `IMAGE_INSTALL` is the canonical list of what ships on the SD card (NFS/rpcbind, avahi, openssh, mdadm/hdparm/smartmontools, etc.). Samba is intentionally commented out.
 - `recipes-devtools/` (elfutils, pseudo) and `recipes-kernel/dtc/` — host-toolchain `.bbappend` files that patch upstream native recipes so the build survives modern host toolchains (GCC 14+, glibc with `openat2`). Examples: `elfutils_0.191.bbappend`, `pseudo_git.bbappend`, `dtc_1.7.0.bbappend`. These all use `do_compile:prepend:class-native()` to rewrite sources before the host-side compile and target only `class-native` builds — do not promote them to target builds without justification.
-- `recipes-kernel/linux/linux-mainline_%.bbappend` — appends a `SRC_URI:append:bananapro` listing two patches and a kernel config fragment (under `files/`) for our hardware:
+- `recipes-kernel/linux/linux-mainline_%.bbappend` — appends a `SRC_URI:append:bananas-bpi` listing two patches and a kernel config fragment (under `files/`) for our hardware:
   - `0001-bananapro-cpu-clock.patch` adds `clock-frequency = <912000000>` on cpu@0 / cpu@1 (silences `missing clock-frequency property` warning, populates `cpu_capacity`).
   - `0002-bananapro-lcd-panel.patch` enables the 5" 800×480 BL050-RGB-002 panel: sets `&de` (display-engine) `status = "okay"` (CRITICAL — sun7i-a20.dtsi ships it disabled, without this DRM master never instantiates), wires `lcd0_rgb888_pins` (PD0..PD27) into tcon0, creates `lcd_panel` (panel-dpi with explicit panel-timing + `bus-format = <0x100a>` for MEDIA_BUS_FMT_RGB888_1X24) and `lcd_backlight` (pwm-backlight on PB2/PWM0 + PH8 enable; panel power on PH12).
   - `drm-sun4i.cfg` turns on `CONFIG_DRM`, `CONFIG_DRM_SUN4I*`, `CONFIG_DRM_PANEL_SIMPLE`, `CONFIG_DRM_PANEL_DPI`, `CONFIG_BACKLIGHT_PWM`, `CONFIG_PWM_SUN4I` (the upstream sunxi defconfig is headless — none of these are on by default).
@@ -144,7 +144,7 @@ opkg install bananas-dashboard       # Slint LCD app + bananas-dashboard-web (we
 
 Each plugin's postinst restarts `bananas-router` + `bananas-webadmin` so the new manifest is picked up; the matching tab appears in the SPA without a reboot. The same `customfeeds.conf` ships on every supported board (Banana Pro armv7, RPi-unified aarch64) — opkg silently 404s on the per-arch entries that don't apply to the running system, so the file stays board-agnostic.
 
-`bananas-modprobe` (the brcmfmac blacklist for the missing BPI WiFi firmware) is `IMAGE_INSTALL:append:bananapro` — only the BPI bake pulls it in. RPi targets ship the firmware via meta-raspberrypi's `linux-firmware-rpidistro-bcm43*` packages and do NOT want the blacklist.
+`bananas-modprobe` (the brcmfmac blacklist for the missing BPI WiFi firmware) is `IMAGE_INSTALL:append:bananas-bpi` — only the BPI bake pulls it in. RPi targets ship the firmware via meta-raspberrypi's `linux-firmware-rpidistro-bcm43*` packages and do NOT want the blacklist.
 
 ## Conventions
 

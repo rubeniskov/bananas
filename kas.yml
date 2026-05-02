@@ -1,12 +1,12 @@
 header:
   version: 14
   includes:
-    - kas-bananapro.yml
+    - kas-bpi.yml
 
 # Backwards-compatibility shim. Every script and doc that references
 # `kas.yml` keeps working — kas resolves the includes chain to the
 # Banana Pro overlay (which in turn pulls in kas-base.yml).
 #
 # To bake a different board, point kas at its overlay directly:
-#   kas build kas-rpi.yml          # RPi 3 / 4 / 5 unified image
-#   kas build kas-bananapro.yml    # explicit Banana Pro
+#   kas build kas-rpi.yml    # RPi 3 / 4 / 5 unified image
+#   kas build kas-bpi.yml    # explicit Banana Pro (BPI-M1+ / sun7i-a20)

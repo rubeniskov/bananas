@@ -22,7 +22,7 @@ info = "python --version && kas --version"
 # sstate still convinces bitbake the deploy step is done: the image's
 # WORKDIR is preserved by RM_WORK_EXCLUDE in kas.yml, so we can copy from
 # there if deploy/ is missing the tarball.
-# `build`: full Yocto image bake. Runs `kas build kas.yml` twice — first
+# `build`: full Yocto image bake. Runs `kas build kas-bpi.yml` twice — first
 # to force `do_rootfs`, then a second pass for image-complete deps.
 #
 # `set -e` is the load-bearing bit here: bitbake QA failures (e.g. a
@@ -42,14 +42,14 @@ info = "python --version && kas --version"
 cmd = """bash -c '
 set -e
 set -a; [ -f .env ] && . .env; set +a
-kas build kas.yml -- -c rootfs -f bananas-image
-kas build kas.yml
-ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz
-WORK_LATEST=$(ls -t build/tmp/work/bananapro-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/bananas-image-bananapro.rootfs-*.tar.gz 2>/dev/null | head -1)
+kas build kas-bpi.yml -- -c rootfs -f bananas-image
+kas build kas-bpi.yml
+ROOTFS=build/tmp/deploy/images/bananas-bpi/bananas-image-bananas-bpi.rootfs.tar.gz
+WORK_LATEST=$(ls -t build/tmp/work/bananas-bpi-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/bananas-image-bananas-bpi.rootfs-*.tar.gz 2>/dev/null | head -1)
 if [ -n \"$WORK_LATEST\" ]; then
   if [ ! -f \"$ROOTFS\" ] || [ \"$WORK_LATEST\" -nt \"$ROOTFS\" ]; then
     echo \"deploy/ tarball stale or missing — copying from work/\"
-    mkdir -p build/tmp/deploy/images/bananapro
+    mkdir -p build/tmp/deploy/images/bananas-bpi
     cp -f \"$WORK_LATEST\" \"$ROOTFS\"
   fi
 fi
@@ -212,7 +212,7 @@ cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin \\
 # serve/bin/cortexa53 (matches the bananas-rpi MACHINE's TUNE_PKGARCH —
 # cortexa53 is the lowest common ARMv8 baseline for RPi 3/4/5).
 # bananas-dashboard (Slint) is intentionally absent: the LCD app is
-# bananapro-only and aarch64 fontconfig sysroot work is a v2.1 follow-up.
+# bananas-bpi-only and aarch64 fontconfig sysroot work is a v2.1 follow-up.
 [tasks.build-webadmin-arm64]
 depends-on = ["setup-dx"]
 cmd = """bash -c '
@@ -294,7 +294,7 @@ depends-on = ["setup-cross"]
 # Docker container. The `build` task is supposed to guarantee this; this
 # guard is just a belt-and-suspenders.
 [tasks.serve-tftp]
-cmd = "bash -c 'set -e; ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz; [ -f \"$ROOTFS\" ] || { echo \"ERROR: rootfs missing at $ROOTFS — build/recovery did not populate it. Try: pixi run build (which forces image_complete and falls back to copying from work/).\" >&2; exit 1; }; mkdir -p serve/tftp && rm -f serve/tftp/* && cp -L build/tmp/deploy/images/bananapro/uImage build/tmp/deploy/images/bananapro/sun7i-a20-bananapro.dtb serve/tftp/'"
+cmd = "bash -c 'set -e; ROOTFS=build/tmp/deploy/images/bananas-bpi/bananas-image-bananas-bpi.rootfs.tar.gz; [ -f \"$ROOTFS\" ] || { echo \"ERROR: rootfs missing at $ROOTFS — build/recovery did not populate it. Try: pixi run build (which forces image_complete and falls back to copying from work/).\" >&2; exit 1; }; mkdir -p serve/tftp && rm -f serve/tftp/* && cp -L build/tmp/deploy/images/bananas-bpi/uImage build/tmp/deploy/images/bananas-bpi/sun7i-a20-bananapro.dtb serve/tftp/'"
 
 # `extract-rootfs`: unpack the rootfs tarball into ./serve/nfs/bananas/ as root via a throwaway alpine container.
 # `--userns=host` is required because the daemon has userns-remap enabled — without it, container UID 0 maps to host
@@ -306,7 +306,7 @@ cmd = "bash -c 'set -e; ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-b
 # daemon. Switch contexts with `docker context use default` if `docker ps`
 # reports your TFTP/NFS containers missing.
 [tasks.extract-rootfs]
-cmd = "mkdir -p serve/nfs/bananas && docker run --rm --userns=host -v $PIXI_PROJECT_ROOT/build/tmp/deploy/images/bananapro:/build:ro -v $PIXI_PROJECT_ROOT/serve/nfs/bananas:/dst alpine sh -c 'rm -rf /dst/* /dst/.[!.]*; tar -xzf /build/bananas-image-bananapro.rootfs.tar.gz -C /dst'"
+cmd = "mkdir -p serve/nfs/bananas && docker run --rm --userns=host -v $PIXI_PROJECT_ROOT/build/tmp/deploy/images/bananas-bpi:/build:ro -v $PIXI_PROJECT_ROOT/serve/nfs/bananas:/dst alpine sh -c 'rm -rf /dst/* /dst/.[!.]*; tar -xzf /build/bananas-image-bananas-bpi.rootfs.tar.gz -C /dst'"
 
 # `serve`: republish artifacts and (re)start the TFTP+NFS containers.
 # Note: serve does *not* extract-rootfs anymore — that has to happen while the
@@ -345,20 +345,20 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; echo waiting for $host to power down...; for i in $(seq 1 120); do ping -c 1 -W 1 \"$host\" > /dev/null 2>&1 || { echo $host is down; exit 0; }; sleep 1; done; echo \"ERROR: $host did not go down within 120s — likely the ssh-reboot did not fire (board already wedged). Hard power-cycle the board, then re-run pixi run iterate.\" >&2; exit 1'"
 
 # `build-rpi`: bake the unified RPi image. Uses kas-rpi.yml as the
-# top-level config so the bananapro shim (kas.yml → kas-bananapro.yml)
+# top-level config so the bananas-bpi shim (kas.yml → kas-bpi.yml)
 # stays untouched. The wic lands at
 # build/tmp/deploy/images/bananas-rpi/bananas-image-bananas-rpi.rootfs.wic
 [tasks.build-rpi]
 cmd = "kas build kas-rpi.yml"
 
-# `iterate-bananapro`: original iterate flow, now explicitly named.
-# Cross-builds armv7 binaries, runs the bananapro Yocto bake (kas.yml
-# → kas-bananapro.yml), then the TFTP/NFS netboot dance.
-[tasks.iterate-bananapro]
+# `iterate-bpi`: original iterate flow, now explicitly named.
+# Cross-builds armv7 binaries, runs the bananas-bpi Yocto bake
+# (kas-bpi.yml), then the TFTP/NFS netboot dance.
+[tasks.iterate-bpi]
 cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
 
 # `iterate-rpi`: cross-build aarch64 binaries → build the unified RPi
-# image → print SD-flash instructions. Unlike iterate-bananapro, the
+# image → print SD-flash instructions. Unlike iterate-bpi, the
 # RPi flow does NOT use TFTP/NFS netboot in v1 — RPi's firmware boot
 # path differs from sun7i U-Boot enough that wiring it up is its own
 # v2.1 follow-up. Operators flash the wic onto an SD card with the
@@ -387,19 +387,19 @@ echo
 echo "Boots on Raspberry Pi 3, 4, and 5 — the on-board boot.scr picks the right DTB at runtime."
 '"""
 
-# `iterate`: top-level dispatcher. Routes to iterate-bananapro or
-# iterate-rpi based on $BANANAS_MACHINE (default: bananapro). Existing
+# `iterate`: top-level dispatcher. Routes to iterate-bpi or
+# iterate-rpi based on $BANANAS_MACHINE (default: bananas-bpi). Existing
 # operators who run `pixi run iterate` keep the original BPI flow
 # unchanged.
 [tasks.iterate]
 cmd = """bash -c '
 set -e
-machine=${BANANAS_MACHINE:-bananapro}
+machine=${BANANAS_MACHINE:-bananas-bpi}
 case "$machine" in
-    bananapro)    pixi run iterate-bananapro ;;
+    bananas-bpi)  pixi run iterate-bpi ;;
     bananas-rpi)  pixi run iterate-rpi ;;
     *)
-        echo "ERROR: unknown BANANAS_MACHINE=$machine — supported: bananapro, bananas-rpi" >&2
+        echo "ERROR: unknown BANANAS_MACHINE=$machine — supported: bananas-bpi, bananas-rpi" >&2
         exit 1
         ;;
 esac
