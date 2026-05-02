@@ -1,12 +1,12 @@
 Package: bananas-config
-Version: 1.4.1-r0
+Version: 1.5.0-r0
 Depends: libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
 Architecture: cortexa7t2hf-neon
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 33def58586e678010326ee6321eef173
-Size: 692148
-Filename: bananas-config_1.4.1-r0_cortexa7t2hf-neon.ipk
+MD5Sum: 2611116f611e6f4280bd41222967d77f
+Size: 1035480
+Filename: bananas-config_1.5.0-r0_cortexa7t2hf-neon.ipk
 Source: bananas-config.bb
 Description: BanaNAS operator console (TUI + CLI)
 OE: bananas-config
@@ -15,14 +15,14 @@ Priority: optional
 
 
 Package: bananas-dashboard
-Version: 1.4.1-r0
+Version: 1.5.0-r0
 Depends: bananas-stats, fontconfig, kernel-module-lima, libc6 (>= 2.39+git0+ce65d944e3), libdrm, libegl, libgbm, libgcc1 (>= 13.4.0), libgles2, libinput, libudev, libxkbcommon, mesa-megadriver, ttf-dejavu-sans
 Section: base
 Architecture: cortexa7t2hf-neon
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 4944f33a7e01c472cfd0ba3cbf857c68
-Size: 3246780
-Filename: bananas-dashboard_1.4.1-r0_cortexa7t2hf-neon.ipk
+MD5Sum: 0c84687941bfa7e69d02131863462733
+Size: 3233538
+Filename: bananas-dashboard_1.5.0-r0_cortexa7t2hf-neon.ipk
 Source: bananas-dashboard.bb
 Description: BanaNAS LCD dashboard
 OE: bananas-dashboard
@@ -31,13 +31,13 @@ Priority: optional
 
 
 Package: bananas-modprobe
-Version: 1.4.1-r0
+Version: 1.5.0-r0
 Section: base
 Architecture: cortexa7t2hf-neon
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: ebbda27394db0f700fae15aed7872ec8
+MD5Sum: 0834fe182a25e3bbb9b522f46c50808d
 Size: 1114
-Filename: bananas-modprobe_1.4.1-r0_cortexa7t2hf-neon.ipk
+Filename: bananas-modprobe_1.5.0-r0_cortexa7t2hf-neon.ipk
 Source: bananas-modprobe.bb
 Description: BanaNAS modprobe blacklist drop-ins
 OE: bananas-modprobe
@@ -45,49 +45,34 @@ License: MIT
 Priority: optional
 
 
-Package: bananas-rclone
-Version: 1.4.1-r0
-Section: base
-Architecture: cortexa7t2hf-neon
-Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: fcb31ad2d9fba294a6df3478408d9b02
-Size: 18335854
-Filename: bananas-rclone_1.4.1-r0_cortexa7t2hf-neon.ipk
-Source: bananas-rclone.bb
-Description: rclone (vendored prebuilt) for cloud sync
-OE: bananas-rclone
-License: MIT
-Priority: optional
-
-
-Package: bananas-server
-Version: 1.4.1-r0
-Depends: bananas-webadmin, base-files, base-passwd, libc6 (>= 2.39+git0+ce65d944e3), shadow
-Section: base
-Architecture: cortexa7t2hf-neon
-Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 300ab9972642b13e7c09f5756b4cf876
-Size: 2924990
-Filename: bananas-server_1.4.1-r0_cortexa7t2hf-neon.ipk
-Source: bananas-server.bb
-Description: BanaNAS web admin: bananas-server (HTTP UI) + bananas-engine (root)
-OE: bananas-server
-License: MIT
-Priority: optional
-
-
 Package: bananas-stats
-Version: 1.4.1-r0
-Depends: bananas-server, libc6 (>= 2.39+git0+ce65d944e3)
+Version: 1.5.0-r0
+Depends: bananas-webadmin, libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
 Architecture: cortexa7t2hf-neon
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 9ed731c3a69bf1b69d33750a654db42c
-Size: 1589450
-Filename: bananas-stats_1.4.1-r0_cortexa7t2hf-neon.ipk
+MD5Sum: 1fd5a6758281e3cfeaf8cb095fad91b5
+Size: 1590756
+Filename: bananas-stats_1.5.0-r0_cortexa7t2hf-neon.ipk
 Source: bananas-stats.bb
 Description: BanaNAS stats sampler daemon
 OE: bananas-stats
+License: MIT
+Priority: optional
+
+
+Package: bananas-webadmin
+Version: 1.5.0-r0
+Depends: bananas-router, base-files, base-passwd, libc6 (>= 2.39+git0+ce65d944e3), shadow
+Section: base
+Architecture: cortexa7t2hf-neon
+Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
+MD5Sum: fa9fa862b08dc3d927b03a5d92eb40b5
+Size: 3459480
+Filename: bananas-webadmin_1.5.0-r0_cortexa7t2hf-neon.ipk
+Source: bananas-webadmin.bb
+Description: BanaNAS web admin: bananas-webadmin (HTTP UI + embedded SPA) + bananas-engine (root)
+OE: bananas-webadmin
 License: MIT
 Priority: optional
 

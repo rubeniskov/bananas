@@ -1,29 +1,14 @@
 Package: bananas-feed-config
-Version: 1.4.1-r0
+Version: 1.5.0-r0
 Section: base
 Architecture: all
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 550d34227d0e41956586f625e402f77f
-Size: 1386
-Filename: bananas-feed-config_1.4.1-r0_all.ipk
+MD5Sum: 6c167ea290b1076fcccde390a7272b65
+Size: 1384
+Filename: bananas-feed-config_1.5.0-r0_all.ipk
 Source: bananas-feed-config.bb
 Description: BanaNAS opkg feed configuration
 OE: bananas-feed-config
-License: MIT
-Priority: optional
-
-
-Package: bananas-webadmin
-Version: 1.4.1-r0
-Section: base
-Architecture: all
-Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 089774c8d4459d111057e52adf5835e0
-Size: 1676096
-Filename: bananas-webadmin_1.4.1-r0_all.ipk
-Source: bananas-webadmin.bb
-Description: BanaNAS web admin SPA (wasm bundle)
-OE: bananas-webadmin
 License: MIT
 Priority: optional
 
