@@ -46,19 +46,25 @@ impl Browser {
     pub async fn launch() -> Result<Self> {
         let chrome = locate_chrome().context("locate chrome binary")?;
         let user_data_dir = tempfile::tempdir().context("tempdir for chrome user-data-dir")?;
-        // `--no-sandbox` lets chrome start as a non-privileged user
+        // chromiumoxide's `.arg()` prepends `--` itself, so the
+        // strings here must NOT carry the leading dashes. Doubled
+        // dashes show up in chrome's crash log as `----no-sandbox`
+        // and the flag is silently ignored.
+        //
+        // `no-sandbox` lets chrome start as a non-privileged user
         // inside CI runners (ubuntu-latest's `runner` user lacks the
-        // CAP_SYS_ADMIN that chrome's setuid sandbox needs); locally
-        // it's a no-op since chromium falls back to a user-namespace
-        // sandbox in either case. `--disable-dev-shm-usage` swaps
-        // /dev/shm (often 64 MiB on CI containers) for /tmp so chrome
-        // doesn't OOM under the smaller default.
+        // CAP_SYS_ADMIN that chrome's setuid sandbox needs, and
+        // Ubuntu 23.10+ AppArmor blocks the user-namespace fallback);
+        // locally it's a no-op since the sandbox would have worked
+        // anyway. `disable-dev-shm-usage` swaps /dev/shm (often
+        // 64 MiB on CI containers) for /tmp so chrome doesn't OOM
+        // under the smaller default.
         let config = BrowserConfig::builder()
             .chrome_executable(chrome)
             .user_data_dir(user_data_dir.path())
             .request_timeout(Duration::from_secs(15))
-            .arg("--no-sandbox")
-            .arg("--disable-dev-shm-usage")
+            .arg("no-sandbox")
+            .arg("disable-dev-shm-usage")
             .build()
             .map_err(|e| anyhow!("BrowserConfig: {e}"))?;
         let (browser, mut handler) = ChromiumBrowser::launch(config)
