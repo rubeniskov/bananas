@@ -25,6 +25,8 @@
 
 /dist/
 /.claude/
+# git worktrees for parallel development
+/.worktrees/
 serve/cloud-ui
 # e2e harness deps — installed via `pixi run e2e`; never committed.
 /tests/e2e/node_modules/
