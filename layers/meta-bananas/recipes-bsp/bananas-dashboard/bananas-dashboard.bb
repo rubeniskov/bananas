@@ -15,14 +15,14 @@ require recipes-bsp/bananas-version.inc
 inherit systemd
 
 # Pull the cross-rs-built binary from serve/bin/ alongside the unit file.
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin/${TUNE_PKGARCH}:"
 SRC_URI = "file://bananas-dashboard \
            file://bananas-dashboard.service \
            file://dashboard.toml"
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro)"
+COMPATIBLE_MACHINE = "(bananapro|bananas-rpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 
