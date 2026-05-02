@@ -9,9 +9,9 @@ version = "0.1.0"
 info = "python --version && kas --version"
 
 # `build`: kas → bitbake. Sources .env first so ROOT_PASSWORD_HASH
-# (declared in kas.yml's `env:` block) reaches the recipe when set —
-# it's optional now. The recipe ships a "bananas" placeholder hash
-# flagged expired on first sign-in if no override is provided.
+# (declared in kas-base.yml's `env:` block) reaches the recipe when
+# set — it's optional now. The recipe ships a "bananas" placeholder
+# hash flagged expired on first sign-in if no override is provided.
 #
 # We force `-c rootfs` so the rootfs is regenerated each run. Forcing only
 # `image_complete` is not enough — its sstate restoration can hit, mark
@@ -20,8 +20,8 @@ info = "python --version && kas --version"
 #
 # The post-build copy-from-work fallback handles the residual case where
 # sstate still convinces bitbake the deploy step is done: the image's
-# WORKDIR is preserved by RM_WORK_EXCLUDE in kas.yml, so we can copy from
-# there if deploy/ is missing the tarball.
+# WORKDIR is preserved by RM_WORK_EXCLUDE in kas-base.yml, so we can copy
+# from there if deploy/ is missing the tarball.
 # `build`: full Yocto image bake. Runs `kas build kas-bpi.yml` twice — first
 # to force `do_rootfs`, then a second pass for image-complete deps.
 #

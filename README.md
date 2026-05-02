@@ -36,7 +36,7 @@ Off-the-shelf NAS boxes either cost a lot, lock you into a vendor cloud, or both
 - A live stats dashboard on the on-board LCD.
 - Backup-to-Google-Drive (and 5 other providers) without manual `rclone.conf` edits.
 - A boot story (U-Boot logo → progress bar → live tiles) that doesn't look like a hobbyist project.
-- A reproducible image you can rebuild months later because every dep is pinned in `kas.yml` + `pixi.lock`.
+- A reproducible image you can rebuild months later because every dep is pinned in `kas-base.yml` (+ per-machine overlays) and `pixi.lock`.
 
 Reproducibility, low idle power, no cloud lock-in, and "your own data, your own metal" — that's the goal.
 
