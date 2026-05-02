@@ -61,9 +61,30 @@ repos:
         types_or: [rust]
 
       - id: cargo-check-wasm
-        name: cargo check (wasm SPA)
+        name: cargo check (wasm SPA bins)
         language: system
-        entry: bash -c 'cargo check -p bananas-webadmin --target wasm32-unknown-unknown'
+        # Each plugin crate ships two bins: a host daemon (axum +
+        # tonic, cfg(not(wasm32)) deps only) and a wasm SPA. Cargo
+        # check for wasm32 must target the SPA bin explicitly via
+        # --bin + --features wasm-ui, otherwise it tries to compile
+        # the daemon bin against wasm32 and fails on every host-only
+        # dep. Iterate through each SPA bin.
+        entry: |
+          bash -c '
+            set -e
+            for spec in \
+              "bananas-webadmin:bananas-webadmin-ui" \
+              "bananas-cloud:bananas-cloud-ui" \
+              "bananas-stats:bananas-stats-web-ui" \
+              "bananas-dashboard:bananas-dashboard-web-ui" \
+              "bananas-exports:bananas-exports-ui" \
+              "bananas-storage:bananas-storage-ui" \
+              "bananas-users:bananas-users-ui"; do
+              pkg=${spec%%:*}; bin=${spec##*:}
+              echo "=== cargo check -p $pkg --bin $bin (wasm32) ==="
+              cargo check -p "$pkg" --bin "$bin" --features wasm-ui --target wasm32-unknown-unknown
+            done
+          '
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust]
