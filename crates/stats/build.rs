@@ -127,6 +127,9 @@ fn main() {
                 "cargo:warning=dx not on PATH; skipping SPA build (lib-only consumer assumed)"
             );
             std::fs::create_dir_all(out.join("ui")).ok();
+            // bananas-stats-web bin's embedded.rs include_str!s mfe_entry.txt;
+            // write an empty stub so the daemon binary still compiles.
+            std::fs::write(out.join("mfe_entry.txt"), b"").ok();
             return;
         }
         Err(e) => panic!("dx build failed to spawn: {e}"),

@@ -213,4 +213,3 @@ sleep 3 && kmscube
 - [Linux Sunxi LCD Wiki](https://linux-sunxi.org/LCD)
 - [U-Boot Video Configuration](https://u-boot.readthedocs.io/en/latest/board/allwinner/sunxi.html)
 - BananaPi 5" LCD FEX files: `banana_pi_5lcd.fex`, `banana_pro_5lcd.fex`
-

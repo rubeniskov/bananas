@@ -109,9 +109,17 @@ fn main() {
         }
     }
 
-    let status = cmd.status().expect(
-        "dx build failed to spawn — is dx-cli installed and on PATH? Try `pixi run setup-dx`.",
-    );
+    let status = match cmd.status() {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "cargo:warning=dx not on PATH; skipping SPA build (host check / cargo-only consumer)"
+            );
+            std::fs::create_dir_all(out.join("ui")).ok();
+            return;
+        }
+        Err(e) => panic!("dx build failed to spawn: {e}"),
+    };
     if !status.success() {
         panic!("dx build {bin} failed with exit {status}");
     }

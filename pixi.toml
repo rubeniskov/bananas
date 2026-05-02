@@ -144,6 +144,7 @@ echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
 # rusqlite-bundled (pulled in transitively via bananas-stats). Without
 # this, libsqlite3-sys's build script dies with `unknown CPU: 'haswell'`.
 [tasks.build-webadmin-arm]
+depends-on = ["setup-dx"]
 cmd = """bash -c '
 set -e
 export PATH="$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH"

@@ -43,19 +43,24 @@ repos:
         types_or: [rust]
 
       - id: cargo-clippy
-        name: cargo clippy (host crates)
+        name: cargo clippy (workspace)
         language: system
-        # Match the CI invocation in .github/workflows/ci.yml so pre-push
-        # and CI agree on what a clean build looks like.
-        entry: bash -c 'cargo clippy --workspace --exclude bananas-webadmin --exclude bananas-dashboard'
+        # `--workspace` covers every host bin including bananas-webadmin
+        # and bananas-dashboard-web. The slint-only bin (bananas-dashboard
+        # under --features slint-app) is not built here — its required-
+        # features gate keeps it out of the default workspace selection.
+        entry: bash -c 'cargo clippy --workspace'
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust]
 
       - id: cargo-test
-        name: cargo test (host crates, no-fail-fast)
+        name: cargo test (workspace, no-fail-fast)
         language: system
-        entry: bash -c 'cargo test --workspace --exclude bananas-webadmin --exclude bananas-dashboard --no-fail-fast'
+        # The e2e_mfe harness in crates/devtool spawns the daemon
+        # binaries from target/debug/<bin>; --workspace makes sure
+        # bananas-webadmin and bananas-dashboard-web are present.
+        entry: bash -c 'cargo test --workspace --no-fail-fast'
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust]

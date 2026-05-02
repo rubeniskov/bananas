@@ -128,11 +128,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-target-cross-
 
+      # Add wasm32 target so the SPA build inside each daemon's build.rs
+      # (invoked by dx) can compile.
+      - name: Install rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
       # pixi tasks already strip the conda-injected CFLAGS that would
       # leak `-march=haswell` into the rusqlite-bundled cross-compile.
       # We run them through pixi so CI matches local iterate exactly.
-      - name: build-server-arm
-        run: pixi run build-server-arm
+      # build-webadmin-arm cross-compiles all daemons (webadmin, engine,
+      # router, cloud, exports, storage, users, stats-web, dashboard-web)
+      # in one zigbuild invocation; build.rs of each invokes dx for the
+      # embedded SPA, hence the wasm32 target above + setup-dx via depends-on.
+      - name: build-webadmin-arm
+        run: pixi run build-webadmin-arm
 
       - name: build-stats-arm
         run: pixi run build-stats-arm
@@ -144,46 +153,3 @@ jobs:
           file serve/bin/bananas-webadmin | grep -q "ARM" || (echo "bananas-webadmin is not ARM!" && exit 1)
           file serve/bin/bananas-engine | grep -q "ARM" || (echo "bananas-engine is not ARM!" && exit 1)
           file serve/bin/bananas-stats  | grep -q "ARM" || (echo "bananas-stats is not ARM!"  && exit 1)
-
-  wasm-ui:
-    name: Build wasm SPA (dx build)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install pixi
-        uses: prefix-dev/setup-pixi@v0.8.1
-        with:
-          pixi-version: v0.66.0
-          cache: true
-
-      - name: Install rust toolchain (wasm target)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo target (wasm)
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-target-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-target-wasm-
-
-      - name: build-webadmin (dx build via pixi)
-        run: pixi run build-webadmin
-
-      - name: Confirm bundle exists
-        run: |
-          test -f serve/webadmin/index.html
-          test -f serve/bin/bananas-webadmin.tar.gz

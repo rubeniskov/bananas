@@ -109,9 +109,20 @@ fn main() {
         }
     }
 
-    let status = cmd.status().expect(
-        "dx build failed to spawn — is dx-cli installed and on PATH? Try `pixi run setup-dx`.",
-    );
+    let status = match cmd.status() {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "cargo:warning=dx not on PATH; skipping SPA build (host check / cargo-only consumer)"
+            );
+            std::fs::create_dir_all(out.join("ui")).ok();
+            // Daemon's embedded.rs include_str!s mfe_entry.txt; write
+            // an empty stub so the daemon binary still compiles.
+            std::fs::write(out.join("mfe_entry.txt"), b"").ok();
+            return;
+        }
+        Err(e) => panic!("dx build failed to spawn: {e}"),
+    };
     if !status.success() {
         panic!("dx build {bin} failed with exit {status}");
     }

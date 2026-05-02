@@ -190,11 +190,16 @@ jobs:
         run: scripts/bump-cargo-version.sh ${{ steps.nextver.outputs.next }}
 
       # ─── Build all the artifacts the release will publish ─────────
-      - name: build-webadmin
-        run: pixi run build-webadmin
+      # build-webadmin-arm cross-compiles every daemon (webadmin, engine,
+      # router, cloud, exports, storage, users, stats-web, dashboard-web)
+      # via cargo-zigbuild; each daemon's build.rs invokes dx to produce
+      # the embedded SPA bytes. setup-dx runs as a depends-on; the wasm32
+      # rust target is provisioned just below.
+      - name: Install rust wasm target
+        run: rustup target add wasm32-unknown-unknown
 
-      - name: build-server-arm
-        run: pixi run build-server-arm
+      - name: build-webadmin-arm
+        run: pixi run build-webadmin-arm
 
       - name: build-stats-arm
         run: pixi run build-stats-arm

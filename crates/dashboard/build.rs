@@ -102,6 +102,9 @@ fn main() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             println!("cargo:warning=dx not on PATH; skipping SPA build (cross-rs LCD path)");
             std::fs::create_dir_all(out.join("ui")).ok();
+            // bananas-dashboard-web bin's embedded.rs include_str!s mfe_entry.txt;
+            // write an empty stub so the daemon binary still compiles.
+            std::fs::write(out.join("mfe_entry.txt"), b"").ok();
             return;
         }
         Err(e) => panic!("dx build failed to spawn: {e}"),
