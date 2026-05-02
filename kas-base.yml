@@ -1,0 +1,101 @@
+header:
+  version: 14
+
+distro: bananas
+target:
+  - bananas-image
+
+# Build-time env vars. kas takes each value from the calling environment and
+# exposes it to bitbake via BB_ENV_PASSTHROUGH_ADDITIONS. Set via .env (local)
+# or CI/CD secrets:
+#   ROOT_PASSWORD_HASH   SHA-512 hash for root login. OPTIONAL — defaults
+#                        to a "bananas" placeholder hash whose lastchg is 0
+#                        (forces rotation on first sign-in via the web UI
+#                        or the serial console). Override only when you
+#                        want a specific operator-known hash baked in.
+#                        Generate via: openssl passwd -6 -salt $(openssl rand -hex 8)
+env:
+  ROOT_PASSWORD_HASH:
+
+# Layers shared across every supported board. Per-machine BSP layers
+# (meta-sunxi for Banana Pro, meta-raspberrypi for the RPi-unified image)
+# live in the matching kas-<board>.yml overlay; including them only on
+# the boards that need them keeps `kas dump` clean and avoids pulling
+# unrelated machine configs into a single bake's resolution path.
+repos:
+  poky:
+    url: "https://git.yoctoproject.org/poky"
+    branch: "scarthgap"
+    layers:
+      meta:
+      meta-poky:
+      meta-yocto-bsp:
+
+  meta-openembedded:
+    url: "https://github.com/openembedded/meta-openembedded.git"
+    branch: "scarthgap"
+    layers:
+      meta-oe:
+      meta-python:
+      meta-networking:
+      meta-filesystems:
+
+  meta-arm:
+    url: "https://git.yoctoproject.org/meta-arm"
+    branch: "scarthgap"
+    layers:
+      meta-arm:
+      meta-arm-toolchain:
+
+  meta-bananas:
+    path: "./layers/meta-bananas"
+
+local_conf_header:
+  bananas-common: |
+    # General build settings
+    CONF_VERSION = "2"
+    PACKAGE_CLASSES = "package_ipk"
+    EXTRA_IMAGE_FEATURES += "ssh-server-openssh"
+    USER_CLASSES ?= "buildstats"
+
+    # Speed / disk usage
+    INHERIT += "rm_work"
+    # Keep the bananas-image WORKDIR around — without it, Yocto's
+    # do_image_complete sometimes restores from sstate and reports
+    # success without actually populating ${DEPLOY_DIR_IMAGE}, leaving
+    # extract-rootfs to fail with "No such file or directory". Preserving
+    # the work dir lets the build task copy from
+    # work/.../deploy-bananas-image-image-complete/ as a recovery step.
+    RM_WORK_EXCLUDE += "bananas-image"
+    # Match the host's actual core count — hardcoded "8" was right
+    # on an 8-core dev box, but undersubscribed a 16-core workstation
+    # and oversubscribed a 4-core CI runner. `oe.utils.cpu_count()`
+    # is bitbake's own helper, no extra deps.
+    BB_NUMBER_THREADS ?= "${@oe.utils.cpu_count()}"
+    PARALLEL_MAKE ?= "-j ${@oe.utils.cpu_count()}"
+
+    # Useful for local dev caching
+    DL_DIR ?= "${TOPDIR}/downloads"
+    SSTATE_DIR ?= "${TOPDIR}/sstate-cache"
+
+    # Hash equivalence: keep sstate hits across metadata changes that
+    # don't actually alter task outputs (rewording a comment, bumping
+    # a license header, reformatting a recipe). The default basehash
+    # signature handler invalidates sstate on any file change, even
+    # cosmetic ones. OEEquivHash sends a hash of the actual task
+    # output to a local server (auto-spawned by `auto`) and reuses
+    # sstate when the output hash matches a previous build. ~5–15 min
+    # saved per cold-cache bake on top of plain sstate hits.
+    BB_HASHSERVE = "auto"
+    BB_SIGNATURE_HANDLER = "OEEquivHash"
+
+    # If systemd is desired (optional)
+    DISTRO_FEATURES:append = " systemd usrmerge"
+    DISTRO_FEATURES:remove = " x11 wayland vulkan"
+    VIRTUAL-RUNTIME_init_manager = "systemd"
+
+    BB_ENV_PASSTHROUGH_ADDITIONS += "PATH"
+
+  bananas-debug: |
+    # Uncomment while bring-up/debugging
+    # IMAGE_FEATURES += "debug-tweaks"
