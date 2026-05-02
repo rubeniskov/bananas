@@ -1,0 +1,16 @@
+[package]
+name = "bananas-config-form-derive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Proc-macro half of bananas-config-form. Reads struct + field attributes, emits the ConfigSection / ConfigForm impl that drives the runtime renderer."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"

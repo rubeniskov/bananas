@@ -1,0 +1,6 @@
+id = "stats"
+label = "Stats"
+socket = "/run/bananas/stats-web.sock"
+api_prefix = "/api/stats"
+order = 10
+icon = "chart-bar"

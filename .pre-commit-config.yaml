@@ -1,0 +1,98 @@
+# Hooks driven by `prek` (https://github.com/j178/prek), a Rust drop-in
+# for `pre-commit` that uses this exact config format. Install it with
+# `cargo install --locked prek` (or `pixi run setup-prek` once the task
+# lands), then `prek install` to wire the hooks into .git/hooks/.
+#
+# Goal of the local hooks: stop a commit when `cargo fmt`, `cargo
+# clippy`, or the unit tests would have failed in CI. CI re-runs the
+# same checks, but catching them at commit time is cheaper than a
+# round-trip through GitHub Actions.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+fail_fast: true
+
+repos:
+  # ── Generic hygiene (file-level) ────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Skip patches & generated files: bitbake patches keep their
+        # exact upstream framing and pixi.lock is binary-merged.
+        exclude: \.patch$|^pixi\.lock$|\.bmap$
+      - id: end-of-file-fixer
+        exclude: \.patch$|^pixi\.lock$|\.bmap$
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+
+  # ── Rust workspace ──────────────────────────────────────────────
+  # `cargo fmt --check` is the cheapest gate; runs on every commit.
+  # Clippy + tests are heavier so we hold them for the pre-push hook
+  # (typed via stages: [pre-push]) — local dev keeps fast iteration.
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        language: system
+        entry: cargo fmt --all -- --check
+        pass_filenames: false
+        types_or: [rust]
+
+      - id: cargo-clippy
+        name: cargo clippy (workspace)
+        language: system
+        # `--workspace` covers every host bin including bananas-webadmin
+        # and bananas-dashboard-web. The slint-only bin (bananas-dashboard
+        # under --features slint-app) is not built here — its required-
+        # features gate keeps it out of the default workspace selection.
+        entry: bash -c 'cargo clippy --workspace'
+        pass_filenames: false
+        stages: [pre-push]
+        types_or: [rust]
+
+      - id: cargo-test
+        name: cargo test (workspace, no-fail-fast)
+        language: system
+        # The e2e_mfe harness in crates/devtool spawns the daemon
+        # binaries from target/debug/<bin>. cargo test only builds
+        # test executables + their direct deps — it does NOT build
+        # path-spawned bins from sibling crates. Build all workspace
+        # bins first so the harness has bananas-router /
+        # bananas-engine / bananas-cloud / etc to spawn.
+        entry: bash -c 'cargo build --workspace --bins && cargo test --workspace --no-fail-fast'
+        pass_filenames: false
+        stages: [pre-push]
+        types_or: [rust]
+
+      - id: cargo-check-wasm
+        name: cargo check (wasm SPA bins)
+        language: system
+        # Each plugin crate ships two bins: a host daemon (axum +
+        # tonic, cfg(not(wasm32)) deps only) and a wasm SPA. Cargo
+        # check for wasm32 must target the SPA bin explicitly via
+        # --bin + --features wasm-ui, otherwise it tries to compile
+        # the daemon bin against wasm32 and fails on every host-only
+        # dep. Iterate through each SPA bin.
+        entry: |
+          bash -c '
+            set -e
+            for spec in \
+              "bananas-webadmin:bananas-webadmin-ui" \
+              "bananas-cloud:bananas-cloud-ui" \
+              "bananas-stats:bananas-stats-web-ui" \
+              "bananas-dashboard:bananas-dashboard-web-ui" \
+              "bananas-exports:bananas-exports-ui" \
+              "bananas-storage:bananas-storage-ui" \
+              "bananas-users:bananas-users-ui"; do
+              pkg=${spec%%:*}; bin=${spec##*:}
+              echo "=== cargo check -p $pkg --bin $bin (wasm32) ==="
+              cargo check -p "$pkg" --bin "$bin" --features wasm-ui --target wasm32-unknown-unknown
+            done
+          '
+        pass_filenames: false
+        stages: [pre-push]
+        types_or: [rust]

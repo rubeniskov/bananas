@@ -1,0 +1,35 @@
+[Unit]
+Description=BanaNAS web admin (public TCP face + internal API daemon)
+# Needs network up for the TCP listener, bananas-engine for the
+# privileged-op socket, and bananas-router so /api/* sub-proxy calls
+# don't 502 during the first few hundred ms of boot. Plugin daemons
+# (cloud, exports, …) are reached *through* router; a slow-starting
+# plugin just produces 404s on the asset proxy until its socket is up.
+After=network-online.target local-fs.target bananas-engine.service bananas-router.service
+Wants=network-online.target
+Requires=bananas-engine.service
+
+[Service]
+Type=simple
+User=bananas
+Group=bananas
+ExecStart=/usr/bin/bananas-webadmin
+# StateDirectory=bananas → /var/lib/bananas, owned by the User above with
+# mode 0700. Cheapest place to stash the persistent HMAC session key.
+StateDirectory=bananas
+StateDirectoryMode=0700
+# Shared with bananas-engine + bananas-router. Preserve across stops so
+# /run/bananas/engine.sock (owned by bananas-engine) doesn't disappear
+# when *this* unit restarts.
+RuntimeDirectory=bananas
+RuntimeDirectoryPreserve=yes
+Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
+Environment=BANANAS_LISTEN_ADDR=0.0.0.0:8080
+Environment=BANANAS_WEBADMIN_SOCKET=/run/bananas/webadmin.sock
+Environment=BANANAS_ROUTER_SOCKET=/run/bananas/router.sock
+Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

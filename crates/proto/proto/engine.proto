@@ -1,0 +1,479 @@
+// bananas-engine: privileged-ops daemon RPCs.
+//
+// Every RPC the engine answers lives on this single service.
+// The legacy newline-JSON `Command` enum + its sibling listener
+// were retired once every variant migrated; the engine now
+// speaks gRPC over a single Unix socket
+// (`BANANAS_ENGINE_SOCKET`, default `/run/bananas/engine.sock`).
+
+syntax = "proto3";
+
+package bananas.engine.v1;
+
+service EngineService {
+  // Verify a system password by reading /etc/shadow and matching
+  // the stored hash. Replies with `lastchg_zero` so the UI can
+  // surface the "must change password at first login" path.
+  // Maps 1:1 to the existing `Command::Authenticate` variant; the
+  // legacy newline-JSON path is the source of truth until every
+  // caller is migrated to gRPC.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // Self-service password rotation. Verifies `old_password`
+  // against /etc/shadow before invoking `chpasswd` with
+  // `new_password`. Permitted for every user — including root —
+  // because the caller has already proven knowledge of the
+  // current password. Maps 1:1 to `Command::ChangeOwnPassword`.
+  // Errors collapse to `Unauthenticated` with the same redaction
+  // policy as Authenticate so callers can't probe usernames.
+  rpc ChangeOwnPassword(ChangeOwnPasswordRequest) returns (ChangeOwnPasswordResponse);
+
+  // Schedule a system reboot via `systemctl reboot`. The reply
+  // returns synchronously — systemd waits for the reboot unit to
+  // run before pulling the trigger — so the caller can render an
+  // "applied" banner before the connection closes. Maps 1:1 to
+  // `Command::RebootSystem`.
+  rpc RebootSystem(RebootSystemRequest) returns (RebootSystemResponse);
+
+  // Set the system timezone to an IANA zone name (e.g.
+  // `Europe/Madrid`). The engine validates the name against
+  // `/usr/share/zoneinfo/`, runs `timedatectl set-timezone`,
+  // persists the choice to `/etc/bananas/system.toml`, and
+  // restarts bananas-dashboard so the LCD reflects the new
+  // offset. Maps 1:1 to `Command::SetTimezone`.
+  rpc SetTimezone(SetTimezoneRequest) returns (SetTimezoneResponse);
+
+  // Enumerate every IANA zone the OS knows about (sorted, with
+  // the `Etc/`, `posix/`, `right/`, `SystemV/` legacy trees
+  // pruned). Backs the Settings → General timezone autocomplete.
+  // Maps 1:1 to `Command::ListTimezones`.
+  rpc ListTimezones(ListTimezonesRequest) returns (ListTimezonesResponse);
+
+  // Read a known TOML config file under /etc/bananas/. The
+  // `name` field is one of the curated allowlist entries
+  // (`system`, …) — arbitrary paths are rejected. A missing
+  // file maps to an empty `content` string so the UI can show
+  // a fresh editor without a banner.
+  // Maps 1:1 to `Command::ReadServiceConfig`.
+  rpc ReadServiceConfig(ReadServiceConfigRequest) returns (ReadServiceConfigResponse);
+
+  // Write a known TOML config file under /etc/bananas/. Same
+  // allowlist as `ReadServiceConfig`. The engine validates the
+  // content is parseable TOML, writes atomically (sibling tmp +
+  // rename), and restarts any associated systemd units.
+  // Maps 1:1 to `Command::WriteServiceConfig`.
+  rpc WriteServiceConfig(WriteServiceConfigRequest) returns (WriteServiceConfigResponse);
+
+  // Refresh opkg's package metadata cache (`opkg update`). Hits
+  // the configured feed; failures here usually mean the network
+  // is offline. Maps 1:1 to `Command::OpkgUpdate`.
+  rpc OpkgUpdate(OpkgUpdateRequest) returns (OpkgUpdateResponse);
+
+  // Enumerate every opkg package whose installed version is
+  // older than the candidate in the cached metadata. The wire
+  // shape is now typed (`repeated UpgradablePackage`) instead of
+  // a JSON-encoded string. Maps 1:1 to `Command::OpkgListUpgradable`.
+  rpc OpkgListUpgradable(OpkgListUpgradableRequest) returns (OpkgListUpgradableResponse);
+
+  // Enumerate every installed package. Same wire-shape upgrade
+  // as ListUpgradable. Maps 1:1 to `Command::OpkgListInstalled`.
+  rpc OpkgListInstalled(OpkgListInstalledRequest) returns (OpkgListInstalledResponse);
+
+  // Spawn the transient `bananas-opkg-upgrade.service` to run
+  // `opkg upgrade <packages>` in the background. Returns
+  // immediately once systemd-run has acknowledged; the caller
+  // polls OpkgUpgradeStatus to track progress and emit log
+  // delta. Maps 1:1 to `Command::OpkgUpgrade`.
+  rpc OpkgUpgrade(OpkgUpgradeRequest) returns (OpkgUpgradeResponse);
+
+  // Read the current state of the transient upgrade unit. The
+  // engine appends opkg's stdout/stderr to a sentinel-tailed log
+  // file; `since` lets the caller request only new bytes. Maps
+  // 1:1 to `Command::OpkgUpgradeStatus`.
+  rpc OpkgUpgradeStatus(OpkgUpgradeStatusRequest) returns (OpkgUpgradeStatusResponse);
+
+  // Replace `/etc/exports` atomically. The engine validates the
+  // syntax, ensures every export path exists on disk
+  // (auto-mkdir), injects `fsid=` for re-exports when running
+  // on an NFS-rooted host, and runs `exportfs -ra`. Maps 1:1 to
+  // `Command::WriteExports`.
+  rpc WriteExports(WriteExportsRequest) returns (WriteExportsResponse);
+
+  // Replace `/etc/fstab` atomically and run `mount -a` so any
+  // newly-added entries activate without a reboot. Maps 1:1 to
+  // `Command::WriteFstab`.
+  rpc WriteFstab(WriteFstabRequest) returns (WriteFstabResponse);
+
+  // Dump every system user as a JSON document, including the
+  // `/etc/shadow` hash (caller proves elevated trust by being
+  // able to reach the engine socket at all). Used by the
+  // config-bundle export to round-trip user accounts. Wire shape
+  // is the legacy JSON-encoded string so the consumer's existing
+  // serde parsing continues to work — a future revision can
+  // promote the document to a typed `repeated User` once the
+  // users page is rewritten on top of gRPC.
+  // Maps 1:1 to `Command::ExportUsers`.
+  rpc ExportUsers(ExportUsersRequest) returns (ExportUsersResponse);
+
+  // Create a new system user. `password_is_hash=true` accepts
+  // a pre-computed `$6$...` shadow hash (used by the config
+  // bundle restore path so plaintext passwords never leave the
+  // backup file); false runs the value through `chpasswd` to
+  // hash it. `admin=true` adds the user to `bananas-admin`.
+  // Maps 1:1 to `Command::CreateUser`.
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+
+  // List human accounts (UID >= 1000, non-`bananas`) with their
+  // group + admin flag. Hashes are NOT included (use
+  // `ExportUsers` for the hash-bearing variant). Wire shape stays
+  // a JSON-encoded string for the same staged-migration reason as
+  // ExportUsers. Maps 1:1 to `Command::ListUsers`.
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+
+  // Add or remove `username` from the `bananas-admin` group.
+  // Maps 1:1 to `Command::SetAdmin`.
+  rpc SetAdmin(SetAdminRequest) returns (SetAdminResponse);
+
+  // `userdel -r username`. Refuses for system users (UID < 1000)
+  // and the `bananas` service user. Maps 1:1 to
+  // `Command::DeleteUser`.
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+
+  // `chpasswd` over stdin for an existing user. Caller must already
+  // be admin (the webadmin layer enforces session-cookie checks);
+  // engine refuses for system users to prevent self-lockout.
+  // Maps 1:1 to `Command::SetPassword`.
+  rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
+
+  // `mkdir -p path` under an allowlisted prefix
+  // (`/srv/`, `/mnt/`, …). Refuses arbitrary paths so a
+  // confused web caller can't create directories anywhere on
+  // the system. Maps 1:1 to `Command::MakeDirectory`.
+  rpc MakeDirectory(MakeDirectoryRequest) returns (MakeDirectoryResponse);
+
+  // `lsblk -J -b -o NAME,KNAME,…` — the engine runs as root so
+  // it can read the kernel's block-device topology including
+  // partitions on raw disks. Wire shape stays a JSON-encoded
+  // string for the same reasons as List/Export Users. Maps 1:1
+  // to `Command::Lsblk`.
+  rpc Lsblk(LsblkRequest) returns (LsblkResponse);
+
+  // `smartctl -a -j device` — pulls the SMART health snapshot
+  // for the named block device. Wire shape is the smartctl
+  // JSON output verbatim. Maps 1:1 to `Command::Smart`.
+  rpc Smart(SmartRequest) returns (SmartResponse);
+
+  // `stat path` for an allowlisted path; returns
+  // `{uid,gid,user,group,mode,kind}` JSON. Maps 1:1 to
+  // `Command::Stat`.
+  rpc Stat(StatRequest) returns (StatResponse);
+
+  // chown / chmod a path. Each of `uid`/`gid`/`mode` is
+  // optional (signalled by their `_set` companion bools);
+  // missing ones leave that aspect untouched. `recursive=true`
+  // walks the tree. Allowlisted paths only. Maps 1:1 to
+  // `Command::SetPermissions`.
+  rpc SetPermissions(SetPermissionsRequest) returns (SetPermissionsResponse);
+
+  // Run an rclone sync defined at index `idx` of
+  // `/etc/bananas/cloud.toml`'s `[[syncs]]` array. Blocks until
+  // rclone exits; the engine writes per-line progress to the
+  // sync-progress dir while running so callers can tail it via
+  // `bananas.cloud.v1.CloudService::TailRunLog`. Maps 1:1 to
+  // `Command::RunCloudSync`.
+  rpc RunCloudSync(RunCloudSyncRequest) returns (RunCloudSyncResponse);
+
+  // Send SIGTERM to a running rclone job for the given sync
+  // index. Returns OK even if no job is currently running so a
+  // double-cancel from the UI isn't an error. Maps 1:1 to
+  // `Command::CancelCloudSync`.
+  rpc CancelCloudSync(CancelCloudSyncRequest) returns (CancelCloudSyncResponse);
+}
+
+message AuthenticateRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthenticateResponse {
+  // True for /etc/shadow's third field == 0 — the "chage -d 0"
+  // sentinel that means "must rotate password before any session
+  // is granted". The current Command::Authenticate response uses
+  // a magic "password_expired" error string for this; protobuf
+  // gives us a real boolean instead.
+  bool lastchg_zero = 1;
+}
+
+message ChangeOwnPasswordRequest {
+  string username = 1;
+  string old_password = 2;
+  string new_password = 3;
+}
+
+message ChangeOwnPasswordResponse {
+  // No structured reply needed — success is encoded in the gRPC
+  // status itself. Reserved for future fields (e.g. the new
+  // lastchg day count) without breaking the wire format.
+}
+
+message RebootSystemRequest {}
+
+message RebootSystemResponse {
+  // Captured stdout+stderr from `systemctl reboot` (typically a
+  // single "Reboot scheduled" line — kept verbatim so the UI can
+  // surface unit-failure detail if any).
+  string output = 1;
+}
+
+message SetTimezoneRequest {
+  string tz = 1;
+}
+
+message SetTimezoneResponse {
+  // Combined output from timedatectl + the system.toml writer +
+  // the dashboard restart. Surfaced verbatim so the UI can show
+  // any sub-step failure.
+  string output = 1;
+}
+
+message ListTimezonesRequest {}
+
+message ListTimezonesResponse {
+  // Sorted list of IANA zone names available on the host.
+  repeated string zones = 1;
+}
+
+message ReadServiceConfigRequest {
+  // Allowlisted name (e.g. `system`); not a filesystem path.
+  string name = 1;
+}
+
+message ReadServiceConfigResponse {
+  // Raw TOML file contents. Empty when the file doesn't exist.
+  string content = 1;
+}
+
+message WriteServiceConfigRequest {
+  string name = 1;
+  string content = 2;
+}
+
+message WriteServiceConfigResponse {
+  // Combined output from the write + post-write systemctl
+  // restarts (one line per unit). Empty when no units are
+  // associated with this config name.
+  string output = 1;
+}
+
+message OpkgUpdateRequest {}
+
+message OpkgUpdateResponse {
+  // Captured stdout+stderr from `opkg update`.
+  string output = 1;
+}
+
+message OpkgListUpgradableRequest {}
+
+message UpgradablePackage {
+  string name = 1;
+  string installed = 2;
+  string candidate = 3;
+}
+
+message OpkgListUpgradableResponse {
+  repeated UpgradablePackage packages = 1;
+}
+
+message OpkgListInstalledRequest {}
+
+message InstalledPackage {
+  string name = 1;
+  string version = 2;
+}
+
+message OpkgListInstalledResponse {
+  repeated InstalledPackage packages = 1;
+}
+
+message OpkgUpgradeRequest {
+  // Each name must already be in the bananas-* allowlist; the
+  // webadmin layer enforces that before calling. The engine
+  // refuses to spawn a second transient unit while one is
+  // active (returns `FailedPrecondition` on conflict).
+  repeated string packages = 1;
+}
+
+message OpkgUpgradeResponse {
+  // Output from `systemd-run`, captured for diagnostics.
+  string output = 1;
+}
+
+message OpkgUpgradeStatusRequest {
+  // Byte offset already consumed; the engine returns log bytes
+  // from `since` to current EOF.
+  uint64 since = 1;
+}
+
+message OpkgUpgradeStatusResponse {
+  // One of: `idle`, `active`, `done`, `failed`.
+  string state = 1;
+  // Log delta from the requested `since` offset. Empty when the
+  // caller is already caught up.
+  string log = 2;
+  // Current log size in bytes. Echo back as `since` on the next
+  // call to keep the cursor moving.
+  uint64 log_offset = 3;
+  // Populated once the unit has exited (the `[bananas-opkg-exit=N]`
+  // sentinel is present). Encoded as int32 with -1 sentinel for
+  // "not yet present" so the protobuf wire format stays stable.
+  int32 exit_code = 4;
+  // True iff `exit_code` carries a real value; protobuf's int32
+  // can't distinguish 0 from "unset" without this companion bool.
+  bool has_exit_code = 5;
+}
+
+message WriteExportsRequest {
+  string content = 1;
+}
+
+message WriteExportsResponse {
+  // Combined output: validate + auto-mkdir log + fsid-inject
+  // log + `exportfs -ra` stdout/stderr.
+  string output = 1;
+}
+
+message WriteFstabRequest {
+  string content = 1;
+}
+
+message WriteFstabResponse {
+  // Captured `mount -a` stdout/stderr.
+  string output = 1;
+}
+
+message ExportUsersRequest {}
+
+message ExportUsersResponse {
+  // JSON-encoded `{"users": [...]}` document — same shape the
+  // legacy newline-JSON `Command::ExportUsers` returned in its
+  // `output` field. Stays opaque on the wire until the users
+  // page itself migrates to gRPC.
+  string users_json = 1;
+}
+
+message CreateUserRequest {
+  string username = 1;
+  // Either a plaintext password or a `$6$...` shadow hash,
+  // depending on `password_is_hash`.
+  string password = 2;
+  // GECOS / "real name" field. Empty string maps to no value
+  // (protobuf can't distinguish "" from "absent" without a
+  // companion bool, and an empty GECOS is the same as no GECOS
+  // anyway).
+  string full_name = 3;
+  bool admin = 4;
+  bool password_is_hash = 5;
+}
+
+message CreateUserResponse {}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  // JSON-encoded `{"users": [...]}` with UID/GID/admin/locked
+  // fields but no shadow hash. Stays opaque on the wire until
+  // the users page itself migrates to gRPC.
+  string users_json = 1;
+}
+
+message SetAdminRequest {
+  string username = 1;
+  bool admin = 2;
+}
+
+message SetAdminResponse {}
+
+message DeleteUserRequest {
+  string username = 1;
+}
+
+message DeleteUserResponse {}
+
+message SetPasswordRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message SetPasswordResponse {}
+
+message MakeDirectoryRequest {
+  string path = 1;
+}
+
+message MakeDirectoryResponse {
+  // Combined output from any in-flight stat/mkdir tracing.
+  string output = 1;
+}
+
+message LsblkRequest {}
+
+message LsblkResponse {
+  // Raw JSON document from `lsblk -J`.
+  string lsblk_json = 1;
+}
+
+message SmartRequest {
+  string device = 1;
+}
+
+message SmartResponse {
+  // Raw JSON document from `smartctl -a -j`.
+  string smart_json = 1;
+}
+
+message StatRequest {
+  string path = 1;
+}
+
+message StatResponse {
+  // JSON `{uid,gid,user,group,mode,kind}` document.
+  string stat_json = 1;
+}
+
+message SetPermissionsRequest {
+  string path = 1;
+  // Each of uid/gid/mode is optional. The `_set` companion bool
+  // distinguishes "value supplied" from protobuf's default-zero
+  // / empty-string, which would otherwise be ambiguous (chown
+  // root:root is uid=0/gid=0).
+  uint32 uid = 2;
+  bool uid_set = 3;
+  uint32 gid = 4;
+  bool gid_set = 5;
+  string mode = 6;
+  bool mode_set = 7;
+  bool recursive = 8;
+}
+
+message SetPermissionsResponse {
+  string output = 1;
+}
+
+message RunCloudSyncRequest {
+  uint32 idx = 1;
+}
+
+message RunCloudSyncResponse {
+  // Captured rclone stdout+stderr (truncated by the engine to
+  // a sane upper bound; full transcript stays in the
+  // sync-progress log on disk).
+  string output = 1;
+}
+
+message CancelCloudSyncRequest {
+  uint32 idx = 1;
+}
+
+message CancelCloudSyncResponse {
+  string output = 1;
+}

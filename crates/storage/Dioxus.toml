@@ -1,0 +1,10 @@
+[application]
+name = "bananas-storage-ui"
+
+[web.app]
+base_path = "/assets/storage"
+title = "BanaNAS Storage"
+
+[web.wasm_opt]
+level = "2"
+debug = false

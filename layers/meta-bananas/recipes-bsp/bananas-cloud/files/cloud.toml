@@ -1,0 +1,10 @@
+# bananas-cloud — extension manifest read by bananas-router on
+# startup. One API prefix per plugin; the asset prefix is implied
+# by id (webadmin sub-proxies /assets/cloud/* to this daemon's
+# socket without consulting the manifest).
+id = "cloud"
+label = "Cloud"
+socket = "/run/bananas/cloud.sock"
+api_prefix = "/api/cloud"
+order = 50
+icon = "cloud"

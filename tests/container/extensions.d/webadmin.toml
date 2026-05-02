@@ -1,0 +1,4 @@
+id = "webadmin"
+label = "BanaNAS"
+socket = "/run/bananas/webadmin.sock"
+api_prefix = "/api"

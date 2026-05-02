@@ -1,0 +1,6 @@
+id = "cloud"
+label = "Cloud"
+socket = "/run/bananas/cloud.sock"
+api_prefix = "/api/cloud"
+order = 50
+icon = "cloud"

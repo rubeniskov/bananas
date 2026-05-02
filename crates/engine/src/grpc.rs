@@ -1,0 +1,633 @@
+//! Tonic-served gRPC face of the engine. Hosted on
+//! `BANANAS_ENGINE_SOCKET` (default `/run/bananas/engine.sock`).
+//! Every privileged op the platform exposes routes through here;
+//! the legacy newline-JSON listener was retired when the last
+//! `Command` variant migrated.
+
+use std::path::PathBuf;
+
+use bananas_proto::engine::v1::{
+    AuthenticateRequest, AuthenticateResponse, CancelCloudSyncRequest, CancelCloudSyncResponse,
+    ChangeOwnPasswordRequest, ChangeOwnPasswordResponse, CreateUserRequest, CreateUserResponse,
+    DeleteUserRequest, DeleteUserResponse, ExportUsersRequest, ExportUsersResponse,
+    InstalledPackage as ProtoInstalledPackage, ListTimezonesRequest, ListTimezonesResponse,
+    ListUsersRequest, ListUsersResponse, LsblkRequest, LsblkResponse, MakeDirectoryRequest,
+    MakeDirectoryResponse, OpkgListInstalledRequest, OpkgListInstalledResponse,
+    OpkgListUpgradableRequest, OpkgListUpgradableResponse, OpkgUpdateRequest, OpkgUpdateResponse,
+    OpkgUpgradeRequest, OpkgUpgradeResponse, OpkgUpgradeStatusRequest, OpkgUpgradeStatusResponse,
+    ReadServiceConfigRequest, ReadServiceConfigResponse, RebootSystemRequest, RebootSystemResponse,
+    RunCloudSyncRequest, RunCloudSyncResponse, SetAdminRequest, SetAdminResponse,
+    SetPasswordRequest, SetPasswordResponse, SetPermissionsRequest, SetPermissionsResponse,
+    SetTimezoneRequest, SetTimezoneResponse, SmartRequest, SmartResponse, StatRequest,
+    StatResponse, UpgradablePackage as ProtoUpgradablePackage, WriteExportsRequest,
+    WriteExportsResponse, WriteFstabRequest, WriteFstabResponse, WriteServiceConfigRequest,
+    WriteServiceConfigResponse,
+    engine_service_server::{EngineService, EngineServiceServer},
+};
+use tonic::{Request, Response, Status};
+
+use crate::Cx;
+use crate::{
+    authenticate, cancel_cloud_sync, change_own_password, create_user, delete_user,
+    list_timezones_vec, list_users, make_directory, opkg, read_service_config, reboot_system,
+    run_cloud_sync, run_lsblk, set_admin, set_password, set_permissions, set_timezone, smart,
+    stat_path, verify_shadow_password, write_exports, write_fstab, write_service_config,
+};
+
+/// Engine gRPC service. Holds the same `Cx` (on-disk paths) the
+/// newline-JSON dispatch threads through; passed by value so the
+/// service is `Clone` friendly when tonic spawns per-request
+/// futures.
+pub struct EngineGrpc {
+    pub cx: Cx,
+}
+
+#[tonic::async_trait]
+impl EngineService for EngineGrpc {
+    async fn authenticate(
+        &self,
+        req: Request<AuthenticateRequest>,
+    ) -> Result<Response<AuthenticateResponse>, Status> {
+        let body = req.into_inner();
+        // Same flow as the newline-JSON `Command::Authenticate`:
+        // verify the hash, check group membership, surface the
+        // password_expired sentinel as a structured field. Errors
+        // collapse into a single generic message — same redaction
+        // policy as the legacy path.
+        match authenticate(&body.username, &body.password, &self.cx.shadow).await {
+            Ok(()) => Ok(Response::new(AuthenticateResponse {
+                lastchg_zero: false,
+            })),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("password_expired") {
+                    // Authenticated, but password rotation forced.
+                    return Ok(Response::new(AuthenticateResponse { lastchg_zero: true }));
+                }
+                tracing::warn!(user=%body.username, error=%msg, "auth failed (gRPC)");
+                Err(Status::unauthenticated("invalid credentials"))
+            }
+        }
+    }
+
+    async fn change_own_password(
+        &self,
+        req: Request<ChangeOwnPasswordRequest>,
+    ) -> Result<Response<ChangeOwnPasswordResponse>, Status> {
+        let body = req.into_inner();
+        // Same redaction as Authenticate — every failure surfaces
+        // as a single Unauthenticated so callers can't distinguish
+        // "user doesn't exist" from "old password wrong" from "new
+        // password rejected by safety check".
+        match change_own_password(
+            &body.username,
+            &body.old_password,
+            &body.new_password,
+            &self.cx.shadow,
+        )
+        .await
+        {
+            Ok(()) => Ok(Response::new(ChangeOwnPasswordResponse {})),
+            Err(e) => {
+                tracing::warn!(user=%body.username, error=%e, "change_own_password failed (gRPC)");
+                Err(Status::unauthenticated("invalid credentials"))
+            }
+        }
+    }
+
+    async fn reboot_system(
+        &self,
+        _req: Request<RebootSystemRequest>,
+    ) -> Result<Response<RebootSystemResponse>, Status> {
+        // Distinct from auth: failure here is a real systemd
+        // problem, not a security boundary, so we surface the
+        // captured stderr for the UI to render.
+        match reboot_system().await {
+            Ok(output) => Ok(Response::new(RebootSystemResponse { output })),
+            Err(e) => {
+                tracing::warn!(error=%e, "reboot_system failed (gRPC)");
+                Err(Status::internal(format!("reboot failed: {e}")))
+            }
+        }
+    }
+
+    async fn set_timezone(
+        &self,
+        req: Request<SetTimezoneRequest>,
+    ) -> Result<Response<SetTimezoneResponse>, Status> {
+        let body = req.into_inner();
+        // Bad-tz strings are caller-supplied, so surface as
+        // InvalidArgument; a timedatectl failure or persist error
+        // is a real engine problem and maps to Internal.
+        match set_timezone(&body.tz).await {
+            Ok(output) => Ok(Response::new(SetTimezoneResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(tz = %body.tz, error = %msg, "set_timezone failed (gRPC)");
+                if msg.starts_with("invalid timezone") || msg.starts_with("unknown timezone") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn list_timezones(
+        &self,
+        _req: Request<ListTimezonesRequest>,
+    ) -> Result<Response<ListTimezonesResponse>, Status> {
+        match list_timezones_vec().await {
+            Ok(zones) => Ok(Response::new(ListTimezonesResponse { zones })),
+            Err(e) => {
+                tracing::warn!(error = %e, "list_timezones failed (gRPC)");
+                Err(Status::internal(format!("list_timezones failed: {e}")))
+            }
+        }
+    }
+
+    async fn read_service_config(
+        &self,
+        req: Request<ReadServiceConfigRequest>,
+    ) -> Result<Response<ReadServiceConfigResponse>, Status> {
+        let name = req.into_inner().name;
+        // Unknown allowlist names are caller-controlled, so they
+        // map to InvalidArgument; anything else is a real fs error.
+        match read_service_config(&name).await {
+            Ok(content) => Ok(Response::new(ReadServiceConfigResponse { content })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(name = %name, error = %msg, "read_service_config failed (gRPC)");
+                if msg.starts_with("unknown service config") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn write_service_config(
+        &self,
+        req: Request<WriteServiceConfigRequest>,
+    ) -> Result<Response<WriteServiceConfigResponse>, Status> {
+        let body = req.into_inner();
+        match write_service_config(&body.name, &body.content).await {
+            Ok(output) => Ok(Response::new(WriteServiceConfigResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(name = %body.name, error = %msg, "write_service_config failed (gRPC)");
+                if msg.starts_with("unknown service config") || msg.starts_with("invalid TOML") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn opkg_update(
+        &self,
+        _req: Request<OpkgUpdateRequest>,
+    ) -> Result<Response<OpkgUpdateResponse>, Status> {
+        match opkg::update().await {
+            Ok(output) => Ok(Response::new(OpkgUpdateResponse { output })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_update failed (gRPC)");
+                Err(Status::internal(format!("opkg update: {e}")))
+            }
+        }
+    }
+
+    async fn opkg_list_upgradable(
+        &self,
+        _req: Request<OpkgListUpgradableRequest>,
+    ) -> Result<Response<OpkgListUpgradableResponse>, Status> {
+        match opkg::list_upgradable().await {
+            Ok(rows) => Ok(Response::new(OpkgListUpgradableResponse {
+                packages: rows
+                    .into_iter()
+                    .map(|p| ProtoUpgradablePackage {
+                        name: p.name,
+                        installed: p.installed,
+                        candidate: p.candidate,
+                    })
+                    .collect(),
+            })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_list_upgradable failed (gRPC)");
+                Err(Status::internal(format!("opkg list-upgradable: {e}")))
+            }
+        }
+    }
+
+    async fn opkg_list_installed(
+        &self,
+        _req: Request<OpkgListInstalledRequest>,
+    ) -> Result<Response<OpkgListInstalledResponse>, Status> {
+        match opkg::list_installed().await {
+            Ok(rows) => Ok(Response::new(OpkgListInstalledResponse {
+                packages: rows
+                    .into_iter()
+                    .map(|p| ProtoInstalledPackage {
+                        name: p.name,
+                        version: p.version,
+                    })
+                    .collect(),
+            })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_list_installed failed (gRPC)");
+                Err(Status::internal(format!("opkg list-installed: {e}")))
+            }
+        }
+    }
+
+    async fn opkg_upgrade(
+        &self,
+        req: Request<OpkgUpgradeRequest>,
+    ) -> Result<Response<OpkgUpgradeResponse>, Status> {
+        let packages = req.into_inner().packages;
+        match opkg::upgrade(&packages).await {
+            Ok(output) => Ok(Response::new(OpkgUpgradeResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "opkg_upgrade failed (gRPC)");
+                // The engine's `upgrade()` rejects re-entry while a
+                // unit is already active. Surface that as
+                // FailedPrecondition so the webadmin can map it to
+                // HTTP 409 Conflict.
+                if msg.contains("already") {
+                    Err(Status::failed_precondition(msg))
+                } else {
+                    Err(Status::internal(format!("opkg upgrade: {msg}")))
+                }
+            }
+        }
+    }
+
+    async fn opkg_upgrade_status(
+        &self,
+        req: Request<OpkgUpgradeStatusRequest>,
+    ) -> Result<Response<OpkgUpgradeStatusResponse>, Status> {
+        let since = req.into_inner().since;
+        match opkg::upgrade_status(since).await {
+            Ok(s) => Ok(Response::new(OpkgUpgradeStatusResponse {
+                state: s.state,
+                log: s.log,
+                log_offset: s.log_offset,
+                exit_code: s.exit_code.unwrap_or(-1),
+                has_exit_code: s.exit_code.is_some(),
+            })),
+            Err(e) => {
+                tracing::warn!(error = %e, "opkg_upgrade_status failed (gRPC)");
+                Err(Status::internal(format!("opkg upgrade-status: {e}")))
+            }
+        }
+    }
+
+    async fn write_exports(
+        &self,
+        req: Request<WriteExportsRequest>,
+    ) -> Result<Response<WriteExportsResponse>, Status> {
+        let content = req.into_inner().content;
+        match write_exports(&content, &self.cx.exports).await {
+            Ok(output) => Ok(Response::new(WriteExportsResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "write_exports failed (gRPC)");
+                // The validator surfaces every line-shape error
+                // with a `line N:` prefix; treat those as
+                // caller-supplied bad-input.
+                if msg.contains("line ") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn write_fstab(
+        &self,
+        req: Request<WriteFstabRequest>,
+    ) -> Result<Response<WriteFstabResponse>, Status> {
+        let content = req.into_inner().content;
+        match write_fstab(&content).await {
+            Ok(output) => Ok(Response::new(WriteFstabResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(error = %msg, "write_fstab failed (gRPC)");
+                if msg.contains("line ") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn export_users(
+        &self,
+        _req: Request<ExportUsersRequest>,
+    ) -> Result<Response<ExportUsersResponse>, Status> {
+        match list_users(true).await {
+            Ok(users_json) => Ok(Response::new(ExportUsersResponse { users_json })),
+            Err(e) => {
+                tracing::warn!(error = %e, "export_users failed (gRPC)");
+                Err(Status::internal(format!("export_users: {e}")))
+            }
+        }
+    }
+
+    async fn create_user(
+        &self,
+        req: Request<CreateUserRequest>,
+    ) -> Result<Response<CreateUserResponse>, Status> {
+        let body = req.into_inner();
+        let full_name = if body.full_name.is_empty() {
+            None
+        } else {
+            Some(body.full_name.as_str())
+        };
+        match create_user(
+            &body.username,
+            &body.password,
+            full_name,
+            body.admin,
+            body.password_is_hash,
+        )
+        .await
+        {
+            Ok(()) => Ok(Response::new(CreateUserResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "create_user failed (gRPC)");
+                // Caller-visible bad-input → InvalidArgument; an
+                // already-existing user is FailedPrecondition so a
+                // bundle restore can distinguish skipped from broken.
+                if msg.starts_with("invalid") || msg.contains("password") {
+                    Err(Status::invalid_argument(msg))
+                } else if msg.contains("already exists") {
+                    Err(Status::already_exists(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn list_users(
+        &self,
+        _req: Request<ListUsersRequest>,
+    ) -> Result<Response<ListUsersResponse>, Status> {
+        match list_users(false).await {
+            Ok(users_json) => Ok(Response::new(ListUsersResponse { users_json })),
+            Err(e) => {
+                tracing::warn!(error = %e, "list_users failed (gRPC)");
+                Err(Status::internal(format!("list_users: {e}")))
+            }
+        }
+    }
+
+    async fn set_admin(
+        &self,
+        req: Request<SetAdminRequest>,
+    ) -> Result<Response<SetAdminResponse>, Status> {
+        let body = req.into_inner();
+        match set_admin(&body.username, body.admin).await {
+            Ok(()) => Ok(Response::new(SetAdminResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "set_admin failed (gRPC)");
+                if msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else if msg.contains("not found") {
+                    Err(Status::not_found(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn delete_user(
+        &self,
+        req: Request<DeleteUserRequest>,
+    ) -> Result<Response<DeleteUserResponse>, Status> {
+        let body = req.into_inner();
+        match delete_user(&body.username).await {
+            Ok(()) => Ok(Response::new(DeleteUserResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "delete_user failed (gRPC)");
+                if msg.starts_with("invalid")
+                    || msg.contains("system user")
+                    || msg.contains("refusing")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else if msg.contains("not found") {
+                    Err(Status::not_found(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn set_password(
+        &self,
+        req: Request<SetPasswordRequest>,
+    ) -> Result<Response<SetPasswordResponse>, Status> {
+        let body = req.into_inner();
+        match set_password(&body.username, &body.password).await {
+            Ok(()) => Ok(Response::new(SetPasswordResponse {})),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(user = %body.username, error = %msg, "set_password failed (gRPC)");
+                if msg.starts_with("invalid")
+                    || msg.contains("system user")
+                    || msg.contains("refusing")
+                    || msg.contains("password")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn make_directory(
+        &self,
+        req: Request<MakeDirectoryRequest>,
+    ) -> Result<Response<MakeDirectoryResponse>, Status> {
+        let path = req.into_inner().path;
+        match make_directory(&path).await {
+            Ok(output) => Ok(Response::new(MakeDirectoryResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(path = %path, error = %msg, "make_directory failed (gRPC)");
+                if msg.starts_with("refusing")
+                    || msg.starts_with("invalid")
+                    || msg.contains("not allowed")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn lsblk(&self, _req: Request<LsblkRequest>) -> Result<Response<LsblkResponse>, Status> {
+        match run_lsblk().await {
+            Ok(lsblk_json) => Ok(Response::new(LsblkResponse { lsblk_json })),
+            Err(e) => {
+                tracing::warn!(error = %e, "lsblk failed (gRPC)");
+                Err(Status::internal(format!("lsblk: {e}")))
+            }
+        }
+    }
+
+    async fn smart(&self, req: Request<SmartRequest>) -> Result<Response<SmartResponse>, Status> {
+        let device = req.into_inner().device;
+        match smart(&device).await {
+            Ok(smart_json) => Ok(Response::new(SmartResponse { smart_json })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(device = %device, error = %msg, "smart failed (gRPC)");
+                if msg.contains("not allowed") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn stat(&self, req: Request<StatRequest>) -> Result<Response<StatResponse>, Status> {
+        let path = req.into_inner().path;
+        match stat_path(&path).await {
+            Ok(stat_json) => Ok(Response::new(StatResponse { stat_json })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(path = %path, error = %msg, "stat failed (gRPC)");
+                if msg.contains("not allowed") || msg.starts_with("invalid") {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn set_permissions(
+        &self,
+        req: Request<SetPermissionsRequest>,
+    ) -> Result<Response<SetPermissionsResponse>, Status> {
+        let body = req.into_inner();
+        let uid = body.uid_set.then_some(body.uid);
+        let gid = body.gid_set.then_some(body.gid);
+        let mode = if body.mode_set {
+            Some(body.mode.as_str())
+        } else {
+            None
+        };
+        match set_permissions(&body.path, uid, gid, mode, body.recursive).await {
+            Ok(output) => Ok(Response::new(SetPermissionsResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(path = %body.path, error = %msg, "set_permissions failed (gRPC)");
+                if msg.contains("not allowed")
+                    || msg.starts_with("invalid")
+                    || msg.contains("nothing to change")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn run_cloud_sync(
+        &self,
+        req: Request<RunCloudSyncRequest>,
+    ) -> Result<Response<RunCloudSyncResponse>, Status> {
+        let idx = req.into_inner().idx as usize;
+        // rclone-side errors are real failures (network, auth,
+        // disk). Bad-config errors get InvalidArgument so the SPA
+        // distinguishes "this run failed" from "the sync entry is
+        // misconfigured".
+        match run_cloud_sync(idx).await {
+            Ok(output) => Ok(Response::new(RunCloudSyncResponse { output })),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(idx, error = %msg, "run_cloud_sync failed (gRPC)");
+                if msg.contains("not found")
+                    || msg.contains("invalid")
+                    || msg.contains("out of range")
+                {
+                    Err(Status::invalid_argument(msg))
+                } else {
+                    Err(Status::internal(msg))
+                }
+            }
+        }
+    }
+
+    async fn cancel_cloud_sync(
+        &self,
+        req: Request<CancelCloudSyncRequest>,
+    ) -> Result<Response<CancelCloudSyncResponse>, Status> {
+        let idx = req.into_inner().idx as usize;
+        match cancel_cloud_sync(idx).await {
+            Ok(output) => Ok(Response::new(CancelCloudSyncResponse { output })),
+            Err(e) => {
+                tracing::warn!(idx, error = %e, "cancel_cloud_sync failed (gRPC)");
+                Err(Status::internal(format!("cancel_cloud_sync: {e}")))
+            }
+        }
+    }
+}
+
+/// Bind the gRPC Unix socket and serve the EngineService. Called
+/// from `main` as a separate `tokio::spawn` so the legacy
+/// newline-JSON listener continues to run on the original socket.
+pub async fn serve(grpc_socket: PathBuf, cx: Cx) -> anyhow::Result<()> {
+    if grpc_socket.exists() {
+        let _ = std::fs::remove_file(&grpc_socket);
+    }
+    if let Some(parent) = grpc_socket.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let listener = tokio::net::UnixListener::bind(&grpc_socket)?;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&grpc_socket, std::fs::Permissions::from_mode(0o660))?;
+    tracing::info!(socket=%grpc_socket.display(), "engine gRPC listening");
+
+    let svc = EngineGrpc { cx };
+    let incoming = futures_util::stream::unfold(listener, |listener| async move {
+        match listener.accept().await {
+            Ok((stream, _addr)) => Some((Ok::<_, std::io::Error>(stream), listener)),
+            Err(e) => {
+                tracing::warn!(error=%e, "engine gRPC accept failed");
+                Some((Err(e), listener))
+            }
+        }
+    });
+
+    tonic::transport::Server::builder()
+        .add_service(EngineServiceServer::new(svc))
+        .serve_with_incoming(incoming)
+        .await?;
+    Ok(())
+}
+
+// silence unused-import warning when bananas-engine is built
+// with both the lib and bin: `verify_shadow_password` is used
+// only when the gRPC mount migrates additional RPCs.
+#[allow(dead_code)]
+fn _keep_used() {
+    let _ = verify_shadow_password;
+}

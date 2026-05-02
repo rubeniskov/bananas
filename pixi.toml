@@ -1,0 +1,366 @@
+[workspace]
+authors = ["rubeniskov <me@rubeniskov.com>"]
+channels = ["conda-forge"]
+name = "bananas"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+info = "python --version && kas --version"
+
+# `build`: kas → bitbake. Sources .env first so ROOT_PASSWORD_HASH
+# (declared in kas.yml's `env:` block) reaches the recipe when set —
+# it's optional now. The recipe ships a "bananas" placeholder hash
+# flagged expired on first sign-in if no override is provided.
+#
+# We force `-c rootfs` so the rootfs is regenerated each run. Forcing only
+# `image_complete` is not enough — its sstate restoration can hit, mark
+# the task done, and never actually copy the tarball into deploy/. Forcing
+# rootfs cascades through to do_image_*, which DO write to deploy/.
+#
+# The post-build copy-from-work fallback handles the residual case where
+# sstate still convinces bitbake the deploy step is done: the image's
+# WORKDIR is preserved by RM_WORK_EXCLUDE in kas.yml, so we can copy from
+# there if deploy/ is missing the tarball.
+# `build`: full Yocto image bake. Runs `kas build kas.yml` twice — first
+# to force `do_rootfs`, then a second pass for image-complete deps.
+#
+# `set -e` is the load-bearing bit here: bitbake QA failures (e.g. a
+# patch missing Upstream-Status) bubble up as a non-zero exit code, so
+# iterate aborts instead of silently shipping a stale rootfs from a
+# previous bake. The earlier version of this command swallowed bitbake
+# failures via a `;` between the two `kas build` calls and an
+# `|| true`-guarded fallback copy — that meant a failed bake would
+# happily reboot the BPI onto last-known-good, masking the real error.
+#
+# The work/-to-deploy/ fallback only runs AFTER both bake passes
+# succeeded, and only if the deploy/ tarball is older than the
+# image-complete output (occasionally bitbake doesn't republish to
+# deploy/ on a clean rebuild). That keeps the fast-path correct
+# without papering over real failures.
+[tasks.build]
+cmd = """bash -c '
+set -e
+set -a; [ -f .env ] && . .env; set +a
+kas build kas.yml -- -c rootfs -f bananas-image
+kas build kas.yml
+ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz
+WORK_LATEST=$(ls -t build/tmp/work/bananapro-poky-linux-gnueabi/bananas-image/*/deploy-bananas-image-image-complete/bananas-image-bananapro.rootfs-*.tar.gz 2>/dev/null | head -1)
+if [ -n \"$WORK_LATEST\" ]; then
+  if [ ! -f \"$ROOTFS\" ] || [ \"$WORK_LATEST\" -nt \"$ROOTFS\" ]; then
+    echo \"deploy/ tarball stale or missing — copying from work/\"
+    mkdir -p build/tmp/deploy/images/bananapro
+    cp -f \"$WORK_LATEST\" \"$ROOTFS\"
+  fi
+fi
+'"""
+
+[tasks.setup-fel]
+cmd = "test -d vendor/sunxi-tools || git clone --depth 1 https://github.com/linux-sunxi/sunxi-tools.git vendor/sunxi-tools && make -C vendor/sunxi-tools tools"
+
+[tasks.fel]
+cmd = "./vendor/sunxi-tools/sunxi-fel"
+depends-on = ["setup-fel"]
+
+# `setup-dx`: one-shot install of dioxus-cli into ~/.cargo/bin so `dx build`
+# works from `build-webadmin`. Cached after first install — `dx --version` short-circuits.
+[tasks.setup-dx]
+cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v dx >/dev/null || cargo install dioxus-cli --locked --version ^0.7'"
+
+# `setup-cross`: one-shot install of cross-rs into ~/.cargo/bin. cross
+# spins up a per-target Docker container preloaded with multiarch
+# system libs (e.g. fontconfig-dev:armhf for the dashboard's Slint
+# build), avoiding the per-crate sysroot dance that cargo-zigbuild
+# can't handle. Used by `build-dashboard-arm`. Cached after first
+# install — `cross --version` short-circuits.
+[tasks.setup-cross]
+cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\" command -v cross >/dev/null || cargo install cross --locked'"
+
+# `setup-prek`: install prek (https://github.com/j178/prek), a Rust
+# drop-in for pre-commit, into ~/.cargo/bin AND wire its hooks into
+# this repo's .git/hooks via `prek install`. Idempotent — re-running
+# is cheap. Pair this with the `.pre-commit-config.yaml` at the repo
+# root: cargo fmt runs on every commit, clippy + tests + wasm check
+# run on pre-push.
+[tasks.setup-prek]
+cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\"; command -v prek >/dev/null || cargo install --locked prek; prek install --hook-type pre-commit --hook-type pre-push'"
+
+# `setup-rclone-arm`: one-shot download of the upstream rclone armv7
+# binary into serve/bin/rclone. rclone is a Go binary published as a
+# static cross-compiled release at downloads.rclone.org — no Yocto
+# go-builder needed. Cached after the first run; bumping the pinned
+# version below forces a re-download.
+#
+# We pin the version to keep the bake reproducible. SHA256 verifies the
+# zip *before* we trust the binary it contains.
+[tasks.setup-rclone-arm]
+cmd = """bash -c '
+set -e
+RCLONE_VERSION=v1.68.2
+EXPECTED_SHA=a244cc4d75abf10af576c0a4161fbe454c129658358ba2e6e27c9e97639ff0fb
+ARCHIVE=rclone-${RCLONE_VERSION}-linux-arm.zip
+URL=https://downloads.rclone.org/${RCLONE_VERSION}/${ARCHIVE}
+DEST=serve/bin
+if [ -x "$DEST/rclone" ]; then
+  # Marker file pinned by the last successful install. We can not run
+  # `rclone version` here because the binary is armv7 and we are an
+  # x86_64 host; without qemu it just exec-faults silently.
+  if [ -f "$DEST/.rclone-version" ] && [ "$(cat "$DEST/.rclone-version")" = "$RCLONE_VERSION" ]; then
+    exit 0
+  fi
+fi
+mkdir -p "$DEST"
+TMP=$(mktemp -d)
+trap "rm -rf $TMP" EXIT
+echo "Downloading rclone $RCLONE_VERSION (linux-arm)..."
+curl -fSL "$URL" -o "$TMP/$ARCHIVE"
+GOT_SHA=$(sha256sum "$TMP/$ARCHIVE" | awk "{print \\$1}")
+if [ "$GOT_SHA" != "$EXPECTED_SHA" ]; then
+  echo "ERROR: rclone archive sha256 mismatch:" >&2
+  echo "  expected: $EXPECTED_SHA" >&2
+  echo "  got:      $GOT_SHA" >&2
+  exit 1
+fi
+# -o overwrites any pre-existing rclone in serve/bin/ without prompting;
+# the iterate loop runs in non-interactive mode where the unzip prompt
+# just hangs / EOFs and aborts the task.
+unzip -o -j "$TMP/$ARCHIVE" "*/rclone" -d "$DEST"
+chmod +x "$DEST/rclone"
+printf "%s" "$RCLONE_VERSION" > "$DEST/.rclone-version"
+echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
+'"""
+
+# `build-webadmin-arm`: cross-compile bananas-webadmin + bananas-engine for the
+# BPI's armv7-unknown-linux-gnueabihf target using cargo-zigbuild (zig as the
+# cross linker, no per-target gcc needed). Stages the stripped binaries in
+# serve/bin/ where the bananas-webadmin.bb recipe picks them up. The wasm
+# SPA bins inside bananas-webadmin and bananas-cloud are gated behind the
+# `wasm-ui` cargo feature (required-features), so the native cross-compile
+# skips them; their build.rs invokes `dx build --features wasm-ui …` to
+# produce the wasm + companions and embed them via include_dir!.
+#
+# `env -u CFLAGS …` strips pixi's conda-env x86_64-host CFLAGS so cc-rs
+# doesn't try to feed `-march=haswell` into the armv7 cross-compile of
+# rusqlite-bundled (pulled in transitively via bananas-stats). Without
+# this, libsqlite3-sys's build script dies with `unknown CPU: 'haswell'`.
+[tasks.build-webadmin-arm]
+depends-on = ["setup-dx"]
+cmd = """bash -c '
+set -e
+export PATH="$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH"
+ZB() { env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release --target armv7-unknown-linux-gnueabihf "$@"; }
+# Single-bin packages can be cross-built in one invocation.
+ZB -p bananas-webadmin -p bananas-engine -p bananas-router -p bananas-cloud -p bananas-exports -p bananas-storage -p bananas-users
+# Multi-bin packages: pin --bin so we do not drag in the
+# fontconfig-needing SLINT bin (bananas-dashboard) or rebuild
+# the stats collector from scratch.
+ZB -p bananas-stats --bin bananas-stats-web
+ZB -p bananas-dashboard --bin bananas-dashboard-web --no-default-features
+mkdir -p serve/bin
+cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-engine \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-router \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-cloud \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-exports \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-storage \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-users \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-stats-web \\
+   target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard-web \\
+   serve/bin/
+'"""
+
+# `build-stats-arm`: cross-compile bananas-stats (the sampler daemon)
+# for armv7 via cargo-zigbuild. Pure-Rust deps + bundled rusqlite, so no
+# sysroot needed. The companion bananas-dashboard (Slint LCD UI) is NOT
+# built here yet — Slint's text stack pulls in `yeslogic-fontconfig-sys`
+# which requires an armhf fontconfig + pkg-config sysroot at link time.
+# That follow-up either ports the build to `cross` (docker image with
+# multiarch fontconfig-dev) or vendors a minimal armhf sysroot.
+#
+# CFLAGS/CXXFLAGS are unset because pixi injects host-x86_64 march flags
+# (`-march=nocona -mtune=haswell`) from its conda env. Those leak into
+# cc-rs's invocation when rusqlite-bundled compiles SQLite, breaking the
+# armv7 cross-compile with "unknown CPU: 'haswell'".
+[tasks.build-stats-arm]
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-stats --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-stats serve/bin/'"
+
+# `build-config-arm`: cross-compile bananas-config (the operator TUI +
+# CLI) via the same cargo-zigbuild path as the server / stats. Pure-
+# Rust deps (ratatui + crossterm + reqwest+rustls), no sysroot needed.
+[tasks.build-config-arm]
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-config --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-config serve/bin/'"
+
+# `build-dashboard-arm`: cross-compile bananas-dashboard (the Slint
+# LCD app) for armv7-unknown-linux-gnueabihf via cross-rs. cross
+# spins up a Docker container preloaded with multiarch system libs
+# (configured in Cross.toml at the repo root: armhf fontconfig-dev,
+# libudev-dev, libdrm-dev, libgbm-dev for the linuxkms backend).
+# This is the missing piece bananas-stats / bananas-webadmin didn't
+# need — Slint's font subsystem links yeslogic-fontconfig-sys at
+# build time, and cargo-zigbuild can't cross-link against fontconfig
+# without a sysroot.
+[tasks.build-dashboard-arm]
+# `stdbuf -oL` line-buffers stdout so each `Compiling ...` line flushes
+# as it happens. cross runs cargo inside a Docker `exec` with no TTY,
+# which otherwise causes cargo to block-buffer until the run completes —
+# making it look like the build hung for 15 minutes when it's actively
+# compiling Slint.
+#
+# Cargo's default progress bar is animated and looks ugly in a log file,
+# so we let `--verbose` print the per-crate "Compiling X" lines instead.
+cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --bin bananas-dashboard --features slint-app --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/'"
+depends-on = ["setup-cross"]
+
+# --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
+# `serve-tftp`: stage kernel+dtb into ./serve/tftp/. Wrapped in `bash -c`
+# because deno_task_shell's builtin `cp` doesn't support `-L`. Also
+# asserts the rootfs tarball is present so we fail with a useful message
+# instead of letting extract-rootfs error with "No such file" inside a
+# Docker container. The `build` task is supposed to guarantee this; this
+# guard is just a belt-and-suspenders.
+[tasks.serve-tftp]
+cmd = "bash -c 'set -e; ROOTFS=build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz; [ -f \"$ROOTFS\" ] || { echo \"ERROR: rootfs missing at $ROOTFS — build/recovery did not populate it. Try: pixi run build (which forces image_complete and falls back to copying from work/).\" >&2; exit 1; }; mkdir -p serve/tftp && rm -f serve/tftp/* && cp -L build/tmp/deploy/images/bananapro/uImage build/tmp/deploy/images/bananapro/sun7i-a20-bananapro.dtb serve/tftp/'"
+
+# `extract-rootfs`: unpack the rootfs tarball into ./serve/nfs/bananas/ as root via a throwaway alpine container.
+# `--userns=host` is required because the daemon has userns-remap enabled — without it, container UID 0 maps to host
+# UID 100000 and can't write to the bind-mounted ./serve/nfs/bananas (owned by real user 1000).
+#
+# We rely on the user's docker context being `default` (host's native dockerd
+# at /var/run/docker.sock) — Docker Desktop's VM context can't bind LAN UDP
+# ports for TFTP/NFS, so the iterate flow only works against the native
+# daemon. Switch contexts with `docker context use default` if `docker ps`
+# reports your TFTP/NFS containers missing.
+[tasks.extract-rootfs]
+cmd = "mkdir -p serve/nfs/bananas && docker run --rm --userns=host -v $PIXI_PROJECT_ROOT/build/tmp/deploy/images/bananapro:/build:ro -v $PIXI_PROJECT_ROOT/serve/nfs/bananas:/dst alpine sh -c 'rm -rf /dst/* /dst/.[!.]*; tar -xzf /build/bananas-image-bananapro.rootfs.tar.gz -C /dst'"
+
+# `serve`: republish artifacts and (re)start the TFTP+NFS containers.
+# Note: serve does *not* extract-rootfs anymore — that has to happen while the
+# board is offline (see `iterate`). Standalone `pixi run serve` only re-stages
+# TFTP and starts containers; rootfs extract is a separate explicit step.
+[tasks.serve]
+cmd = "docker compose up -d"
+depends-on = ["serve-tftp"]
+
+# `reboot`: ask the running board to reboot so it picks up the new artifacts.
+# BPI_HOST is required — set in .env or export before running. Tasks below
+# `set -a; . .env; set +a` so .env values populate the env, then the
+# `${BPI_HOST:?...}` shell-expansion fails fast with a helpful message.
+#
+# UserKnownHostsFile=/dev/null + StrictHostKeyChecking=no: each `iterate`
+# wipes /etc on the BPI (rootfs is re-extracted from the Yocto tarball), so
+# OpenSSH regenerates host keys on first boot. Tracking them in known_hosts
+# would refuse every connection past iteration #2 with
+# "REMOTE HOST IDENTIFICATION HAS CHANGED". For a development NAS that gets
+# its rootfs swapped under it, MITM-detection via known_hosts isn't useful.
+[tasks.reboot]
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR root@\"$host\" reboot || true'"
+
+# `wait-board-down`: poll ICMP until $BPI_HOST stops answering, so the next
+# step (extract-rootfs) runs against an idle NFS share. Without this, the
+# board's running sshd/systemd has files swapped under it mid-shutdown and
+# wedges into "Running in chroot, ignoring request" mode requiring a hard
+# power-cycle. 30 s timeout is conservative — proceeds anyway if the board
+# refuses to power down (e.g., already off).
+[tasks.wait-board-down]
+# 120s timeout: NFS-server's stop-job in systemd has DefaultTimeoutStopSec=
+# ~90s, and it's the long pole on shutdown when there are active client
+# mounts (the iterate host is one of those clients). 30s was too short
+# and routinely aborted iterate just before extract-rootfs would have
+# run, leaving the next iterate to swap libs under the running BPI.
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; echo waiting for $host to power down...; for i in $(seq 1 120); do ping -c 1 -W 1 \"$host\" > /dev/null 2>&1 || { echo $host is down; exit 0; }; sleep 1; done; echo \"ERROR: $host did not go down within 120s — likely the ssh-reboot did not fire (board already wedged). Hard power-cycle the board, then re-run pixi run iterate.\" >&2; exit 1'"
+
+# `iterate`: build → restage TFTP → reboot board → wait for it to drop off the
+# net → extract rootfs (now safe, NFS share is idle) → bring containers up.
+# The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
+# now-correctly-staged servers. No buttons, no SD writes, no wedge.
+[tasks.iterate]
+cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+
+# `e2e`: bring up engine + router + webadmin + every plugin daemon
+# as native (host-target) processes against an isolated tmpdir +
+# random TCP port, drive them with chromiumoxide (CDP-direct
+# headless chrome, no chromedriver). Each plugin's tests live in
+# its own crate (`crates/<id>/tests/e2e_*.rs`); the shared harness
+# lives in `crates/devtool` (bananas-devtool).
+#
+# Each `Harness::new()` call is hermetic, so cargo's test runner
+# parallelises freely. Real /api/login replaces the cookie-forgery
+# shortcut the old harness used. Does NOT cover engine privileged
+# ops (opkg upgrades, /etc/exports rewrites, reboot) — those need
+# the heavier Yocto-container harness coming in PR-6.
+[tasks.e2e]
+# `cargo build --workspace --bins` would attempt the SLINT
+# dashboard binary, which is gated behind `required-features =
+# ["slint-app"]` and skipped by default — that's deliberate so the
+# host fontconfig isn't a hard dep here. `--bins` filters by
+# enabled features automatically; the SLINT bin doesn't compile.
+cmd = """bash -c '
+set -e
+unset CARGO RUSTC
+export RUSTUP_TOOLCHAIN=stable
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo build --workspace --bins
+cargo test --workspace --tests
+'"""
+
+# `build-test-container`: bake the `bananas-test:latest` image used
+# by `bananas-devtool::Container`. Pre-builds the host-target debug
+# binaries the Dockerfile copies in, then runs `docker build`.
+# Re-run after touching daemon source — the image embeds the
+# binaries by COPY, no live mount.
+[tasks.build-test-container]
+cmd = """bash -c '
+set -e
+unset CARGO RUSTC
+export RUSTUP_TOOLCHAIN=stable
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo build --workspace --bins
+docker build -t bananas-test:latest -f tests/container/Dockerfile .
+'"""
+
+# `e2e-container`: same shape as `e2e` but ALSO runs the
+# `#[ignore]`-gated container-touching tests. Requires docker on
+# the host context (`docker context use default`), and rebuilds
+# the test image first.
+[tasks.e2e-container]
+cmd = """bash -c '
+set -e
+unset CARGO RUSTC
+export RUSTUP_TOOLCHAIN=stable
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo test --workspace --tests -- --include-ignored
+'"""
+depends-on = ["build-test-container"]
+
+[dependencies]
+python = "==3.11"
+chrpath = "*"
+cpio = "*"
+patch = "*"
+bzip2 = "*"
+gzip = "*"
+brotli = "*"
+tar = "*"
+make = "*"
+gcc_linux-64 = "*"
+gxx_linux-64 = "*"
+perl = "*"
+coreutils = "*"
+bc = "*"
+xz = "*"
+zstd = "*"
+lz4 = "*"
+inetutils = ">=2.7,<3"
+libusb = "*"
+pkg-config = "*"
+git = "*"
+zlib = "*"
+libfdt = "*"
+# Cross-link Rust crates to armv7 without a per-target gcc — `zig cc` doubles
+# as a cross linker. Used by the `build-webadmin-arm` task via cargo-zigbuild.
+zig = ">=0.13"
+rust = ">=1.75"
+cargo-zigbuild = "*"
+
+[pypi-dependencies]
+kas = ">=5.2, <6"

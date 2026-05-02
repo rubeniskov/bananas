@@ -1,0 +1,31 @@
+services:
+  tftp:
+    image: alpine:3.19
+    network_mode: host
+    userns_mode: host
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        apk add -q --no-cache dnsmasq
+        exec dnsmasq --no-daemon --log-queries=extra --log-facility=- \
+          --port=0 \
+          --enable-tftp --tftp-root=/var/tftpboot --tftp-no-blocksize
+    volumes:
+      - ./serve/tftp:/var/tftpboot:ro
+    restart: unless-stopped
+    container_name: bananas-tftp
+
+  nfs:
+    image: itsthenetwork/nfs-server-alpine:latest
+    network_mode: host
+    userns_mode: host
+    privileged: true
+    environment:
+      SHARED_DIRECTORY: /nfsshare
+      SYNC: "1"
+    volumes:
+      - ./serve/nfs/bananas:/nfsshare
+      - ./serve/nfs-exports:/etc/exports:ro
+      - ./serve/nfsd.sh:/usr/bin/nfsd.sh:ro
+    restart: unless-stopped
+    container_name: bananas-nfs

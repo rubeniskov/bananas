@@ -1,0 +1,925 @@
+//! /etc/fstab editor — table with per-row edit + delete buttons,
+//! single FstabFormModal handling both create and edit. Same UX pattern
+//! as the Exports page.
+
+#![allow(non_snake_case)]
+
+use dioxus::prelude::*;
+
+use crate::{
+    AuthCtx, api,
+    api::ApiError,
+    browse::Browser,
+    components::{ConfirmModal, TextareaWithCopy},
+    icons::Icon,
+    permissions::PermissionsModal,
+};
+
+#[derive(Clone, PartialEq)]
+enum FormMode {
+    Create,
+    Edit(api::FstabRow),
+}
+
+#[component]
+pub fn MountsSection() -> Element {
+    let auth_ctx = use_context::<AuthCtx>();
+    let mut rows: Signal<Vec<api::FstabRow>> = use_signal(Vec::new);
+    let mut preview: Signal<String> = use_signal(String::new);
+    let mut banner: Signal<Option<(BannerKind, String)>> = use_signal(|| None);
+    let mut tick = use_signal(|| 0u32);
+    let mut form_mode: Signal<Option<FormMode>> = use_signal(|| None);
+    // Mountpoint the per-row Permissions modal is editing. None = closed.
+    let mut perms_for: Signal<Option<String>> = use_signal(|| None);
+    // Hide system mounts (/, /proc, /sys, …) from the table by default —
+    // they're never editable through the UI and just clutter the view.
+    let mut show_protected = use_signal(|| false);
+    // Index of the fstab row pending a delete-confirm. None = closed.
+    let mut pending_delete: Signal<Option<usize>> = use_signal(|| None);
+
+    use_effect(move || {
+        let _ = tick();
+        let _ = auth_ctx.refresh.read();
+        spawn(async move {
+            match api::list_fstab().await {
+                Ok(list) => {
+                    rows.set(list.rows);
+                    preview.set(list.preview);
+                }
+                Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                Err(e) => banner.set(Some((
+                    BannerKind::Err,
+                    format!("Loading fstab failed: {e}"),
+                ))),
+            }
+        });
+    });
+
+    rsx! {
+        div { class: "section-header",
+            h2 { "Mount points" }
+            label { class: "muted-toggle",
+                "data-tip": "Show /proc, /sys, /, etc. — read-only, included for visibility.",
+                input {
+                    r#type: "checkbox",
+                    checked: show_protected(),
+                    onchange: move |e| show_protected.set(e.checked())
+                }
+                " Show protected mounts"
+            }
+            span { class: "spacer" }
+            button {
+                class: "ghost",
+                "data-tip": "Re-fetch from /etc/fstab.",
+                onclick: move |_| tick.set(tick() + 1),
+                Icon { name: "rotate-cw" }
+                "Refresh"
+            }
+            button {
+                class: "primary",
+                "data-tip": "Add a new entry to /etc/fstab.",
+                onclick: move |_| form_mode.set(Some(FormMode::Create)),
+                Icon { name: "plus" }
+                "Add mount"
+            }
+        }
+        p { class: "preview-label",
+            "Edits land in /etc/fstab and trigger a systemd daemon-reload. Existing mounts stay mounted — unmount or reboot to actually drop a removed entry."
+        }
+
+        if let Some((kind, msg)) = banner() {
+            div { class: "banner {kind.css()}", pre { "{msg}" } }
+        }
+
+        {
+            let visible: Vec<api::FstabRow> = rows
+                .read()
+                .iter()
+                .filter(|r| show_protected() || !r.protected)
+                .cloned()
+                .collect();
+            if visible.is_empty() {
+                rsx! { p { class: "empty", "No fstab entries — click 'Add mount' to create one." } }
+            } else {
+                rsx! {
+                    table { class: "rows",
+                        thead {
+                            tr {
+                                th { "Source" }
+                                th { "Mountpoint" }
+                                th { "Type" }
+                                th { "Options" }
+                                th { "Dump" }
+                                th { "Pass" }
+                                th {}
+                            }
+                        }
+                        tbody {
+                            for r in visible.iter() {
+                                FstabRowView {
+                                    key: "{r.idx}",
+                                    row: r.clone(),
+                                    on_edit: {
+                                        let row = r.clone();
+                                        move |_| form_mode.set(Some(FormMode::Edit(row.clone())))
+                                    },
+                                    on_perms: {
+                                        let mp = r.mountpoint.clone();
+                                        move |_| perms_for.set(Some(mp.clone()))
+                                    },
+                                    on_delete: move |idx: usize| pending_delete.set(Some(idx))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        h3 { "/etc/fstab preview" }
+        p { class: "preview-label", "Read-only — column-aligned exactly as written to disk." }
+        TextareaWithCopy { value: preview(), id: "fstab-preview" }
+
+        if let Some(mode) = form_mode() {
+            FstabFormModal {
+                mode: mode,
+                on_close: move |_| form_mode.set(None),
+                on_saved: move |verb: &'static str| {
+                    form_mode.set(None);
+                    banner.set(Some((BannerKind::Ok, format!("Mount {verb}"))));
+                    tick.set(tick() + 1);
+                },
+                on_error: move |msg: String| banner.set(Some((BannerKind::Err, msg))),
+                on_unauthorized: move |_| auth_ctx.signal_unauthorized()
+            }
+        }
+
+        if let Some(path) = perms_for() {
+            PermissionsModal {
+                path: path,
+                on_close: move |_| perms_for.set(None),
+                on_saved: move |_| {
+                    perms_for.set(None);
+                    banner.set(Some((BannerKind::Ok, "Permissions updated".into())));
+                }
+            }
+        }
+
+        if let Some(idx) = pending_delete() {
+            ConfirmModal {
+                title: "Remove fstab entry?".to_string(),
+                message: format!("Delete /etc/fstab row #{idx}."),
+                details: "Any currently active mount stays mounted until you unmount it manually or reboot.".to_string(),
+                confirm_label: "Remove entry".to_string(),
+                danger: true,
+                on_cancel: move |_| pending_delete.set(None),
+                on_confirm: move |_| {
+                    pending_delete.set(None);
+                    spawn(async move {
+                        match api::delete_fstab(idx).await {
+                            Ok(()) => {
+                                banner.set(Some((BannerKind::Ok, format!("Removed row {idx}"))));
+                                tick.set(tick() + 1);
+                            }
+                            Err(ApiError::Unauthorized) => auth_ctx.signal_unauthorized(),
+                            Err(e) => banner.set(Some((BannerKind::Err, format!("Delete failed: {e}")))),
+                        }
+                    });
+                },
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum BannerKind {
+    Ok,
+    Err,
+}
+impl BannerKind {
+    fn css(self) -> &'static str {
+        match self {
+            BannerKind::Ok => "ok",
+            BannerKind::Err => "err",
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct FstabRowViewProps {
+    row: api::FstabRow,
+    on_edit: EventHandler<()>,
+    on_perms: EventHandler<()>,
+    on_delete: EventHandler<usize>,
+}
+
+#[component]
+fn FstabRowView(props: FstabRowViewProps) -> Element {
+    let r = &props.row;
+    let idx = r.idx;
+    let row_class = if r.protected { "row-protected" } else { "" };
+    rsx! {
+        tr { class: "{row_class}",
+            td { class: "source-cell",
+                div { class: "source",
+                    code { "{r.source}" }
+                    if r.protected {
+                        span { class: "badge sys",
+                            "data-tip": "System mount managed by the OS — the server refuses to edit or delete this row.",
+                            Icon { name: "lock" }
+                            " system"
+                        }
+                    }
+                }
+            }
+            td { code { "{r.mountpoint}" } }
+            td { code { "{r.fstype}" } }
+            td { FstabOptionBadges { opts: r.parsed.clone() } }
+            td { code { "{r.dump}" } }
+            td { code { "{r.pass}" } }
+            td { class: "row-actions",
+                div { class: "actions",
+                    // Protected (system) mounts get no actions — the server
+                    // refuses edit/delete and we don't expose chmod on /,
+                    // /proc, /sys, … through the UI either. Show a muted
+                    // "—" so the cell still has visible content and the
+                    // table layout stays consistent across rows.
+                    if r.protected {
+                        span { class: "row-actions-empty",
+                            "data-tip": "Protected system mount — managed by the OS. The UI cannot edit, delete, or chmod this entry.",
+                            "—"
+                        }
+                    } else {
+                        button {
+                            class: "btn-icon edit",
+                            "data-tip": "Edit this fstab entry",
+                            onclick: move |_| props.on_edit.call(()),
+                            Icon { name: "pencil" }
+                        }
+                        button {
+                            class: "btn-icon perms",
+                            "data-tip": "Edit owner / group / mode for this mountpoint.",
+                            onclick: move |_| props.on_perms.call(()),
+                            Icon { name: "lock" }
+                        }
+                        button {
+                            class: "btn-icon delete",
+                            "data-tip": "Delete this fstab entry",
+                            onclick: move |_| props.on_delete.call(idx),
+                            Icon { name: "trash-2" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct FstabOptionBadgesProps {
+    opts: api::FstabOpts,
+}
+
+#[component]
+fn FstabOptionBadges(props: FstabOptionBadgesProps) -> Element {
+    let o = &props.opts;
+    rsx! {
+        div { class: "badges",
+            if o.defaults { span { class: "badge", "data-tip": "rw, suid, dev, exec, auto, nouser, async — sane baseline.", "defaults" } }
+            if o.ro { span { class: "badge ro", "data-tip": "Mount read-only.", "ro" } }
+            if o.noatime { span { class: "badge", "data-tip": "Skip atime updates — easier on the disk.", "noatime" } }
+            if o.nofail { span { class: "badge", "data-tip": "Don't fail boot if the device isn't there.", "nofail" } }
+            if o.discard { span { class: "badge", "data-tip": "SSD trim on delete — only useful on SSDs.", "discard" } }
+            if o.noexec { span { class: "badge warn", "data-tip": "Block execution of binaries on this filesystem.", "noexec" } }
+            if o.nosuid { span { class: "badge warn", "data-tip": "Ignore setuid bits on this filesystem.", "nosuid" } }
+            if o.nodev { span { class: "badge warn", "data-tip": "Block device-node files on this filesystem.", "nodev" } }
+            if let Some(t) = o.device_timeout {
+                span { class: "badge", "data-tip": "systemd waits this long for the device before failing.",
+                    "x-systemd.device-timeout={t}s" }
+            }
+            for x in o.extra.iter() {
+                span { class: "badge", "data-tip": "Option not exposed as a checkbox; preserved verbatim.", "{x}" }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SourceKind {
+    Label,
+    Uuid,
+    Path,
+    Other,
+}
+
+impl SourceKind {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "label" => Self::Label,
+            "uuid" => Self::Uuid,
+            "path" => Self::Path,
+            _ => Self::Other,
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Label => "label",
+            Self::Uuid => "uuid",
+            Self::Path => "path",
+            Self::Other => "other",
+        }
+    }
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Label => "Pick a labeled filesystem",
+            Self::Uuid => "Pick a filesystem by UUID",
+            Self::Path => "Pick a /dev/ path",
+            Self::Other => "tmpfs, hostname:/share, etc.",
+        }
+    }
+}
+
+/// True when a path is *eligible* for the auto-mkdir pre-step. The
+/// helper allowlists /srv, /mnt, /media, /home, /opt; anything else
+/// (e.g. `/`, `/proc`, `none` for tmpfs swap, `tmpfs` source) we leave
+/// alone so the existing path either resolves on its own or surfaces
+/// a real permission error from the fstab apply.
+fn needs_mkdir(path: &str) -> bool {
+    let allow = ["/srv", "/mnt", "/media", "/home", "/opt"];
+    allow
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")))
+        && !path.contains("..")
+}
+
+/// Filename-safe slug for a mountpoint suffix. Strips slashes,
+/// collapses whitespace, drops anything outside [a-zA-Z0-9._-] so a
+/// LABEL of `My Disk!` becomes `My-Disk` and lands as `/srv/My-Disk`.
+fn sanitize_mp_segment(input: &str) -> String {
+    let trimmed = input.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else if ch.is_whitespace() {
+            out.push('-');
+        }
+    }
+    out
+}
+
+/// Decompose a fstab source string into (kind, value) so an existing row
+/// can pre-populate the form. Mirrors `format_source` going the other way.
+fn parse_source(source: &str) -> (SourceKind, String) {
+    if let Some(rest) = source.strip_prefix("LABEL=") {
+        (SourceKind::Label, rest.to_string())
+    } else if let Some(rest) = source.strip_prefix("UUID=") {
+        (SourceKind::Uuid, rest.to_string())
+    } else if source.starts_with("/dev/") {
+        (SourceKind::Path, source.to_string())
+    } else {
+        (SourceKind::Other, source.to_string())
+    }
+}
+
+/// Build the canonical fstab source string from the kind + selected value.
+fn format_source(kind: SourceKind, value: &str) -> String {
+    let v = value.trim();
+    match kind {
+        SourceKind::Label if !v.is_empty() => format!("LABEL={v}"),
+        SourceKind::Uuid if !v.is_empty() => format!("UUID={v}"),
+        _ => v.to_string(),
+    }
+}
+
+/// Look up the filesystem type the kernel detected on the selected
+/// source. Lets the form auto-fill the Type field when the operator
+/// picks a known label/uuid/path. None when no partition matches —
+/// e.g. SourceKind::Other with arbitrary text — so the caller can
+/// preserve whatever the user already had.
+fn lookup_fstype_for_source(
+    report: &api::StorageReport,
+    kind: SourceKind,
+    value: &str,
+) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+    for disk in &report.disks {
+        for part in &disk.partitions {
+            let matches = match kind {
+                SourceKind::Label => part.label.as_deref() == Some(value),
+                SourceKind::Uuid => part.uuid.as_deref() == Some(value),
+                SourceKind::Path => format!("/dev/{}", part.kname) == value,
+                SourceKind::Other => false,
+            };
+            if matches {
+                return part.fstype.clone().filter(|s| !s.is_empty());
+            }
+        }
+    }
+    None
+}
+
+/// Flat option list derived from /api/storage for the active source kind.
+/// Each entry is (value-to-emit, label-to-display).
+fn source_options(report: &api::StorageReport, kind: SourceKind) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for disk in &report.disks {
+        for part in &disk.partitions {
+            match kind {
+                SourceKind::Label => {
+                    if let Some(l) = &part.label {
+                        out.push((l.clone(), format!("{l} ({})", part.kname)));
+                    }
+                }
+                SourceKind::Uuid => {
+                    if let Some(u) = &part.uuid {
+                        let pretty = format!(
+                            "{u}{}",
+                            part.label
+                                .as_ref()
+                                .map(|l| format!(" — {l}"))
+                                .unwrap_or_default()
+                        );
+                        out.push((u.clone(), pretty));
+                    }
+                }
+                SourceKind::Path => {
+                    let path = format!("/dev/{}", part.kname);
+                    let extras: Vec<String> = [
+                        part.label.clone(),
+                        part.fstype.clone(),
+                        part.mountpoint.clone(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                    let pretty = if extras.is_empty() {
+                        path.clone()
+                    } else {
+                        format!("{path} ({})", extras.join(", "))
+                    };
+                    out.push((path, pretty));
+                }
+                SourceKind::Other => {}
+            }
+        }
+        if matches!(kind, SourceKind::Path) {
+            let path = format!("/dev/{}", disk.kname);
+            out.push((path.clone(), format!("{path} (whole disk)")));
+        }
+    }
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct FstabFormModalProps {
+    mode: FormMode,
+    on_close: EventHandler<()>,
+    on_saved: EventHandler<&'static str>,
+    on_error: EventHandler<String>,
+    on_unauthorized: EventHandler<()>,
+}
+
+#[component]
+fn FstabFormModal(props: FstabFormModalProps) -> Element {
+    let editing_idx: Option<usize> = match &props.mode {
+        FormMode::Edit(r) => Some(r.idx),
+        FormMode::Create => None,
+    };
+    let initial: api::FstabRow = match &props.mode {
+        FormMode::Edit(r) => r.clone(),
+        FormMode::Create => default_fstab_row(),
+    };
+
+    let (init_kind, init_value) = parse_source(&initial.source);
+    let init_kind_for_choice = init_kind;
+
+    // For LABEL/UUID/Path we put the raw value into source_choice; for Other
+    // we put it into source_custom. Keeping them in separate signals lets
+    // the user toggle modes without losing typed text.
+    let mut source_kind = use_signal(|| init_kind);
+    let mut source_choice = use_signal(|| {
+        if matches!(init_kind_for_choice, SourceKind::Other) {
+            String::new()
+        } else {
+            init_value.clone()
+        }
+    });
+    let mut source_custom = use_signal(|| {
+        if matches!(init_kind_for_choice, SourceKind::Other) {
+            init_value
+        } else {
+            String::new()
+        }
+    });
+    let mut mountpoint = use_signal(|| initial.mountpoint.clone());
+    let mut fstype = use_signal(|| initial.fstype.clone());
+    let mut defaults = use_signal(|| initial.parsed.defaults);
+    let mut noatime = use_signal(|| initial.parsed.noatime);
+    let mut nofail = use_signal(|| initial.parsed.nofail);
+    let mut ro = use_signal(|| initial.parsed.ro);
+    let mut discard = use_signal(|| initial.parsed.discard);
+    let mut noexec = use_signal(|| initial.parsed.noexec);
+    let mut nosuid = use_signal(|| initial.parsed.nosuid);
+    let mut nodev = use_signal(|| initial.parsed.nodev);
+    let mut device_timeout = use_signal(|| initial.parsed.device_timeout);
+    let mut dump = use_signal(|| initial.dump);
+    let mut pass = use_signal(|| initial.pass);
+    let mut show_browser = use_signal(|| false);
+    let mut busy = use_signal(|| false);
+
+    let storage = use_resource(|| async move { api::fetch_storage().await });
+
+    let computed_source = move || -> String {
+        match source_kind() {
+            SourceKind::Other => source_custom(),
+            kind => format_source(kind, &source_choice()),
+        }
+    };
+
+    let title = match editing_idx {
+        Some(idx) => format!("Edit mount — row {idx}"),
+        None => "Add a mount".into(),
+    };
+    let submit_label = if editing_idx.is_some() {
+        "Save changes"
+    } else {
+        "Add mount"
+    };
+
+    let mut submit = move |_| {
+        if busy() {
+            return;
+        }
+        let src = computed_source();
+        if src.trim().is_empty() {
+            props.on_error.call("Source/device is required".into());
+            return;
+        }
+        if !mountpoint().starts_with('/') {
+            props
+                .on_error
+                .call("Mountpoint must be an absolute path".into());
+            return;
+        }
+        if fstype().trim().is_empty() {
+            props.on_error.call("Filesystem type is required".into());
+            return;
+        }
+        let mp = mountpoint().trim().to_string();
+        // Trailing slashes are valid POSIX-wise but `/etc/fstab` rows
+        // and `mkdir`'s log line both look better without them. Trim
+        // unless the path is literally "/".
+        let mp = if mp.len() > 1 {
+            mp.trim_end_matches('/').to_string()
+        } else {
+            mp
+        };
+        busy.set(true);
+        let body = api::AddFstab {
+            source: src,
+            mountpoint: mp.clone(),
+            fstype: fstype(),
+            defaults: defaults(),
+            noatime: noatime(),
+            nofail: nofail(),
+            ro: ro(),
+            discard: discard(),
+            noexec: noexec(),
+            nosuid: nosuid(),
+            nodev: nodev(),
+            device_timeout: device_timeout(),
+            dump: dump(),
+            pass: pass(),
+        };
+        let on_saved = props.on_saved.clone();
+        let on_error = props.on_error.clone();
+        let on_unauthorized = props.on_unauthorized.clone();
+        spawn(async move {
+            // Best-effort: pre-create the mountpoint directory so an
+            // operator can target a fresh path like `/srv/movies`
+            // without first SSHing in. Allowlisted server-side to
+            // /srv, /mnt, /media, /home, /opt — anything else gets
+            // rejected and we fall through to the fstab call so the
+            // operator sees the actual permission error.
+            if needs_mkdir(&mp) {
+                if let Err(e) = api::mkdir(&mp).await {
+                    if matches!(e, ApiError::Unauthorized) {
+                        busy.set(false);
+                        on_unauthorized.call(());
+                        return;
+                    }
+                    busy.set(false);
+                    on_error.call(format!("Could not create {mp}: {e}"));
+                    return;
+                }
+            }
+            let result = match editing_idx {
+                Some(idx) => api::update_fstab(idx, &body).await.map(|()| "updated"),
+                None => api::add_fstab(&body).await.map(|()| "added"),
+            };
+            busy.set(false);
+            match result {
+                Ok(verb) => on_saved.call(verb),
+                Err(ApiError::Unauthorized) => on_unauthorized.call(()),
+                Err(e) => on_error.call(e.to_string()),
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "modal-overlay", onclick: move |_| props.on_close.call(()),
+            form {
+                class: "modal form-modal",
+                onclick: move |e| e.stop_propagation(),
+                onsubmit: move |e| { e.prevent_default(); submit(()); },
+
+                div { class: "modal-header",
+                    h3 { "{title}" }
+                    button {
+                        class: "ghost",
+                        r#type: "button",
+                        onclick: move |_| props.on_close.call(()),
+                        "✕"
+                    }
+                }
+
+                div { class: "modal-body form-modal-body",
+                    div { class: "row",
+                        label { class: "hint",
+                            "data-tip": "How to identify the filesystem. LABEL/UUID are stable across kernel renumbering; /dev/ paths are not.",
+                            "Source kind"
+                        }
+                        select {
+                            value: source_kind().as_str(),
+                            onchange: move |e| {
+                                source_kind.set(SourceKind::from_str(&e.value()));
+                                source_choice.set(String::new());
+                            },
+                            option { value: "label", "LABEL=" }
+                            option { value: "uuid", "UUID=" }
+                            option { value: "path", "/dev/ path" }
+                            option { value: "other", "Other (free text)" }
+                        }
+                        span {}
+                    }
+
+                    div { class: "row",
+                        label { class: "hint", "data-tip": source_kind().placeholder(), "Source" }
+                        {
+                            let kind = source_kind();
+                            if kind == SourceKind::Other {
+                                rsx! {
+                                    input {
+                                        r#type: "text",
+                                        placeholder: "tmpfs  ·  192.168.1.5:/srv/x  ·  none",
+                                        pattern: r"^[A-Za-z0-9._=:/@\-]+$",
+                                        title: "Free text. No spaces or shell metacharacters.",
+                                        required: true,
+                                        value: "{source_custom()}",
+                                        oninput: move |e| source_custom.set(e.value())
+                                    }
+                                }
+                            } else {
+                                match &*storage.read_unchecked() {
+                                    None => rsx! { span { class: "muted", "Loading devices…" } },
+                                    Some(Err(e)) => rsx! { span { class: "muted", "Could not load devices: {e}" } },
+                                    Some(Ok(report)) => {
+                                        let opts = source_options(report, kind);
+                                        if opts.is_empty() {
+                                            rsx! {
+                                                span { class: "muted",
+                                                    { match kind {
+                                                        SourceKind::Label => "No labeled filesystems found. Format a partition with -L <name> first.",
+                                                        SourceKind::Uuid => "No filesystems with a UUID found.",
+                                                        SourceKind::Path => "No block devices found.",
+                                                        SourceKind::Other => "",
+                                                    } }
+                                                }
+                                            }
+                                        } else {
+                                            rsx! {
+                                                select {
+                                                    value: "{source_choice()}",
+                                                    required: true,
+                                                    onchange: move |e| {
+                                                        let val = e.value();
+                                                        source_choice.set(val.clone());
+                                                        // Auto-fill the Type field with whatever
+                                                        // kernel-detected fstype the picked source
+                                                        // actually has. The operator can still
+                                                        // override before saving.
+                                                        if let Some(Ok(rep)) = storage
+                                                            .read_unchecked()
+                                                            .as_ref()
+                                                        {
+                                                            if let Some(detected) = lookup_fstype_for_source(rep, kind, &val) {
+                                                                fstype.set(detected);
+                                                            }
+                                                        }
+                                                    },
+                                                    option { value: "", disabled: true, selected: source_choice().is_empty(),
+                                                        "{kind.placeholder()}" }
+                                                    for (val, lbl) in opts.iter() {
+                                                        option { value: "{val}", selected: source_choice() == *val, "{lbl}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        span {}
+                    }
+
+                    div { class: "row",
+                        label { r#for: "fs-mp", "data-tip": "Absolute path where the filesystem is mounted. Type a new path or click Browse — non-existent directories are created automatically.", class: "hint", "Mountpoint" }
+                        input {
+                            id: "fs-mp",
+                            r#type: "text",
+                            required: true,
+                            placeholder: "/srv/<name> — typed paths are mkdir -p'd on save",
+                            title: "Absolute mountpoint",
+                            value: "{mountpoint()}",
+                            oninput: move |e| mountpoint.set(e.value()),
+                        }
+                        button {
+                            r#type: "button",
+                            "data-tip": "Pick an existing directory on the server.",
+                            onclick: move |_| show_browser.set(true),
+                            Icon { name: "folder-open" }
+                            "Browse"
+                        }
+                    }
+                    div { class: "row mp-suggest",
+                        span { class: "hint mp-suggest-label",
+                            "data-tip": "Quick-fill the mountpoint with one of the writable allowlist roots, suffixed with the picked filesystem's label (or the typed Source).",
+                            "Suggest"
+                        }
+                        div { class: "mp-suggest-chips",
+                            for prefix in ["/srv/", "/mnt/", "/media/"].iter() {
+                                {
+                                    let p: &'static str = prefix;
+                                    let kind = source_kind();
+                                    let suffix: String = match kind {
+                                        SourceKind::Label => source_choice().trim().to_string(),
+                                        _ => mountpoint()
+                                            .rsplit('/')
+                                            .find(|s| !s.is_empty())
+                                            .unwrap_or("")
+                                            .to_string(),
+                                    };
+                                    let target = format!("{p}{}", sanitize_mp_segment(&suffix));
+                                    rsx! {
+                                        button {
+                                            class: "ghost mp-chip",
+                                            r#type: "button",
+                                            "data-tip": "{target}",
+                                            onclick: move |_| mountpoint.set(target.clone()),
+                                            "{p}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        span {}
+                    }
+
+                    div { class: "row",
+                        label { r#for: "fs-type", "data-tip": "Filesystem type. Pick the kernel module name (ext4, vfat, tmpfs, ntfs, …).", class: "hint", "Type" }
+                        select {
+                            id: "fs-type",
+                            value: "{fstype()}",
+                            onchange: move |e| fstype.set(e.value()),
+                            option { value: "ext4", "ext4" }
+                            option { value: "ext3", "ext3" }
+                            option { value: "btrfs", "btrfs" }
+                            option { value: "xfs", "xfs" }
+                            option { value: "vfat", "vfat" }
+                            option { value: "exfat", "exfat" }
+                            option { value: "ntfs", "ntfs" }
+                            option { value: "tmpfs", "tmpfs" }
+                            option { value: "nfs", "nfs" }
+                            option { value: "auto", "auto" }
+                        }
+                        span {}
+                    }
+
+                    fieldset {
+                        legend { "Options (hover for details)" }
+                        div { class: "opts",
+                            label { class: "hint", "data-tip": "rw, suid, dev, exec, auto, nouser, async — sane baseline.",
+                                input { r#type: "checkbox", checked: defaults(), onchange: move |e| defaults.set(e.checked()) }
+                                " defaults"
+                            }
+                            label { class: "hint", "data-tip": "Skip atime updates — easier on the disk.",
+                                input { r#type: "checkbox", checked: noatime(), onchange: move |e| noatime.set(e.checked()) }
+                                " noatime"
+                            }
+                            label { class: "hint", "data-tip": "Don't fail boot if the device isn't present.",
+                                input { r#type: "checkbox", checked: nofail(), onchange: move |e| nofail.set(e.checked()) }
+                                " nofail"
+                            }
+                            label { class: "hint", "data-tip": "Mount read-only.",
+                                input { r#type: "checkbox", checked: ro(), onchange: move |e| ro.set(e.checked()) }
+                                " ro"
+                            }
+                            label { class: "hint", "data-tip": "SSD trim on delete — only useful on SSDs.",
+                                input { r#type: "checkbox", checked: discard(), onchange: move |e| discard.set(e.checked()) }
+                                " discard"
+                            }
+                            label { class: "hint", "data-tip": "Block execution of binaries on this filesystem.",
+                                input { r#type: "checkbox", checked: noexec(), onchange: move |e| noexec.set(e.checked()) }
+                                " noexec"
+                            }
+                            label { class: "hint", "data-tip": "Ignore setuid bits on this filesystem.",
+                                input { r#type: "checkbox", checked: nosuid(), onchange: move |e| nosuid.set(e.checked()) }
+                                " nosuid"
+                            }
+                            label { class: "hint", "data-tip": "Block device-node files on this filesystem.",
+                                input { r#type: "checkbox", checked: nodev(), onchange: move |e| nodev.set(e.checked()) }
+                                " nodev"
+                            }
+                            label { class: "hint", "data-tip": "x-systemd.device-timeout — seconds systemd waits for the device before giving up.",
+                                "device-timeout (s):"
+                                input {
+                                    r#type: "number", min: "0", max: "300", style: "width: 80px",
+                                    value: "{device_timeout().map(|n| n.to_string()).unwrap_or_default()}",
+                                    oninput: move |e| device_timeout.set(e.value().parse().ok())
+                                }
+                            }
+                            label { class: "hint", "data-tip": "fs_freq — used by `dump`. 0 disables. Almost everyone leaves this at 0.",
+                                "dump:"
+                                input {
+                                    r#type: "number", min: "0", max: "9", style: "width: 60px",
+                                    value: "{dump()}",
+                                    oninput: move |e| dump.set(e.value().parse().unwrap_or(0))
+                                }
+                            }
+                            label { class: "hint", "data-tip": "fs_passno — fsck order at boot. 1 = root, 2 = others, 0 = skip.",
+                                "pass:"
+                                select {
+                                    value: "{pass()}",
+                                    onchange: move |e| pass.set(e.value().parse().unwrap_or(2)),
+                                    option { value: "0", "0 (skip fsck)" }
+                                    option { value: "1", "1 (root)" }
+                                    option { value: "2", "2 (others)" }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                div { class: "modal-footer",
+                    button { class: "ghost", r#type: "button",
+                        onclick: move |_| props.on_close.call(()), "Cancel" }
+                    button { class: "primary", r#type: "submit", disabled: busy(),
+                        if busy() { "Saving…" } else { "{submit_label}" }
+                    }
+                }
+            }
+        }
+
+        if show_browser() {
+            Browser {
+                start: if mountpoint().is_empty() { "/srv".to_string() } else { mountpoint() },
+                on_pick: move |p: String| {
+                    mountpoint.set(p);
+                    show_browser.set(false);
+                },
+                on_close: move |_| show_browser.set(false)
+            }
+        }
+    }
+}
+
+fn default_fstab_row() -> api::FstabRow {
+    api::FstabRow {
+        idx: 0,
+        source: String::new(),
+        mountpoint: String::new(),
+        fstype: "ext4".into(),
+        options: String::new(),
+        dump: 0,
+        pass: 2,
+        parsed: api::FstabOpts {
+            defaults: true,
+            noatime: true,
+            nofail: true,
+            ro: false,
+            discard: false,
+            noexec: false,
+            nosuid: false,
+            nodev: false,
+            device_timeout: Some(10),
+            extra: vec![],
+        },
+        protected: false,
+    }
+}

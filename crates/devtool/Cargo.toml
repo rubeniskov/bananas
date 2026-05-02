@@ -1,0 +1,34 @@
+[package]
+name = "bananas-devtool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Workspace-internal e2e harness + dev CLI. Not shipped in the image."
+
+# Library (used as a [dev-dependencies] from per-crate tests/) and a thin
+# CLI for ad-hoc dev loops (`bananas-devtool e2e`, container helpers).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "bananas-devtool"
+path = "src/bin/devtool.rs"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+sha-crypt.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls"] }
+tempfile = "3"
+rand.workspace = true
+# CDP-direct browser driver — same Chromium engine playwright uses,
+# no chromedriver subprocess needed. The runtime expects a chrome
+# binary on disk; tests look it up via BANANAS_CHROME or fall back
+# to /usr/bin/chromium / google-chrome / the playwright cache.
+chromiumoxide = { version = "0.9", default-features = false }
+futures-util.workspace = true

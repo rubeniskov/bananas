@@ -1,0 +1,6 @@
+id = "dashboard"
+label = "Dashboard"
+socket = "/run/bananas/dashboard-web.sock"
+api_prefix = "/api/dashboard"
+order = 60
+icon = "layout-grid"

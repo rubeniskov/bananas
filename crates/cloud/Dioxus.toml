@@ -1,0 +1,16 @@
+[application]
+name = "bananas-cloud-ui"
+
+[web.app]
+# Webadmin owns THE single index.html publicly. This bundle's bytes
+# are reached over Unix-socket sub-proxy from webadmin under
+# /assets/cloud/<hash>.<ext>; setting base_path so dx-emitted asset
+# URLs match that public namespace. The cloud daemon's embedded
+# tree contains the same paths verbatim, so the serve handler is a
+# direct include_dir lookup with no URL rewriting.
+base_path = "/assets/cloud"
+title = "BanaNAS Cloud"
+
+[web.wasm_opt]
+level = "2"
+debug = false

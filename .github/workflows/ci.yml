@@ -1,0 +1,173 @@
+# Continuous integration: runs on every push + PR. Fast (≈5 min on a
+# default ubuntu-latest runner). The full Yocto bake is NOT exercised
+# here — it ships as a separate job in release.yml because it needs
+# >20 GB of working space and ~30 min of compile time. CI focuses on
+# the things that catch real bugs before they hit a bake:
+#
+#   - rustfmt + clippy across the workspace
+#   - cargo test across all host-side crates
+#   - smoke cross-compile of the armv7 binaries (cargo-zigbuild)
+#   - smoke wasm build of the Dioxus SPA (dx build)
+#
+# Slint dashboard cross-compile via cross-rs is intentionally NOT in
+# this workflow — it spins up a Docker container per build and the
+# multiarch fontconfig install pushes wall time over 10 min. It runs
+# in the release workflow where speed matters less.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Single-flight per ref: a force-push or follow-up commit cancels the
+# previous run so we don't waste runner minutes on stale code.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Pre-commit hooks (prek) ────────────────────────────────────
+  # Mirrors what `prek install` runs locally on pre-commit + pre-push,
+  # so a PR can't slip through with a hook that wasn't installed on
+  # the contributor's machine. `prek run --all-files --hook-stage pre-push`
+  # picks up the heavy stages too (cargo clippy / test / wasm check).
+  prek:
+    name: prek (fmt + lint + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      # Split the cache: the cargo registry rarely changes between
+      # Cargo.lock bumps (it's just downloaded crate sources), but
+      # `target/` is invalidated by every code change. Sharing one key
+      # meant a Cargo.lock bump flushed the registry too — paying the
+      # crates.io fetch all over again. Two caches with different
+      # invalidation cadences keep the registry warm.
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo target (host)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-host-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-host-
+
+      - name: Install prek
+        uses: j178/prek-action@v1
+        # Fall back to cargo-install if the marketplace action ever
+        # disappears — prek's own README documents `cargo install
+        # --locked prek` as the supported install.
+        continue-on-error: true
+        id: install_prek
+
+      - name: Install prek (fallback)
+        if: steps.install_prek.outcome != 'success'
+        run: cargo install --locked prek
+
+      # Install dioxus-cli so each daemon's build.rs produces real
+      # SPA bytes; without dx the build.rs gracefully skips and the
+      # daemon ships an empty include_dir!, so the browser's first
+      # request returns the host shell with no plugin SPAs and the
+      # nav.app-nav probes fail. Use cargo-binstall to grab the
+      # prebuilt release tarball (a few seconds vs ~6 min compile).
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install dioxus-cli (binstall)
+        run: cargo binstall -y --version ^0.7 dioxus-cli
+
+      # `--all-files` runs every hook against every tracked file (CI
+      # doesn't have a "changed since last commit" signal that maps to
+      # prek's git-aware default). The `pre-push` stage adds clippy +
+      # tests + wasm check on top of the always-on pre-commit gates.
+      #
+      # BANANAS_E2E_TIMEOUT_MS bumps the e2e harness's wait_for_function
+      # deadline (default 10s) — GitHub Actions runners paint Dioxus
+      # SPAs noticeably slower than a dev laptop, so 30s prevents flake.
+      - name: prek run --all-files --hook-stage pre-push
+        env:
+          BANANAS_E2E_TIMEOUT_MS: "30000"
+        run: prek run --all-files --hook-stage pre-push --show-diff-on-failure
+
+  cross-armv7:
+    name: Cross-compile armv7 (server + helper + stats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.66.0
+          cache: true
+
+      # pixi ships rust via conda but not the per-target std; cargo-zigbuild
+      # still needs the armv7 sysroot. Pull it in via rustup so cargo can
+      # find `core` for the cross-target. Local dev hosts already have it
+      # via `rustup target add` — CI was the missing case.
+      - name: Install rust toolchain (armv7 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo target (cross armv7)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-cross-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-cross-
+
+      # Add wasm32 target so the SPA build inside each daemon's build.rs
+      # (invoked by dx) can compile.
+      - name: Install rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      # pixi tasks already strip the conda-injected CFLAGS that would
+      # leak `-march=haswell` into the rusqlite-bundled cross-compile.
+      # We run them through pixi so CI matches local iterate exactly.
+      # build-webadmin-arm cross-compiles all daemons (webadmin, engine,
+      # router, cloud, exports, storage, users, stats-web, dashboard-web)
+      # in one zigbuild invocation; build.rs of each invokes dx for the
+      # embedded SPA, hence the wasm32 target above + setup-dx via depends-on.
+      - name: build-webadmin-arm
+        run: pixi run build-webadmin-arm
+
+      - name: build-stats-arm
+        run: pixi run build-stats-arm
+
+      # Smoke-confirm the binaries are armv7 ELF — protects against
+      # the pixi env accidentally picking up the host toolchain.
+      - name: Verify ARM ELFs
+        run: |
+          file serve/bin/bananas-webadmin | grep -q "ARM" || (echo "bananas-webadmin is not ARM!" && exit 1)
+          file serve/bin/bananas-engine | grep -q "ARM" || (echo "bananas-engine is not ARM!" && exit 1)
+          file serve/bin/bananas-stats  | grep -q "ARM" || (echo "bananas-stats is not ARM!"  && exit 1)

@@ -1,0 +1,41 @@
+// bananas-cloud: rclone sync orchestration RPCs.
+//
+// PR-3 fills in `TailRunLog` only — server-streaming of the
+// per-line rclone output captured by bananas-engine into
+// `/run/bananas/sync-progress/<idx>.log`. The Run-Log modal
+// in the cloud SPA subscribes when opened on a Running job and
+// reads chunks until the run finishes; for already-finished
+// jobs it falls back to the (unary) `output` field on the
+// existing CloudJob list.
+//
+// `WatchRuns` (server-streaming list updates → kills the SPA's
+// 2-s polling loop) lives in a future PR once the cross-daemon
+// gRPC routing through bananas-router lands. Today the cloud
+// daemon hosts the JobManager state in-process; webadmin can't
+// reach it without h2-over-Unix forwarding.
+
+syntax = "proto3";
+
+package bananas.cloud.v1;
+
+service CloudService {
+  // Tail the captured stdout/stderr for an in-flight cloud
+  // sync run. The stream stays open until the run completes
+  // (engine removes the file on cleanup, the tail hits EOF) or
+  // the client disconnects. For finished runs the file no longer
+  // exists and the stream completes immediately.
+  rpc TailRunLog(TailRunLogRequest) returns (stream LogChunk);
+}
+
+message TailRunLogRequest {
+  // Sync row index — matches `CloudJob.sync_idx` and the
+  // `<idx>.log` filename engine writes.
+  uint32 sync_idx = 1;
+}
+
+message LogChunk {
+  // One or more newline-terminated lines from rclone's
+  // stdout/stderr. The tonic-web layer streams each chunk to
+  // the SPA as it lands; the SPA appends to its accumulator.
+  string text = 1;
+}

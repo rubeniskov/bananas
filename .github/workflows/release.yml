@@ -1,0 +1,373 @@
+# Release pipeline: runs on push to main, ONLY when CI is green and
+# the conventional-commit history since the last tag implies a release.
+# Driven by semantic-release (see .releaserc.json) which:
+#
+#   1. Parses commit messages from `git log <last-tag>..HEAD`.
+#   2. Decides on the next version (major / minor / patch / no-release).
+#   3. Generates / updates CHANGELOG.md from the commit bodies.
+#   4. Tags the repo (`vX.Y.Z`) and pushes.
+#   5. Creates a GitHub release with the bundled artifacts attached.
+#
+# Artifacts shipped (as IPKs to the gh-pages opkg feed; the GitHub
+# release page itself only carries the .wic SD-card image post-opkg
+# migration):
+#   - bananas-webadmin    (HTTP daemon + bananas-engine binary, armv7)
+#   - bananas-engine      (privileged Unix-socket daemon, ships with the above)
+#   - bananas-webadmin-ui (wasm SPA, allarch)
+#   - bananas-stats       (sampler daemon, armv7)
+#   - bananas-dashboard   (Slint LCD app, armv7)
+#   - bananas-config      (TUI/CLI config tool, armv7)
+#   - bananas-feed-config (opkg customfeeds.conf, allarch)
+#   - bananas-modprobe    (kernel-module load-on-boot config, allarch)
+#   - bananas-rclone      (vendored rclone armv7 prebuilt)
+#
+# The Yocto bake also runs here so every release ships an SD-card image
+# the operator can `dd` onto a card without touching pixi/kas. Hosted
+# ubuntu-latest only gives ~14 GB free out of the box, so we reclaim
+# ~25 GB via easimon/maximize-build-space and cache build/sstate-cache
+# + build/downloads between runs to bring a warm bake in around 10 min.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# One release at a time. We cancel queued/in-flight runs when a new
+# push lands so the freshest commit always wins — without this, a long
+# Yocto bake from an older commit can finish, push a chore(release)
+# bump, and then a queued run on a stale checkout sees "behind remote"
+# and silently no-ops.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: semantic-release
+    runs-on: ubuntu-latest
+    # Skip release if the head commit is just CHANGELOG / version
+    # bumping by semantic-release itself. The substring match was too
+    # greedy — any commit whose body referenced "chore(release):"
+    # (e.g. discussing the auto-bump in a normal fix/feat commit) was
+    # being skipped. Anchor on the subject line's prefix instead.
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
+    steps:
+      # Yocto needs ≈20 GB working space; the standard ubuntu-latest
+      # runner ships with 145 GB / 90 GB free which is comfortably more
+      # than the ~30 GB we end up using through the bake. The previous
+      # `Free disk space for the Yocto bake` step (jlumbroso/
+      # free-disk-space) was burning 2m30s on every release deleting
+      # Android/.NET/Haskell trees we never touched. The 14-GB claim
+      # the old comment cited was for an older runner generation —
+      # measured on real runs the disk is roomy. The post-bake `df -h`
+      # below confirms it.
+      - uses: actions/checkout@v4
+        with:
+          # semantic-release walks tags + history to compute the next
+          # version, so it needs full history.
+          fetch-depth: 0
+          # Use a separate token if you want signed tags / PR comments —
+          # the default GITHUB_TOKEN works for normal releases.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install host packages required by bitbake
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            chrpath cpio diffstat file rpcsvc-proto zstd
+
+      # Ubuntu 24.04 (the new ubuntu-latest as of 2025) ships with
+      # AppArmor restricting unprivileged user namespaces by default,
+      # which BitBake needs for `pseudo`'s fakeroot. Without this:
+      #   ERROR: User namespaces are not usable by BitBake, possibly due to AppArmor.
+      # See: https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890#unprivileged-user-namespace-restrictions
+      - name: Allow unprivileged user namespaces (BitBake requirement on Ubuntu 24.04)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.66.0
+          cache: true
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,armv7-unknown-linux-gnueabihf
+
+      # Single Rust-CI cache step. Swatinem/rust-cache covers
+      # ~/.cargo/registry, ~/.cargo/git, ~/.cargo/bin (so dioxus-cli
+      # / cross persist across runs) AND target/. Its cache-key logic
+      # is Cargo.lock + rustc version + workspace metadata excluding
+      # member versions, so the per-release version bump no longer
+      # invalidates the cache — restores stay warm even though we
+      # rewrite Cargo.toml's [workspace.package] version every run.
+      # cache-on-failure: true keeps a half-warm target/ around for
+      # the next attempt when a release run fails partway through.
+      - name: Cache Rust toolchain artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      # ─── Compute the next release version BEFORE building so the
+      # binaries embed it via env!("CARGO_PKG_VERSION"). Without this,
+      # builds run against the still-stale Cargo.toml, semantic-release
+      # bumps it after the build, and the published tarballs ship
+      # binaries that report `--version` one release behind the tag.
+      # The helper's InstallUpdate then refuses the swap with
+      # "extracted X reports version Y, expected Z".
+      #
+      # Setup Node early (was at the very end) so npx can run dry-run
+      # and the same toolchain serves the final publish step.
+      - name: Setup Node (for semantic-release)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install semantic-release + plugins
+        # conventional-changelog-conventionalcommits is a peer dep
+        # requested by both commit-analyzer's `preset: "conventionalcommits"`
+        # and release-notes-generator's `preset: "conventionalcommits"`.
+        # @semantic-release/exec is no longer in .releaserc.json (we do
+        # the bump in the workflow now) but stays installed in case
+        # we ever wire it back for a different prepare hook.
+        run: |
+          npm install -g \
+            semantic-release@22 \
+            @semantic-release/changelog@6 \
+            @semantic-release/exec@6 \
+            @semantic-release/git@10 \
+            @semantic-release/github@9 \
+            @semantic-release/commit-analyzer@11 \
+            @semantic-release/release-notes-generator@12 \
+            conventional-changelog-conventionalcommits@7
+
+      - name: Sync with origin/main
+        # semantic-release's analysis walks the actual git history; if
+        # the runner's checkout is behind a sibling release run's
+        # chore(release) commit, it'll bail with "local branch is
+        # behind remote". Pull once at the top so all downstream steps
+        # see the latest tip.
+        run: git pull --rebase origin main
+
+      - name: Compute next release version (dry-run)
+        id: nextver
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # `--dry-run` runs analyzeCommits + generateNotes only; it does
+        # NOT execute prepare hooks or push anything. We grep the next
+        # version out of stdout. If commit-analyzer decides nothing is
+        # releasable (no feat:/fix:/perf:/refactor: since the last tag),
+        # leave NEXT empty — downstream steps short-circuit and skip
+        # the bump + the publish step bails the same way.
+        run: |
+          set +e
+          out=$(semantic-release --dry-run --no-ci 2>&1)
+          set -e
+          echo "$out"
+          next=$(echo "$out" | grep -oE 'next release version is [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $5}' | head -1)
+          echo "next=${next}" >> "$GITHUB_OUTPUT"
+          if [ -n "$next" ]; then
+            echo "::notice::Next release will be v${next}"
+          else
+            echo "::notice::No releaseable commits since last tag — building at current Cargo.toml version"
+          fi
+
+      - name: Bump Cargo.toml + Cargo.lock to next release version
+        if: steps.nextver.outputs.next != ''
+        # Bumping BEFORE the build is the whole point of this dance.
+        # The script is idempotent — semantic-release's @semantic-release/git
+        # plugin will then commit the (already-bumped) Cargo.toml +
+        # Cargo.lock as part of its chore(release) commit at publish time.
+        run: scripts/bump-cargo-version.sh ${{ steps.nextver.outputs.next }}
+
+      # ─── Build all the artifacts the release will publish ─────────
+      # build-webadmin-arm cross-compiles every daemon (webadmin, engine,
+      # router, cloud, exports, storage, users, stats-web, dashboard-web)
+      # via cargo-zigbuild; each daemon's build.rs invokes dx to produce
+      # the embedded SPA bytes. setup-dx runs as a depends-on; the wasm32
+      # rust target is provisioned just below.
+      - name: Install rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: build-webadmin-arm
+        run: pixi run build-webadmin-arm
+
+      - name: build-stats-arm
+        run: pixi run build-stats-arm
+
+      # cross-rs needs Docker; ubuntu-latest has it preinstalled.
+      - name: build-dashboard-arm
+        run: pixi run build-dashboard-arm
+
+      - name: build-config-arm
+        run: pixi run build-config-arm
+
+      # Download the upstream rclone armv7 prebuilt into serve/bin/. The
+      # bananas-rclone.bb recipe pulls from there; without this step the
+      # bake fails with "Unable to get checksum for bananas-rclone
+      # SRC_URI entry rclone: file could not be found".
+      - name: setup-rclone-arm
+        run: pixi run setup-rclone-arm
+
+      # ─── Yocto bake → SD card image ───────────────────────────────
+      # Cache the two big Yocto caches between runs. Cold bake takes ~30 min;
+      # a warm cache (sstate hits) typically drops it to ~10 min. The cache
+      # key is keyed on the layer + recipe + machine config so any patch /
+      # version bump invalidates it cleanly.
+      - name: Cache Yocto sstate + downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/sstate-cache
+            build/downloads
+          key: ${{ runner.os }}-yocto-${{ hashFiles('kas.yml', 'layers/**/*.bb', 'layers/**/*.bbappend', 'layers/**/*.conf', 'layers/**/*.inc', 'layers/**/files/**') }}
+          restore-keys: |
+            ${{ runner.os }}-yocto-
+
+      # All build-time env vars (ROOT_PASSWORD_HASH, NFS_EXPORT_NETWORK)
+      # are optional now: the recipe ships an empty /etc/exports + an
+      # empty /etc/fstab and uses a "bananas" placeholder root hash that
+      # lastchg=0 marks expired. Operators configure exports + mounts via
+      # the web UI on first boot.
+      - name: Bake Yocto image
+        run: pixi run build
+
+      # Sanity check after the bake — surfaces actual peak usage.
+      # If `Avail` here ever drops under ~10 GB we should reconsider
+      # putting the disk-cleanup step back.
+      - name: Disk usage after bake
+        if: always()
+        run: |
+          echo "::group::df -h /"
+          df -h /
+          echo "::endgroup::"
+          echo "::group::biggest things on /"
+          du -h --max-depth=2 / 2>/dev/null | sort -hr | head -25 || true
+          echo "::endgroup::"
+
+      # ─── Stage the SD-card image for semantic-release to upload ──
+      # In-place updates flow through the opkg feed (gh-pages branch)
+      # now, so the only release-page asset is the full SD-card image
+      # for fresh-flash bootstrap. Per-component tarballs +
+      # SHA256SUMS are gone — opkg's Packages index has its own
+      # checksums and the gh-pages workflow below mirrors the IPKs.
+      - name: Pack artifacts
+        run: |
+          set -e
+          mkdir -p dist
+          # Wrap the .wic in tar.gz for download convenience. Yocto's
+          # stable symlink is *.rootfs.wic; `-h` dereferences it so the
+          # tarball carries the actual data, and `--transform` strips
+          # the `.rootfs` infix so the extracted file has a clean
+          # dd-friendly name. Operator workflow on the receiving side:
+          #   tar -xzf bananas-image-armv7.tar.gz
+          #   sudo dd if=bananas-image-bananapro.wic of=/dev/sdX bs=4M status=progress conv=fsync
+          tar -czhf dist/bananas-image-armv7.tar.gz \
+              --transform 's,^bananas-image-bananapro.rootfs.wic$,bananas-image-bananapro.wic,' \
+              -C build/tmp/deploy/images/bananapro \
+              bananas-image-bananapro.rootfs.wic
+          ls -la dist/
+
+      # ─── opkg feed publishing ─────────────────────────────────────
+      # Stage ONLY the bananas-* runtime packages for gh-pages. The
+      # deploy/ipk/ tree contains hundreds of base-OS packages
+      # (gcc-dbg @ 333 MB, openssl-ptest @ 193 MB, the entire
+      # toolchain's debug/dev/src variants) that we don't ship via
+      # this feed and that exceed GitHub's 100 MB file limit. The
+      # operators' system already has the right base packages from
+      # the SD-card image bake; we only need to be able to upgrade
+      # bananas-* packages here.
+      #
+      # Whitelist of runtime IPKs we ship through this feed. Variants
+      # (-dbg, -dev, -src, -staticdev, -doc, -locale-*) are excluded
+      # — operators don't install them, they just inflate the feed.
+      #
+      # opkg-make-index is supplied by Yocto's host toolchain — the
+      # package_ipk class builds opkg-utils-native, which lands at
+      # build/tmp/sysroots-components/x86_64/opkg-utils-native/.
+      # apt's opkg-utils package isn't in Ubuntu 24.04's main repos,
+      # but Yocto's copy is exactly what we need (and version-matched
+      # to the same toolchain that produced the .ipk files).
+      - name: Stage feed for gh-pages
+        run: |
+          set -e
+          OPKG_MAKE_INDEX=$(find build -path '*opkg-utils-native*' -name opkg-make-index -executable 2>/dev/null | head -1)
+          if [ -z "$OPKG_MAKE_INDEX" ]; then
+            echo "::error::opkg-make-index not found in build tree — opkg-utils-native may not have been built"
+            exit 1
+          fi
+          # Make absolute so it survives the `cd "$dst"` per-arch loop below;
+          # opkg-make-index also needs to import opkg.py from its own dir,
+          # which only resolves when invoked via an absolute script path.
+          OPKG_MAKE_INDEX=$(realpath "$OPKG_MAKE_INDEX")
+          echo "Using $OPKG_MAKE_INDEX"
+
+          mkdir -p feed-publish/feed/latest
+          PKGS="bananas-webadmin bananas-stats bananas-dashboard bananas-config bananas-webadmin-ui bananas-feed-config bananas-modprobe bananas-rclone"
+          for arch in all bananapro cortexa7t2hf-neon; do
+            src="build/tmp/deploy/ipk/$arch"
+            [ -d "$src" ] || continue
+            dst="feed-publish/feed/latest/$arch"
+            mkdir -p "$dst"
+            for p in $PKGS; do
+              cp "$src/${p}"_*_*.ipk "$dst"/ 2>/dev/null || true
+            done
+            # Drop the dir if no IPKs landed (e.g. cortexa7t2hf-neon
+            # wouldn't carry the `all`-arch ones).
+            if ! ls "$dst"/*.ipk >/dev/null 2>&1; then
+              rmdir "$dst"
+              continue
+            fi
+            # Regenerate the per-arch index against the filtered set.
+            ( cd "$dst" && "$OPKG_MAKE_INDEX" . > Packages 2>/dev/null && gzip -fk Packages )
+          done
+          # Tiny landing page so https://<owner>.github.io/<repo>/ has
+          # something to render rather than a 404 — pure documentation,
+          # not consumed by opkg.
+          cat > feed-publish/index.html <<'EOF'
+          <!doctype html>
+          <meta charset=utf-8>
+          <title>BanaNAS opkg feed</title>
+          <h1>BanaNAS opkg feed</h1>
+          <p>This branch hosts <code>.ipk</code> packages for the
+          BanaNAS distribution. Devices configured via
+          <code>/etc/opkg/customfeeds.conf</code> consume it directly;
+          there is nothing here for a browser to do.</p>
+          <p>Repo: <a href="https://github.com/rubeniskov/bananas">rubeniskov/bananas</a></p>
+          EOF
+          ls -R feed-publish/feed/latest
+
+      # Push to the gh-pages branch. peaceiris/actions-gh-pages
+      # creates the branch if it doesn't exist; first run requires
+      # the operator to enable Pages on the repo (Settings →
+      # Pages → Source: gh-pages branch). keep_files: false so the
+      # feed always reflects the latest release exactly — old IPKs
+      # that aren't part of this build are pruned.
+      - name: Publish opkg feed to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./feed-publish
+          publish_branch: gh-pages
+          keep_files: false
+          commit_message: "feed(opkg): publish ${{ github.sha }}"
+
+      # ─── Publish ──────────────────────────────────────────────────
+      # semantic-release was already installed early (before the dry-run
+      # version computation), so this step just publishes. The bump
+      # script ran pre-build, so Cargo.toml + Cargo.lock are already at
+      # the target version in the working tree — @semantic-release/git
+      # commits them as part of the chore(release) commit it pushes.
+      - name: semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: semantic-release

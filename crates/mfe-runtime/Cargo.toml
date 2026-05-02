@@ -1,0 +1,14 @@
+[package]
+name = "bananas-mfe-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Tiny wasm-only runtime helpers shared by every BanaNAS plugin SPA — currently just `isolate_root` which stops events from bubbling out of an MFE mount div into the host SPA's dioxus root."
+
+# Wasm-only — the host daemons never link this.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { workspace = true }
+js-sys = "0.3"

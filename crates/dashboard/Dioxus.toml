@@ -1,0 +1,10 @@
+[application]
+name = "bananas-dashboard-web-ui"
+
+[web.app]
+base_path = "/assets/dashboard"
+title = "BanaNAS Dashboard config"
+
+[web.wasm_opt]
+level = "2"
+debug = false

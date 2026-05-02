@@ -1,0 +1,102 @@
+[package]
+name = "bananas-stats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BanaNAS sampler daemon (collector) + web plugin daemon. The collector writes /proc + /sys metrics into a WAL-mode SQLite store; the web daemon (bananas-stats-web) serves /api/stats/* + the wasm SPA. Library is also consumed by bananas-dashboard (LCD UI)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "bananas-stats"
+path = "src/bin/main.rs"
+
+# Web plugin daemon — answers /api/stats/* (forwarded by
+# bananas-router) and /assets/stats/* (forwarded by webadmin's
+# sub-proxy). Reads from the same SQLite DB the collector writes
+# and subscribes to the collector's live socket for WS push.
+[[bin]]
+name = "bananas-stats-web"
+path = "src/web/main.rs"
+
+# Wasm SPA — the Stats tab in the host webadmin shell. Built by
+# `dx build --features wasm-ui --bin bananas-stats-web-ui --platform web`.
+[[bin]]
+name = "bananas-stats-web-ui"
+path = "src/ui/main.rs"
+required-features = ["wasm-ui"]
+
+[features]
+default = []
+wasm-ui = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# Lib + native-bin deps. Excluded from the wasm SPA build so it
+# doesn't drag in tokio/mio (mio has no wasm support) or
+# rusqlite. The wasm SPA bin doesn't `use bananas_stats`, so the
+# lib doesn't build for wasm32 anyway, but Cargo still resolves
+# the dep tree per-target — gating prevents the resolution from
+# trying mio for wasm.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
+toml.workspace = true
+time.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow.workspace = true
+thiserror.workspace = true
+rusqlite.workspace = true
+axum = { workspace = true, features = ["ws", "macros"] }
+tower-http.workspace = true
+bananas-proto = { workspace = true, features = ["server"] }
+tonic = { workspace = true, features = ["transport"] }
+bananas-server-common.workspace = true
+include_dir = "0.7"
+futures-util.workspace = true
+
+# SPA-only deps.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bananas-mfe-runtime.workspace = true
+# bananas-proto with default features disabled — `server` pulls in
+# tonic transport (hyper) which doesn't compile to wasm32. The SPA
+# only needs the generated client + message types.
+bananas-proto = { workspace = true, default-features = false }
+dioxus.workspace = true
+gloo-net = { workspace = true, features = ["http", "websocket"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+futures = "0.3"
+toml.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+tracing-wasm.workspace = true
+console_error_panic_hook.workspace = true
+# gRPC-Web client over fetch+streaming-bytes — what the SPA calls
+# StatsService::Live with. tonic-web-wasm-client wraps a
+# `tonic::client::Grpc` so the SPA can use the codegen'd
+# `StatsServiceClient::live`.
+tonic = { workspace = true, default-features = false, features = ["codegen"] }
+tonic-prost = "0.14"
+tonic-web-wasm-client.workspace = true
+prost.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix.workspace = true
+
+[build-dependencies]
+fs_extra = "1.3"
+
+[dev-dependencies]
+tempfile = "3"
+pretty_assertions = "1"
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+bananas-devtool = { path = "../devtool" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+anyhow.workspace = true

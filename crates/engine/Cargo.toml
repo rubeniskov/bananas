@@ -1,0 +1,46 @@
+[package]
+name = "bananas-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bananas-engine"
+path = "src/main.rs"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+sha-crypt.workspace = true
+sha2.workspace = true
+toml.workspace = true
+# tonic server for the engine socket. After the line-JSON →
+# gRPC migration completed, the engine speaks only gRPC; the
+# legacy `Command` enum + newline-JSON listener were retired.
+bananas-proto = { workspace = true, features = ["server"] }
+tonic = { workspace = true, features = ["server", "router", "transport"] }
+tonic-prost = "0.14"
+prost.workspace = true
+futures-util.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# opkg::tests override BANANAS_OPKG_BIN per-test; running them in
+# parallel races on the env var. serial_test guards them with a
+# per-test mutex so cargo test's default --test-threads=N still works.
+serial_test = "3"
+# tests/auth_grpc.rs hashes test passwords for `/etc/shadow`
+# ($6$ SHA-512); the bin pulls sha-crypt in via [dependencies]
+# but integration tests are their own compilation unit and need
+# the dep re-declared.
+sha-crypt.workspace = true
+# gRPC client for tests/auth_grpc.rs — connects to the engine's
+# tonic Unix socket via a tower service-fn connector.
+tower = "0.5"
+hyper-util = { version = "0.1", features = ["tokio"] }

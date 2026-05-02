@@ -1,0 +1,24 @@
+[Unit]
+Description=BanaNAS stats web plugin daemon (SPA + /api/stats/*)
+After=local-fs.target bananas-engine.service bananas-stats.service
+Wants=bananas-stats.service
+
+[Service]
+Type=simple
+User=bananas
+Group=bananas
+ExecStart=/usr/bin/bananas-stats-web
+RuntimeDirectory=bananas
+RuntimeDirectoryPreserve=yes
+StateDirectory=bananas
+StateDirectoryMode=0700
+Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
+Environment=BANANAS_STATS_WEB_SOCKET=/run/bananas/stats-web.sock
+Environment=BANANAS_STATS_DB=/var/lib/bananas/stats.db
+Environment=BANANAS_STATS_LIVE_SOCKET=/run/bananas/stats.sock
+Environment=BANANAS_SESSION_KEY=/var/lib/bananas/session.key
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[application]
+name = "bananas-stats-web-ui"
+
+[web.app]
+base_path = "/assets/stats"
+title = "BanaNAS Stats"
+
+[web.wasm_opt]
+level = "2"
+debug = false

@@ -1,0 +1,10 @@
+# bananas-exports — extension manifest read by both bananas-router
+# (for /api/exports/* API routing) and bananas-webadmin (for the
+# /assets/exports/* sub-proxy that streams the plugin's wasm bytes
+# back to the browser).
+id = "exports"
+label = "Exports"
+socket = "/run/bananas/exports.sock"
+api_prefix = "/api/exports"
+order = 20
+icon = "share-2"

@@ -1,0 +1,31 @@
+[Unit]
+Description=BanaNAS stats sampler — persists CPU/mem/network/disk/parts to /var/lib/bananas/stats.db
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+User=bananas
+Group=bananas
+ExecStart=/usr/bin/bananas-stats
+# Shared StateDirectory with bananas-webadmin. systemd creates the dir
+# (mode 0700) and chowns to bananas:bananas on first start.
+StateDirectory=bananas
+StateDirectoryMode=0700
+# RuntimeDirectory holds the live pub/sub Unix socket
+# (`/run/bananas/stats.sock`) that bananas-webadmin's WS bus and
+# bananas-dashboard subscribe to. Shared with engine / webadmin /
+# router / cloud so every BanaNAS daemon's sockets sit together; we
+# keep the directory across stops (`Preserve=yes`) so the other
+# daemons' sockets aren't yanked when this one cycles.
+RuntimeDirectory=bananas
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+Environment=RUST_LOG=info
+Restart=on-failure
+RestartSec=2
+# Keep memory bounded — sampler + writer fit easily in <64 MiB.
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

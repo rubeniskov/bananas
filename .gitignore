@@ -1,0 +1,37 @@
+.DS_Store
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+# yocto
+/build
+/meta-*
+/poky
+*.log
+# vendored third-party tooling
+/vendor
+# served artifacts (kernel/dtb staged for tftp; rootfs lives in serve/nfs/bananas)
+/serve/tftp
+/serve/nfs/
+# host-cross-compiled bananas-webadmin/helper binaries staged for the recipe
+/serve/bin/
+# host-built Dioxus Web wasm bundle staged for the recipe
+/serve/webadmin/
+/serve/cloud-ui/
+# local secrets / per-deployment config — see .env.example
+.env
+# rust workspace build output
+/target
+
+/dist/
+/.claude/
+# git worktrees for parallel development
+/.worktrees/
+serve/cloud-ui
+# e2e harness deps — installed via `pixi run e2e`; never committed.
+/tests/e2e/node_modules/
+/tests/e2e/package-lock.json
+
+# Test screenshots produced by e2e_protected_table.rs and similar.
+# Useful as local debugging artifacts; not worth carrying in git history.
+screenshots/

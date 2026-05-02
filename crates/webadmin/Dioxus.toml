@@ -1,0 +1,22 @@
+[application]
+name = "bananas-webadmin"
+
+[web.app]
+base_path = "/"
+# dx-cli appends this to <title> if the tag exists, or injects a fresh
+# tag if it doesn't — so the index.html template MUST omit <title> to
+# avoid producing "BanaNASBanaNAS". The title lives only here.
+title = "BanaNAS"
+
+# wasm-opt configuration. Default for `dx build --release` is -Oz, the
+# most aggressive size pass — single-threaded and easily 5+ minutes on
+# a Dioxus app of our size, which dominates the CI release run. -O2
+# gives ~3× faster output for ~5-10% larger pre-compression bytes; the
+# bundle is brotli'd / gzip'd in `pixi run build-webadmin` afterward,
+# so the wire-size delta is in the noise (~50 KB out of a ~400 KB
+# brotli'd payload). If the bundle ever exceeds a budget, flip back
+# to "z" — but the round-trip benefit of fewer CI minutes per release
+# (we cut several per session) outweighs the size delta today.
+[web.wasm_opt]
+level = "2"
+debug = false

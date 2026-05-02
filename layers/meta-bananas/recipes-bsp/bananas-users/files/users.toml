@@ -1,0 +1,6 @@
+id = "users"
+label = "Users"
+socket = "/run/bananas/users.sock"
+api_prefix = "/api/users"
+order = 40
+icon = "users"

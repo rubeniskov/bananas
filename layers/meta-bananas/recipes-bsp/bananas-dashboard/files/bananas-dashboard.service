@@ -1,0 +1,42 @@
+[Unit]
+Description=BanaNAS LCD dashboard — live system tiles on the 5" RGB panel
+# Conflicts with psplash on the same framebuffer; psplash quits when
+# default.target is reached, so wait for that before claiming /dev/fb0.
+# bananas-stats must be up before we connect to its live pub/sub
+# socket — `Wants=` so we don't fail-on-missing, just retry-on-EOF.
+After=multi-user.target bananas-stats.service psplash-start.service
+Wants=bananas-stats.service
+ConditionPathExists=/dev/fb0
+# Don't bring up the dashboard on a serial-only boot — it has nothing
+# to render to. /dev/fb0 only appears once sun4i-drm has bound the
+# panel.
+
+[Service]
+Type=simple
+# Runs as the bananas user but needs `video` + `render` groups to open
+# /dev/dri/card0 (KMS) and `input` to read the touchscreen / kbd events
+# Slint's linuxkms-noseat backend enumerates.
+User=bananas
+Group=bananas
+SupplementaryGroups=video render input
+ExecStart=/usr/bin/bananas-dashboard
+Environment=RUST_LOG=info
+# SLINT_BACKEND format is <backend>-<renderer>. femtovg uses GLES2 on
+# top of GBM (libgbm + lima Gallium driver) — picks up the Mali-400
+# automatically once /dev/dri/renderD128 + the lima userspace are
+# present. mesa-gl_%.bbappend now adds `egl gles gbm` to mesa's
+# PACKAGECONFIG so libEGL + libGLESv2 actually ship. If the GPU path
+# fails at runtime the dashboard exits non-zero and systemd
+# Restart=always brings it back; flipping this env var to
+# `linuxkms-software` (or `mesa-gl_%.bbappend`'s previous form) is the
+# rollback if the lima userspace ever breaks again.
+Environment=SLINT_BACKEND=linuxkms-femtovg
+Environment=SLINT_KMS_DEVICE=/dev/dri/card0
+# Re-attempt forever — if the panel is briefly unavailable during a
+# hot-plug the dashboard should come back, not give up.
+Restart=always
+RestartSec=3
+MemoryMax=192M
+
+[Install]
+WantedBy=multi-user.target

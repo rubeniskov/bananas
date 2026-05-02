@@ -1,0 +1,25 @@
+[Unit]
+Description=BanaNAS root engine (privileged ops for bananas-webadmin: exports, fstab, users, services, opkg, …)
+# Engine is a Unix-socket daemon — talks only to the local server crate
+# over /run/bananas/engine.sock. No network, no DNS. Don't wait for
+# network-online.target; that adds 5–10 s of boot for nothing.
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bananas-engine
+RuntimeDirectory=bananas
+RuntimeDirectoryMode=0755
+Environment=BANANAS_ENGINE_SOCKET=/run/bananas/engine.sock
+# `always` (not `on-failure`) so the engine's self-update path can
+# exit(0) cleanly after swapping its own binary on disk and trust
+# systemd to bring the new ELF back. Without `always`, `exit(0)` is
+# treated as a deliberate stop and the engine would never restart —
+# in-place upgrades of bananas-engine would leave the system without
+# its root daemon. The only legitimate "stop forever" path is now an
+# explicit `systemctl stop` from the operator, which is what we want.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

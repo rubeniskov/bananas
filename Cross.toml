@@ -1,0 +1,32 @@
+# cross-rs configuration for the bananas-dashboard cross-compile.
+#
+# `cross` runs the entire cargo invocation inside a per-target Docker
+# container. The default armv7-unknown-linux-gnueabihf image is based
+# on Ubuntu and ships gcc-arm-linux-gnueabihf + a minimal armhf
+# sysroot, but it does NOT preinstall the system libraries Slint's
+# linuxkms backend + fontique link against. The pre-build hook below
+# enables Debian's armhf multiarch view and apt-installs them.
+
+[target.armv7-unknown-linux-gnueabihf]
+# Use the standard cross-rs image; we extend it via pre-build.
+image = "ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main"
+
+# Run as the invoking user inside the container so target/ artifacts
+# come back owned by the host user (no sudo to chown after every build).
+build.env.passthrough = [
+    "CARGO_TARGET_DIR",
+    "RUST_BACKTRACE",
+    "RUSTFLAGS",
+]
+
+# Pre-build hook: enable armhf multiarch + install dev libs for
+#   - fontconfig (font fallback under fontique)
+#   - drm/gbm (Slint's linuxkms backend)
+#   - udev (input device enumeration)
+#   - xkbcommon (keymap, also pulled by linuxkms backend)
+# Each line is run inside the container before cargo build.
+pre-build = [
+    "dpkg --add-architecture armhf",
+    "apt-get update",
+    "apt-get install --assume-yes --no-install-recommends pkg-config libfontconfig1-dev:armhf libudev-dev:armhf libxkbcommon-dev:armhf libinput-dev:armhf libgbm-dev:armhf libdrm-dev:armhf",
+]

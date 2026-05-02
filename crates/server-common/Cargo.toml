@@ -1,0 +1,23 @@
+[package]
+name = "bananas-server-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+rand.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

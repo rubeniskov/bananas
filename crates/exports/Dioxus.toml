@@ -1,0 +1,17 @@
+[application]
+name = "bananas-exports-ui"
+
+[web.app]
+# Webadmin owns THE single index.html publicly. This bundle's
+# bytes are reached over Unix-socket sub-proxy from webadmin
+# under /assets/exports/<hash>.<ext>; setting base_path so
+# dx-emitted asset URLs match that public namespace. The exports
+# daemon's embedded tree contains the same paths verbatim, so
+# the serve handler is a direct include_dir lookup with no URL
+# rewriting at request time.
+base_path = "/assets/exports"
+title = "BanaNAS Exports"
+
+[web.wasm_opt]
+level = "2"
+debug = false

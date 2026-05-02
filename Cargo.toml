@@ -1,0 +1,150 @@
+[workspace]
+members = ["crates/router", "crates/server-common", "crates/webadmin", "crates/engine", "crates/stats", "crates/dashboard", "crates/config", "crates/cloud", "crates/exports", "crates/storage", "crates/users", "crates/devtool", "crates/mfe-runtime", "crates/config-form", "crates/config-form-derive", "crates/proto"]
+exclude = ["build", "poky", "meta-arm", "meta-openembedded", "meta-sunxi", "vendor"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["rubeniskov <me@rubeniskov.com>"]
+license = "MIT"
+
+# Prevent the in-tree Yocto build/ tree (which lives under bananas/build/)
+# from getting pulled into this workspace. Without it, rust-native's bootstrap
+# cargo walks up from build/tmp/work/.../bootstrap/Cargo.toml, finds this
+# manifest, and tries to enumerate our member crates with the wrong toolchain.
+
+[workspace.dependencies]
+# Internal crates — referenced by `package.workspace = true` from members so
+# the path is defined exactly once.
+bananas-engine = { path = "crates/engine" }
+bananas-server-common = { path = "crates/server-common" }
+bananas-webadmin = { path = "crates/webadmin" }
+bananas-stats = { path = "crates/stats" }
+bananas-dashboard = { path = "crates/dashboard" }
+bananas-config = { path = "crates/config" }
+bananas-mfe-runtime = { path = "crates/mfe-runtime" }
+bananas-config-form = { path = "crates/config-form" }
+bananas-config-form-derive = { path = "crates/config-form-derive" }
+bananas-proto = { path = "crates/proto", default-features = false }
+
+# gRPC stack — tonic 0.14 + prost 0.14. Pinned at workspace so
+# the proto crate, the server-side daemons, and the wasm SPA
+# clients all see the same generated-code shape. tonic-web is the
+# server-side HTTP/2 ↔ gRPC-Web translator (mounted at /api/grpc/*
+# on the public TCP face); tonic-web-wasm-client is the browser
+# side, gated to wasm32 only.
+tonic = { version = "0.14", default-features = false }
+tonic-web = { version = "0.14" }
+prost = { version = "0.14" }
+tonic-build = { version = "0.14", default-features = false }
+tonic-web-wasm-client = { version = "0.9" }
+# Vendor protoc into the build-host so cross-builds via
+# cargo-zigbuild + Yocto bitbake don't depend on a system-installed
+# protoc binary.
+protoc-bin-vendored = { version = "3.2" }
+
+# Workspace-wide tokio feature subset. "full" pulls in fs, io, mio, net,
+# parking_lot, process, rt, rt-multi-thread, signal, sync, time, macros,
+# tracing — bigger compile + binary size for features we don't all use.
+# This subset covers actual usage across server / helper / stats /
+# dashboard. If a future change needs e.g. `select!` only, it's already
+# in `macros`; for `Notify`/`Semaphore`, `sync` covers it.
+tokio = { version = "1.52", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "fs",
+    "net",
+    "io-util",
+    "time",
+    "sync",
+    "process",
+    "signal",
+] }
+axum = { version = "0.8", features = ["ws"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+anyhow = "1.0.102"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt"] }
+tower-http = { version = "0.6", features = ["trace", "fs", "set-header"] }
+# Auth — pure-Rust SHA-512 crypt for /etc/shadow verification + HMAC for
+# session cookies. All no-std-friendly so the cross-compile via zigbuild
+# stays clean.
+sha-crypt = "0.5"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+libc = "0.2"
+toml = "1"
+# Server-side SSE streaming for the opkg upgrade progress endpoint.
+futures-util = { version = "0.3", default-features = false }
+async-stream = "0.3"
+# Stats / dashboard deps
+rusqlite = { version = "0.39", features = ["bundled"] }
+time = { version = "0.3", features = ["serde", "macros", "formatting", "local-offset"] }
+nix = { version = "0.31", features = ["fs"] }
+thiserror = "2"
+slint = { version = "1.16", default-features = false, features = ["compat-1-2", "renderer-femtovg", "renderer-software", "backend-linuxkms-noseat", "std"] }
+slint-build = "1.16"
+
+# UI (wasm) deps — pinned at the workspace level so the bananas-webadmin crate
+# doesn't drift from the rest of the tree on a `cargo update`.
+dioxus = { version = "0.7", features = ["web"] }
+gloo-net = { version = "0.6", features = ["http"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "Window",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "HtmlAnchorElement",
+  "HtmlInputElement",
+  "Blob",
+  "BlobPropertyBag",
+  "Url",
+  "File",
+  "FileList",
+  "CssStyleDeclaration",
+  "Location",
+  "Navigator",
+  "Clipboard",
+  "HtmlTextAreaElement",
+  "Storage",
+  "EventSource",
+  "MessageEvent",
+] }
+tracing-wasm = "0.2"
+console_error_panic_hook = "0.1"
+
+[profile.release]
+# Tuned for runtime speed — most of what we ship runs natively on the
+# BPI's Cortex-A7 (server, helper, stats, dashboard) where every cycle
+# matters. The wasm UI overrides this back to size optimisation below
+# so the bundle stays small over HTTP. Per-package bumps (slint,
+# femtovg, image rasterisation) keep the dashboard render-path hot.
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+incremental = false
+
+# Wasm: optimise for size since the bundle is shipped over HTTP and
+# `dx bundle --release` runs wasm-opt -Oz on top of cargo's output.
+[profile.release.package.bananas-webadmin]
+opt-level = "s"
+
+# Force the heavy render path inside the dashboard to opt-3 even when
+# a downstream consumer is opt="s" — Slint and femtovg's hot inner
+# loops (path tessellation, font rasterisation) are the bottleneck on
+# the BPI's Mali-400.
+[profile.release.package.slint]
+opt-level = 3
+[profile.release.package.i-slint-renderer-femtovg]
+opt-level = 3
+[profile.release.package.femtovg]
+opt-level = 3
