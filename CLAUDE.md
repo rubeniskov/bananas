@@ -132,7 +132,7 @@ Recommended mount options to use when adding entries via the UI: `defaults,noati
 
 ### Plugin install model
 
-The default `bananas-image.bb` ships only the NAS-essential `bananas-*` set: `bananas-engine` (bundled in the same .ipk as `bananas-webadmin`), `bananas-router`, `bananas-webadmin`, `bananas-storage`, `bananas-users`, `bananas-exports`, `bananas-stats` + `bananas-stats-web`, and `bananas-feed-config` (drops `/etc/opkg/customfeeds.conf` so opkg knows about the GitHub-Pages mirror at `https://rubeniskov.github.io/bananas/feed/latest/`).
+The default `bananas-image.bb` ships the NAS-essential `bananas-*` set: `bananas-engine` (bundled in the same .ipk as `bananas-webadmin`), `bananas-router`, `bananas-webadmin`, `bananas-storage`, `bananas-users`, `bananas-exports`, `bananas-stats` + `bananas-stats-web`, `bananas-config` (operator TUI / CLI — kept baked so the serial console can recover from a wedged web admin without needing opkg), and `bananas-feed-config` (drops `/etc/opkg/customfeeds.conf` so opkg knows about the GitHub-Pages mirror at `https://rubeniskov.github.io/bananas/feed/latest/`).
 
 Optional plugins live in the opkg feed and are installed on demand after first boot:
 
@@ -140,7 +140,6 @@ Optional plugins live in the opkg feed and are installed on demand after first b
 opkg update
 opkg install bananas-cloud           # rclone-based sync — pulls bananas-rclone (~50 MB)
 opkg install bananas-dashboard       # Slint LCD app + bananas-dashboard-web (web SPA)
-opkg install bananas-config          # operator TUI / CLI
 ```
 
 Each plugin's postinst restarts `bananas-router` + `bananas-webadmin` so the new manifest is picked up; the matching tab appears in the SPA without a reboot. The same `customfeeds.conf` ships on every supported board (Banana Pro armv7, RPi-unified aarch64) — opkg silently 404s on the per-arch entries that don't apply to the running system, so the file stays board-agnostic.

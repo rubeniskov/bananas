@@ -193,7 +193,9 @@ IMAGE_INSTALL += " \
 # /api/storage, /api/users, /api/exports out of the box. bananas-stats +
 # bananas-stats-web ship by default too — operators expect "what's my CPU /
 # disk doing right now" Day 1 and the SQLite-backed sampler is small enough
-# to justify baking in.
+# to justify baking in. bananas-config (the operator TUI / CLI) lands too
+# so first-boot recovery from a wedged web admin is possible from the
+# serial console without an opkg install.
 #
 # Everything else ships as IPKs in the GitHub-Pages opkg feed and is
 # installed on demand:
@@ -209,7 +211,6 @@ IMAGE_INSTALL += " \
 #                      headless installs (the typical NAS) and the Slint
 #                      runtime stack pulls fontconfig+udev+xkbcommon+
 #                      libinput, ~40 MB.
-#   - bananas-config   the operator TUI is rarely used after first boot.
 IMAGE_INSTALL += " \
     bananas-webadmin \
     bananas-exports \
@@ -217,6 +218,7 @@ IMAGE_INSTALL += " \
     bananas-users \
     bananas-stats \
     bananas-stats-web \
+    bananas-config \
     bananas-feed-config \
 "
 
