@@ -166,8 +166,22 @@ Browse to **`http://bananapro.local:8080/`** (or the IP). First sign-in is **`ro
 1. **Mount points** tab → add fstab entries for any SATA / USB disk you have plugged in. The image ships with no defaults; the UI handles `mkdir`, fstab edit, and `systemctl daemon-reload`.
 2. **Exports** tab → declare which paths to share over NFS and to what client / CIDR. Same deal — the image ships an empty `/etc/exports`, the UI rewrites it via the privileged helper.
 3. **Users** tab → add normal admin users (member of `bananas-admin`); demote root to emergency-use.
-4. **Cloud** tab (optional) → connect Google Drive / Dropbox / S3 / etc. for backup syncs.
+4. **Stats** tab → live CPU / memory / disk / network graphs (sampler ships pre-installed).
 5. **Save config** → drops a TOML bundle of the entire setup (exports + fstab + users + cloud) onto your laptop. Use **Load config** on a re-flashed card to restore in one click.
+
+#### Optional plugins (install on demand)
+
+The default image stays lean and ships only the NAS-essentials. The rest of the `bananas-*` plugin set is in the public opkg feed and installs in seconds:
+
+```bash
+ssh root@bananapro.local
+opkg update
+opkg install bananas-cloud           # Google Drive / Dropbox / S3 sync (pulls bananas-rclone)
+opkg install bananas-dashboard       # Slint LCD app + per-tab web SPA
+opkg install bananas-config          # operator TUI / CLI
+```
+
+The Cloud / Dashboard / etc. tabs appear in the SPA the moment the install finishes — `bananas-router` and `bananas-webadmin` reload the manifest list via the postinst.
 
 That's it for a normal install. Building from source / iterating without re-flashing is covered in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
