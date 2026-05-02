@@ -318,6 +318,22 @@ jobs:
 
           ls -la dist/
 
+      # mdbook for building the docs site that publishes to /docs/
+      # alongside the opkg feed. Cached at ~/.cargo/bin/mdbook so re-runs
+      # don't recompile from source.
+      - name: Cache mdbook binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/mdbook
+          key: mdbook-${{ runner.os }}-0.4
+
+      - name: Install mdbook (if not cached)
+        run: |
+          if ! command -v mdbook >/dev/null 2>&1; then
+            cargo install mdbook --locked --version '^0.4'
+          fi
+          mdbook --version
+
       # ─── opkg feed publishing ─────────────────────────────────────
       # Stage ONLY the bananas-* runtime packages for gh-pages. The
       # deploy/ipk/ tree contains hundreds of base-OS packages
@@ -371,20 +387,17 @@ jobs:
             # Regenerate the per-arch index against the filtered set.
             ( cd "$dst" && "$OPKG_MAKE_INDEX" . > Packages 2>/dev/null && gzip -fk Packages )
           done
-          # Tiny landing page so https://<owner>.github.io/<repo>/ has
-          # something to render rather than a 404 — pure documentation,
-          # not consumed by opkg.
-          cat > feed-publish/index.html <<'EOF'
-          <!doctype html>
-          <meta charset=utf-8>
-          <title>BanaNAS opkg feed</title>
-          <h1>BanaNAS opkg feed</h1>
-          <p>This branch hosts <code>.ipk</code> packages for the
-          BanaNAS distribution. Devices configured via
-          <code>/etc/opkg/customfeeds.conf</code> consume it directly;
-          there is nothing here for a browser to do.</p>
-          <p>Repo: <a href="https://github.com/rubeniskov/bananas">rubeniskov/bananas</a></p>
-          EOF
+          # Stage the hand-written landing page + assets into the gh-pages root.
+          cp docs/website/index.html feed-publish/index.html
+          mkdir -p feed-publish/assets feed-publish/docs/screenshots
+          cp assets/splashscreen.png assets/paypal-qr.png feed-publish/assets/
+          cp docs/screenshots/lcd-dashboard.png feed-publish/docs/screenshots/
+
+          # Build the mdbook docs site and stage it under /docs/.
+          mdbook build docs/book/
+          mkdir -p feed-publish/docs
+          cp -r docs/book/book/. feed-publish/docs/
+
           ls -R feed-publish/feed/latest
 
       # Push to the gh-pages branch. peaceiris/actions-gh-pages
