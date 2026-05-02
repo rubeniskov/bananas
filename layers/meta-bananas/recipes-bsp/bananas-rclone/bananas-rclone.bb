@@ -19,12 +19,12 @@ require recipes-bsp/bananas-version.inc
 # `setup-rclone-arm` pixi task — version pin + sha256 verify is on
 # the pixi side; once the bytes land in serve/bin/ the recipe just
 # packages them).
-FILESEXTRAPATHS:prepend := "${COREBASE}/../serve/bin:"
+FILESEXTRAPATHS:prepend := "${COREBASE}/../serve/bin/${TUNE_PKGARCH}:"
 SRC_URI = "file://rclone"
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro)"
+COMPATIBLE_MACHINE = "(bananapro|bananas-rpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 
