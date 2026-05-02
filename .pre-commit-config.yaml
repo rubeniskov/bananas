@@ -58,9 +58,12 @@ repos:
         name: cargo test (workspace, no-fail-fast)
         language: system
         # The e2e_mfe harness in crates/devtool spawns the daemon
-        # binaries from target/debug/<bin>; --workspace makes sure
-        # bananas-webadmin and bananas-dashboard-web are present.
-        entry: bash -c 'cargo test --workspace --no-fail-fast'
+        # binaries from target/debug/<bin>. cargo test only builds
+        # test executables + their direct deps — it does NOT build
+        # path-spawned bins from sibling crates. Build all workspace
+        # bins first so the harness has bananas-router /
+        # bananas-engine / bananas-cloud / etc to spawn.
+        entry: bash -c 'cargo build --workspace --bins && cargo test --workspace --no-fail-fast'
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust]
