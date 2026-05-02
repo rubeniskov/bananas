@@ -17,21 +17,20 @@
 name: CI
 
 on:
-  # Push to feature branches (everything except main) — covers force-push
-  # iterations on PRs and direct work on dev branches before they open a PR.
+  # Push to feature branches (everything except main) — covers every dev
+  # iteration AND every PR update, since opening / pushing to a PR is also
+  # a push to its head ref. Triggering on pull_request as well would
+  # double-fire (push event + pull_request event running the same commit
+  # twice on the same matrix), wasting runner minutes.
   push:
     branches-ignore: [main]
-  # PRs targeting main — runs CI on the merge-preview ref so reviewers see
-  # fail/pass against the actual proposed merge.
-  pull_request:
-    branches: [main]
   # Manual trigger for re-running CI on demand (e.g. after a flaky run).
   workflow_dispatch:
 
-# Push-to-main is intentionally NOT a trigger here. The only way to land
-# on main is via a merged PR, and that PR's CI already ran green on the
-# merge-preview ref — running it again on the resulting merge commit is
-# pure runner-minute waste. release.yml still fires on push-to-main
+# Push-to-main is intentionally NOT a trigger. The only way to land on
+# main is via a merged PR, and that PR's CI already ran green on the
+# branch tip just before merge — running it again on the merge commit
+# is pure runner-minute waste. release.yml still fires on push-to-main
 # because that's where the release bake/publish lives.
 
 # Single-flight per ref: a force-push or follow-up commit cancels the
