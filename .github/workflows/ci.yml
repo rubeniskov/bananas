@@ -82,6 +82,18 @@ jobs:
         if: steps.install_prek.outcome != 'success'
         run: cargo install --locked prek
 
+      # Install dioxus-cli so each daemon's build.rs produces real
+      # SPA bytes; without dx the build.rs gracefully skips and the
+      # daemon ships an empty include_dir!, so the browser's first
+      # request returns the host shell with no plugin SPAs and the
+      # nav.app-nav probes fail. Use cargo-binstall to grab the
+      # prebuilt release tarball (a few seconds vs ~6 min compile).
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install dioxus-cli (binstall)
+        run: cargo binstall -y --version ^0.7 dioxus-cli
+
       # `--all-files` runs every hook against every tracked file (CI
       # doesn't have a "changed since last commit" signal that maps to
       # prek's git-aware default). The `pre-push` stage adds clippy +
