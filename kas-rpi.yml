@@ -1,0 +1,59 @@
+header:
+  version: 14
+  includes:
+    - kas-base.yml
+
+# Custom unified-RPi MACHINE — see layers/meta-bananas/conf/machine/bananas-rpi.conf.
+# Inherits from raspberrypi3-64 (cortexa53 tune is the lowest common ARMv8
+# baseline; binaries built against it run unchanged on RPi 3/4/5 cores) and
+# adds every supported RPi DTB to KERNEL_DEVICETREE so a single SD card boots
+# any board — the bundled boot.scr picks the right DTB at runtime.
+machine: bananas-rpi
+
+repos:
+  meta-raspberrypi:
+    url: "https://git.yoctoproject.org/meta-raspberrypi"
+    branch: "scarthgap"
+    layers:
+      .:
+
+local_conf_header:
+  rpi-image: |
+    # Switch the firmware loader to U-Boot so we can interpose a boot.scr
+    # that auto-detects the running RPi model and picks the matching DTB.
+    # Without this, RPi's GPU firmware would jump straight to the kernel
+    # image and the multi-DTB shipping in /boot would be useless.
+    RPI_USE_U_BOOT = "1"
+
+    # Mask the meta-bananas bbappends that target meta-sunxi-provided
+    # recipes (linux-mainline is the sunxi kernel; meta-raspberrypi uses
+    # linux-raspberrypi instead). Without this, bitbake errors with
+    # "No recipes in default available for: …linux-mainline_%.bbappend".
+    BBMASK += "meta-bananas/recipes-kernel/linux/linux-mainline_%.bbappend"
+
+    # raspberrypi3-64.conf's MACHINE_EXTRA_RRECOMMENDS pulls
+    # linux-firmware-rpidistro-bcm43430 / bluez-firmware-rpidistro-* which
+    # carry a "synaptics-killswitch" LICENSE_FLAG (proprietary Cypress /
+    # Broadcom firmware blob). Without this accept line, packagegroup-base
+    # fails to resolve and the bake errors with "Nothing RPROVIDES
+    # linux-firmware-rpidistro-bcm43430". Operators who want a pure-FOSS
+    # image should drop the WiFi/BT firmware via MACHINE_EXTRA_RRECOMMENDS
+    # override; for the default NAS use case shipping the firmware is the
+    # right trade-off (RPi 3/4/5 ship it stock).
+    LICENSE_FLAGS_ACCEPTED += "synaptics-killswitch"
+
+    # Always-on UART so the serial-console banner is reachable even on the
+    # boards (RPi 4/5) that disable it by default to free GPIO for HATs.
+    ENABLE_UART = "1"
+
+    # rpi-sdimg is the wic variant that lays out the FAT firmware partition
+    # the way RPi's bootloader expects; the tar.gz is for the iterate-loop
+    # NFS netboot path (kept available for parity with the BPI flow even
+    # though RPi netboot isn't wired up yet — see plan PR-3).
+    IMAGE_FSTYPES = "rpi-sdimg tar.gz"
+
+    # RPi serial is on ttyAMA0 (BCM PL011) on RPi 3/4 and ttyS0 (mini-uart)
+    # depending on the firmware/uart_2ndstage config. ENABLE_UART=1 above
+    # forces the PL011 path so ttyAMA0 is the canonical name across the
+    # supported boards.
+    SERIAL_CONSOLES = "115200;ttyAMA0"

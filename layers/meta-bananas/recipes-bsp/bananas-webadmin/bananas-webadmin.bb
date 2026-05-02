@@ -24,7 +24,7 @@ inherit systemd useradd
 # it's now embedded directly in the daemon binary via include_dir!
 # (see crates/webadmin/build.rs + src/embedded.rs), so an opkg upgrade
 # of bananas-webadmin atomically rolls the daemon and its UI together.
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin/${TUNE_PKGARCH}:"
 SRC_URI = "file://bananas-engine.service \
            file://bananas-webadmin.service \
            file://bananas-webadmin \
@@ -35,8 +35,8 @@ SRC_URI = "file://bananas-engine.service \
 S = "${WORKDIR}"
 
 # These binaries are armv7-unknown-linux-gnueabihf — only valid for the
-# bananapro machine.
-COMPATIBLE_MACHINE = "(bananapro)"
+# bananas-bpi machine.
+COMPATIBLE_MACHINE = "(bananas-bpi|bananas-rpi)"
 
 # The release binaries are already stripped by zig; QA pass would strip
 # again, then complain. Skip the strip + the arch check (Yocto's `file`

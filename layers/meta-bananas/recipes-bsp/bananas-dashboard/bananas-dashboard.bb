@@ -15,14 +15,18 @@ require recipes-bsp/bananas-version.inc
 inherit systemd
 
 # Pull the cross-rs-built binary from serve/bin/ alongside the unit file.
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin/${TUNE_PKGARCH}:"
 SRC_URI = "file://bananas-dashboard \
            file://bananas-dashboard.service \
            file://dashboard.toml"
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro)"
+# Slint LCD app is bananas-bpi-only. The RPi target uses
+# bananas-dashboard-web (the SPA daemon) for the same data set; an
+# aarch64 cross-build of Slint + fontconfig sysroot is a v2.1 follow-up
+# (Cross.toml only has the armv7 multiarch entries today).
+COMPATIBLE_MACHINE = "(bananas-bpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 

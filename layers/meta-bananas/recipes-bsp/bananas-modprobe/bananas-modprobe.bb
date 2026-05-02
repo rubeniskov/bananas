@@ -17,7 +17,7 @@ SRC_URI = "file://blacklist-brcmfmac.conf"
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro)"
+COMPATIBLE_MACHINE = "(bananas-bpi)"
 
 do_install() {
     install -d ${D}${sysconfdir}/modprobe.d

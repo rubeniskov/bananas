@@ -1,7 +1,6 @@
 header:
   version: 14
 
-machine: bananapro
 distro: bananas
 target:
   - bananas-image
@@ -18,6 +17,11 @@ target:
 env:
   ROOT_PASSWORD_HASH:
 
+# Layers shared across every supported board. Per-machine BSP layers
+# (meta-sunxi for Banana Pro, meta-raspberrypi for the RPi-unified image)
+# live in the matching kas-<board>.yml overlay; including them only on
+# the boards that need them keeps `kas dump` clean and avoids pulling
+# unrelated machine configs into a single bake's resolution path.
 repos:
   poky:
     url: "https://git.yoctoproject.org/poky"
@@ -35,12 +39,6 @@ repos:
       meta-python:
       meta-networking:
       meta-filesystems:
-
-  meta-sunxi:
-    url: "https://github.com/linux-sunxi/meta-sunxi.git"
-    branch: "scarthgap"
-    layers:
-      .:
 
   meta-arm:
     url: "https://git.yoctoproject.org/meta-arm"
@@ -90,16 +88,6 @@ local_conf_header:
     # saved per cold-cache bake on top of plain sstate hits.
     BB_HASHSERVE = "auto"
     BB_SIGNATURE_HANDLER = "OEEquivHash"
-
-    # Output an SD-card-flashable wic image alongside the rootfs tarball.
-    # The release pipeline tars the .wic into bananas-image-armv7.tar.gz
-    # so operators get one consistent .tar.gz format across every release
-    # asset; the rootfs tar.gz itself stays around for the iterate loop's
-    # NFS netboot path.
-    IMAGE_FSTYPES = "wic tar.gz"
-
-    # Serial console (common on sunxi boards)
-    SERIAL_CONSOLES = "115200;ttyS0"
 
     # If systemd is desired (optional)
     DISTRO_FEATURES:append = " systemd usrmerge"

@@ -16,12 +16,12 @@ require recipes-bsp/bananas-version.inc
 
 # Pull the prebuilt binary from serve/bin/ where pixi run build-config-arm
 # stages it.
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin/${TUNE_PKGARCH}:"
 SRC_URI = "file://bananas-config"
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro)"
+COMPATIBLE_MACHINE = "(bananas-bpi|bananas-rpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 

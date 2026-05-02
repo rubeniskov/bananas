@@ -12,14 +12,14 @@ require recipes-bsp/bananas-version.inc
 
 inherit systemd
 
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin/${TUNE_PKGARCH}:"
 SRC_URI = "file://bananas-users.service \
            file://bananas-users \
            file://users.toml"
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro)"
+COMPATIBLE_MACHINE = "(bananas-bpi|bananas-rpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 

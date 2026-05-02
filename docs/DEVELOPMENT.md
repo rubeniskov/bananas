@@ -37,10 +37,10 @@ pixi run build      # full Yocto bake (≈30 min cold cache)
 
 The deliverables land at:
 
-- `build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.tar.gz` — rootfs only, used by the iterate loop's NFS netboot path.
-- `build/tmp/deploy/images/bananapro/bananas-image-bananapro.rootfs.wic` — full SD-card image (U-Boot SPL + boot partition + rootfs), `dd`-able.
+- `build/tmp/deploy/images/bananas-bpi/bananas-image-bananas-bpi.rootfs.tar.gz` — rootfs only, used by the iterate loop's NFS netboot path.
+- `build/tmp/deploy/images/bananas-bpi/bananas-image-bananas-bpi.rootfs.wic` — full SD-card image (U-Boot SPL + boot partition + rootfs), `dd`-able.
 
-The build is reproducible if you keep `Cargo.lock` and the layer pins in `kas.yml` unchanged.
+The build is reproducible if you keep `Cargo.lock`, the layer pins in `kas-base.yml`, and the per-machine overlay pins (`kas-bpi.yml` / `kas-rpi.yml`) unchanged.
 
 ## Network-boot setup (one-time)
 
@@ -84,11 +84,13 @@ When iterating on a single recipe rather than the full image, drop into the bitb
 
 ```bash
 pixi shell
-kas shell kas.yml -c 'bitbake <recipe>'              # e.g. linux-mainline, u-boot-sunxi, bananas-image
-kas shell kas.yml -c 'bitbake -c <task> <recipe>'    # single task: cleansstate, compile, devshell, ...
+# Pick the overlay matching the MACHINE you're targeting.
+kas shell kas-bpi.yml -c 'bitbake <recipe>'              # e.g. linux-mainline, u-boot-sunxi, bananas-image
+kas shell kas-bpi.yml -c 'bitbake -c <task> <recipe>'    # single task: cleansstate, compile, devshell, ...
+kas shell kas-rpi.yml -c 'bitbake <recipe>'              # bananas-rpi flow
 ```
 
-`kas` materialises the upstream layers (`poky/`, `meta-openembedded/`, `meta-sunxi/`, `meta-arm/`) into the repo root and writes everything else under `build/` (`build/conf/`, `build/tmp/`, `build/downloads/`, `build/sstate-cache/`). Both the cloned layers and `build/` are gitignored — never commit them.
+`kas` materialises the upstream layers (`poky/`, `meta-openembedded/`, `meta-sunxi/` for bpi or `meta-raspberrypi/` for rpi, `meta-arm/`) into the repo root and writes everything else under `build/` (`build/conf/`, `build/tmp/`, `build/downloads/`, `build/sstate-cache/`). Both the cloned layers and `build/` are gitignored — never commit them.
 
 ## Crate workspace
 
@@ -109,5 +111,5 @@ The `bananas-webadmin.bb` recipe `bbfatal`s if `serve/webadmin/index.html` is mi
 ## Where to look when bitbake explodes
 
 - A *-native* recipe failing with `-Werror` or a const-qualifier error from the host compiler → add a bbappend in `layers/meta-bananas/recipes-devtools/`. Pattern lives in `elfutils_0.191.bbappend` / `pseudo_git.bbappend` / `dtc_1.7.0.bbappend`.
-- Yocto release line is `scarthgap`. If you bump it, update every `refspec` in `kas.yml` together and re-test the bbappends — version-pinned appends like `elfutils_0.191.bbappend` and `dtc_1.7.0.bbappend` will silently stop applying when the upstream recipe version changes.
+- Yocto release line is `scarthgap`. If you bump it, update every `refspec` in `kas-base.yml` (and the per-board overlays for `meta-sunxi` / `meta-raspberrypi`) together, then re-test the bbappends — version-pinned appends like `elfutils_0.191.bbappend` and `dtc_1.7.0.bbappend` will silently stop applying when the upstream recipe version changes.
 - `pixi.lock` is marked `merge=binary linguist-generated=true -diff` in `.gitattributes`; regenerate it via `pixi` rather than hand-editing or attempting a 3-way merge.

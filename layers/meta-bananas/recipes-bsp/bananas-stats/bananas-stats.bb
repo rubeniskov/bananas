@@ -14,14 +14,14 @@ require recipes-bsp/bananas-version.inc
 inherit systemd
 
 # Pull the prebuilt binary from serve/bin/ alongside the unit file.
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:${COREBASE}/../serve/bin/${TUNE_PKGARCH}:"
 SRC_URI = "file://bananas-stats \
            file://bananas-stats.service \
            file://stats.toml"
 
 S = "${WORKDIR}"
 
-COMPATIBLE_MACHINE = "(bananapro)"
+COMPATIBLE_MACHINE = "(bananas-bpi|bananas-rpi)"
 INHIBIT_PACKAGE_STRIP = "1"
 INSANE_SKIP:${PN} += "arch already-stripped"
 
