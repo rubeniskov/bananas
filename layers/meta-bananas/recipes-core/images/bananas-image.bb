@@ -1,4 +1,8 @@
-SUMMARY = "Headless NAS/NFS image for Banana Pro (BPI-M1+)"
+SUMMARY = "Minimal headless NAS image — engine + router + webadmin + the NAS-essential plugin set"
+DESCRIPTION = "Boots a fresh SD card with the bananas-engine root daemon, the bananas-router \
+gateway, the bananas-webadmin shell SPA, plus the NAS-essential plugins (storage, users, \
+exports). Optional plugins (cloud, stats, dashboard) ship as IPKs in the GitHub-Pages opkg \
+feed and are installed on demand via `opkg install bananas-<plugin>` after first boot."
 LICENSE = "MIT"
 
 inherit core-image
@@ -177,57 +181,50 @@ IMAGE_INSTALL += " \
     avahi-utils \
     usbutils \
     i2c-tools \
-    bananas-router \
+    mdadm \
+    hdparm \
+    smartmontools \
+    kernel-modules \
+"
+
+# Minimal bananas-* set baked in. webadmin pulls bananas-engine (bundled
+# in the same .ipk) and bananas-router (RDEPENDS); storage/users/exports
+# round out the NAS-essential plugin set so a fresh flash answers
+# /api/storage, /api/users, /api/exports out of the box. bananas-stats +
+# bananas-stats-web ship by default too — operators expect "what's my CPU /
+# disk doing right now" Day 1 and the SQLite-backed sampler is small enough
+# to justify baking in.
+#
+# Everything else ships as IPKs in the GitHub-Pages opkg feed and is
+# installed on demand:
+#
+#     opkg update
+#     opkg install bananas-cloud bananas-dashboard
+#
+# Reasons each optional plugin is opkg-only:
+#   - bananas-cloud    pulls bananas-rclone (~50 MB Go binary) — keeps the
+#                      base image lean for operators who don't sync.
+#   - bananas-dashboard
+#     bananas-dashboard-web  Slint LCD app + the SPA daemon — no point on
+#                      headless installs (the typical NAS) and the Slint
+#                      runtime stack pulls fontconfig+udev+xkbcommon+
+#                      libinput, ~40 MB.
+#   - bananas-config   the operator TUI is rarely used after first boot.
+IMAGE_INSTALL += " \
     bananas-webadmin \
     bananas-exports \
     bananas-storage \
     bananas-users \
     bananas-stats \
     bananas-stats-web \
-    bananas-dashboard-web \
-    bananas-config \
     bananas-feed-config \
 "
-# bananas-dashboard (Slint LCD UI) and the Mali GPU userspace stack
-# (mesa lima + libegl + libgles2 + libgbm + libdrm + fontconfig + fonts)
-# are intentionally NOT pulled in yet — the Slint cross-compile needs an
-# armhf fontconfig + pkg-config sysroot we don't have. Add them back once
-# build-stats-arm switches to `cross` (docker w/ multiarch fontconfig-dev)
-# or vendors a sysroot. The CONFIG_DRM_LIMA kernel fragment stays so a
-# userspace lima driver is functional the moment we ship it.
+
+# Banana Pro lacks WiFi firmware on the SDIO module; without this drop-in
+# the kernel spams "brcmfmac: F1 signature read fail" + retries every few
+# seconds at boot. RPi targets ship the firmware via meta-raspberrypi's
+# linux-firmware-rpidistro-bcm43* packages and do NOT want this blacklist.
+IMAGE_INSTALL:append:bananapro = " bananas-modprobe"
 
 # Optional CIFS/Samba (comment in if needed)
 # IMAGE_INSTALL += " samba samba-client cifs-utils"
-
-# Optional storage helpers
-IMAGE_INSTALL += " \
-    mdadm \
-    hdparm \
-    smartmontools \
-"
-
-# Kernel modules often useful for NAS bring-up (board/branch dependent)
-IMAGE_INSTALL += " \
-    kernel-modules \
-"
-
-# /etc/modprobe.d/ drop-ins (currently: blacklist brcmfmac so the missing
-# WiFi firmware doesn't spam the boot log).
-IMAGE_INSTALL += " \
-    bananas-modprobe \
-"
-
-# Cloud sync is OPTIONAL — operators who want it run
-# `opkg install bananas-cloud`, which Depends on bananas-rclone +
-# bananas-webadmin and drops the manifest that lights up the Cloud
-# tab in the SPA. The default image stays lean (~56 MB smaller —
-# rclone alone is a hefty Go binary). Don't pull bananas-rclone or
-# bananas-cloud into IMAGE_INSTALL here.
-
-# LCD dashboard (Slint app on /dev/fb0 via DRM/KMS). Pulls bananas-stats
-# + the runtime libs (fontconfig + udev + xkbcommon + libinput) in as
-# RDEPENDS via the recipe. Software renderer only — no Mali GPU path,
-# no x11/wayland, so no libgbm/libdrm in the runtime graph.
-IMAGE_INSTALL += " \
-    bananas-dashboard \
-"

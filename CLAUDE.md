@@ -130,6 +130,23 @@ Recommended mount options to use when adding entries via the UI: `defaults,noati
 
 `IMAGE_INSTALL` ships `e2fsprogs-resize2fs`, `e2fsprogs-tune2fs`, `e2fsprogs-mke2fs`, `e2fsprogs-e2fsck`, and `gptfdisk` so partition surgery on ≤16 TiB partitions can happen on the BPI itself.
 
+### Plugin install model
+
+The default `bananas-image.bb` ships only the NAS-essential `bananas-*` set: `bananas-engine` (bundled in the same .ipk as `bananas-webadmin`), `bananas-router`, `bananas-webadmin`, `bananas-storage`, `bananas-users`, `bananas-exports`, `bananas-stats` + `bananas-stats-web`, and `bananas-feed-config` (drops `/etc/opkg/customfeeds.conf` so opkg knows about the GitHub-Pages mirror at `https://rubeniskov.github.io/bananas/feed/latest/`).
+
+Optional plugins live in the opkg feed and are installed on demand after first boot:
+
+```
+opkg update
+opkg install bananas-cloud           # rclone-based sync — pulls bananas-rclone (~50 MB)
+opkg install bananas-dashboard       # Slint LCD app + bananas-dashboard-web (web SPA)
+opkg install bananas-config          # operator TUI / CLI
+```
+
+Each plugin's postinst restarts `bananas-router` + `bananas-webadmin` so the new manifest is picked up; the matching tab appears in the SPA without a reboot. The same `customfeeds.conf` ships on every supported board (Banana Pro armv7, RPi-unified aarch64) — opkg silently 404s on the per-arch entries that don't apply to the running system, so the file stays board-agnostic.
+
+`bananas-modprobe` (the brcmfmac blacklist for the missing BPI WiFi firmware) is `IMAGE_INSTALL:append:bananapro` — only the BPI bake pulls it in. RPi targets ship the firmware via meta-raspberrypi's `linux-firmware-rpidistro-bcm43*` packages and do NOT want the blacklist.
+
 ## Conventions
 
 - Yocto release line is `scarthgap`. If you bump it, update every `refspec` in `kas.yml` together and re-test the bbappends — version-pinned appends like `elfutils_0.191.bbappend` and `dtc_1.7.0.bbappend` will silently stop applying when the upstream recipe version changes.
