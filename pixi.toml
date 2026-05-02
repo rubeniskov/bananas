@@ -92,7 +92,9 @@ cmd = "bash -c 'PATH=\"$HOME/.cargo/bin:$PATH\"; command -v prek >/dev/null || c
 # version below forces a re-download.
 #
 # We pin the version to keep the bake reproducible. SHA256 verifies the
-# zip *before* we trust the binary it contains.
+# zip *before* we trust the binary it contains. The recipe's
+# FILESEXTRAPATHS reads from serve/bin/${TUNE_PKGARCH}/, so each variant
+# stages under the matching arch dir.
 [tasks.setup-rclone-arm]
 cmd = """bash -c '
 set -e
@@ -100,7 +102,7 @@ RCLONE_VERSION=v1.68.2
 EXPECTED_SHA=a244cc4d75abf10af576c0a4161fbe454c129658358ba2e6e27c9e97639ff0fb
 ARCHIVE=rclone-${RCLONE_VERSION}-linux-arm.zip
 URL=https://downloads.rclone.org/${RCLONE_VERSION}/${ARCHIVE}
-DEST=serve/bin
+DEST=serve/bin/cortexa7t2hf-neon
 if [ -x "$DEST/rclone" ]; then
   # Marker file pinned by the last successful install. We can not run
   # `rclone version` here because the binary is armv7 and we are an
@@ -121,13 +123,48 @@ if [ "$GOT_SHA" != "$EXPECTED_SHA" ]; then
   echo "  got:      $GOT_SHA" >&2
   exit 1
 fi
-# -o overwrites any pre-existing rclone in serve/bin/ without prompting;
-# the iterate loop runs in non-interactive mode where the unzip prompt
-# just hangs / EOFs and aborts the task.
+# -o overwrites any pre-existing rclone without prompting; the iterate
+# loop runs in non-interactive mode where the unzip prompt just hangs /
+# EOFs and aborts the task.
 unzip -o -j "$TMP/$ARCHIVE" "*/rclone" -d "$DEST"
 chmod +x "$DEST/rclone"
 printf "%s" "$RCLONE_VERSION" > "$DEST/.rclone-version"
 echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm)."
+'"""
+
+# `setup-rclone-arm64`: same shape as setup-rclone-arm, but pulls the
+# linux-arm64 tarball and stages under serve/bin/cortexa53/ for the
+# bananas-rpi MACHINE's TUNE_PKGARCH. Both tasks idempotent — run on
+# every iterate but short-circuit when the version marker matches.
+[tasks.setup-rclone-arm64]
+cmd = """bash -c '
+set -e
+RCLONE_VERSION=v1.68.2
+EXPECTED_SHA=c6e9d4cf9c88b279f6ad80cd5675daebc068e404890fa7e191412c1bc7a4ac5f
+ARCHIVE=rclone-${RCLONE_VERSION}-linux-arm64.zip
+URL=https://downloads.rclone.org/${RCLONE_VERSION}/${ARCHIVE}
+DEST=serve/bin/cortexa53
+if [ -x "$DEST/rclone" ]; then
+  if [ -f "$DEST/.rclone-version" ] && [ "$(cat "$DEST/.rclone-version")" = "$RCLONE_VERSION" ]; then
+    exit 0
+  fi
+fi
+mkdir -p "$DEST"
+TMP=$(mktemp -d)
+trap "rm -rf $TMP" EXIT
+echo "Downloading rclone $RCLONE_VERSION (linux-arm64)..."
+curl -fSL "$URL" -o "$TMP/$ARCHIVE"
+GOT_SHA=$(sha256sum "$TMP/$ARCHIVE" | awk "{print \\$1}")
+if [ "$GOT_SHA" != "$EXPECTED_SHA" ]; then
+  echo "ERROR: rclone archive sha256 mismatch:" >&2
+  echo "  expected: $EXPECTED_SHA" >&2
+  echo "  got:      $GOT_SHA" >&2
+  exit 1
+fi
+unzip -o -j "$TMP/$ARCHIVE" "*/rclone" -d "$DEST"
+chmod +x "$DEST/rclone"
+printf "%s" "$RCLONE_VERSION" > "$DEST/.rclone-version"
+echo "Staged $DEST/rclone (rclone $RCLONE_VERSION linux-arm64)."
 '"""
 
 # `build-webadmin-arm`: cross-compile bananas-webadmin + bananas-engine for the
@@ -156,7 +193,8 @@ ZB -p bananas-webadmin -p bananas-engine -p bananas-router -p bananas-cloud -p b
 # the stats collector from scratch.
 ZB -p bananas-stats --bin bananas-stats-web
 ZB -p bananas-dashboard --bin bananas-dashboard-web --no-default-features
-mkdir -p serve/bin
+DEST=serve/bin/cortexa7t2hf-neon
+mkdir -p "$DEST"
 cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin \\
    target/armv7-unknown-linux-gnueabihf/release/bananas-engine \\
    target/armv7-unknown-linux-gnueabihf/release/bananas-router \\
@@ -166,7 +204,36 @@ cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin \\
    target/armv7-unknown-linux-gnueabihf/release/bananas-users \\
    target/armv7-unknown-linux-gnueabihf/release/bananas-stats-web \\
    target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard-web \\
-   serve/bin/
+   "$DEST/"
+'"""
+
+# `build-webadmin-arm64`: aarch64 sibling of build-webadmin-arm. Same
+# zigbuild flow, target = aarch64-unknown-linux-gnu, output dir
+# serve/bin/cortexa53 (matches the bananas-rpi MACHINE's TUNE_PKGARCH —
+# cortexa53 is the lowest common ARMv8 baseline for RPi 3/4/5).
+# bananas-dashboard (Slint) is intentionally absent: the LCD app is
+# bananapro-only and aarch64 fontconfig sysroot work is a v2.1 follow-up.
+[tasks.build-webadmin-arm64]
+depends-on = ["setup-dx"]
+cmd = """bash -c '
+set -e
+export PATH="$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH"
+ZB() { env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release --target aarch64-unknown-linux-gnu "$@"; }
+ZB -p bananas-webadmin -p bananas-engine -p bananas-router -p bananas-cloud -p bananas-exports -p bananas-storage -p bananas-users
+ZB -p bananas-stats --bin bananas-stats-web
+ZB -p bananas-dashboard --bin bananas-dashboard-web --no-default-features
+DEST=serve/bin/cortexa53
+mkdir -p "$DEST"
+cp target/aarch64-unknown-linux-gnu/release/bananas-webadmin \\
+   target/aarch64-unknown-linux-gnu/release/bananas-engine \\
+   target/aarch64-unknown-linux-gnu/release/bananas-router \\
+   target/aarch64-unknown-linux-gnu/release/bananas-cloud \\
+   target/aarch64-unknown-linux-gnu/release/bananas-exports \\
+   target/aarch64-unknown-linux-gnu/release/bananas-storage \\
+   target/aarch64-unknown-linux-gnu/release/bananas-users \\
+   target/aarch64-unknown-linux-gnu/release/bananas-stats-web \\
+   target/aarch64-unknown-linux-gnu/release/bananas-dashboard-web \\
+   "$DEST/"
 '"""
 
 # `build-stats-arm`: cross-compile bananas-stats (the sampler daemon)
@@ -182,13 +249,21 @@ cp target/armv7-unknown-linux-gnueabihf/release/bananas-webadmin \\
 # cc-rs's invocation when rusqlite-bundled compiles SQLite, breaking the
 # armv7 cross-compile with "unknown CPU: 'haswell'".
 [tasks.build-stats-arm]
-cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-stats --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-stats serve/bin/'"
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-stats --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin/cortexa7t2hf-neon && cp target/armv7-unknown-linux-gnueabihf/release/bananas-stats serve/bin/cortexa7t2hf-neon/'"
+
+# `build-stats-arm64`: aarch64 sibling for the bananas-rpi MACHINE.
+[tasks.build-stats-arm64]
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-stats --target aarch64-unknown-linux-gnu && mkdir -p serve/bin/cortexa53 && cp target/aarch64-unknown-linux-gnu/release/bananas-stats serve/bin/cortexa53/'"
 
 # `build-config-arm`: cross-compile bananas-config (the operator TUI +
 # CLI) via the same cargo-zigbuild path as the server / stats. Pure-
 # Rust deps (ratatui + crossterm + reqwest+rustls), no sysroot needed.
 [tasks.build-config-arm]
-cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-config --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-config serve/bin/'"
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-config --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin/cortexa7t2hf-neon && cp target/armv7-unknown-linux-gnueabihf/release/bananas-config serve/bin/cortexa7t2hf-neon/'"
+
+# `build-config-arm64`: aarch64 sibling for the bananas-rpi MACHINE.
+[tasks.build-config-arm64]
+cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/default/bin:$PATH\"; env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u CC -u CXX -u LDFLAGS_LD cargo zigbuild --release -p bananas-config --target aarch64-unknown-linux-gnu && mkdir -p serve/bin/cortexa53 && cp target/aarch64-unknown-linux-gnu/release/bananas-config serve/bin/cortexa53/'"
 
 # `build-dashboard-arm`: cross-compile bananas-dashboard (the Slint
 # LCD app) for armv7-unknown-linux-gnueabihf via cross-rs. cross
@@ -208,7 +283,7 @@ cmd = "bash -c 'export PATH=\"$HOME/.cargo/bin:$PIXI_PROJECT_ROOT/.pixi/envs/def
 #
 # Cargo's default progress bar is animated and looks ugly in a log file,
 # so we let `--verbose` print the per-crate "Compiling X" lines instead.
-cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --bin bananas-dashboard --features slint-app --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/'"
+cmd = "bash -c 'unset CARGO RUSTC; export RUSTUP_TOOLCHAIN=stable; export PATH=\"$HOME/.cargo/bin:$PATH\"; env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u DEBUG_CFLAGS -u DEBUG_CXXFLAGS -u DEBUG_CPPFLAGS -u LDFLAGS_LD -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER stdbuf -oL -eL cross build --release -p bananas-dashboard --bin bananas-dashboard --features slint-app --target armv7-unknown-linux-gnueabihf && mkdir -p serve/bin/cortexa7t2hf-neon && cp target/armv7-unknown-linux-gnueabihf/release/bananas-dashboard serve/bin/cortexa7t2hf-neon/'"
 depends-on = ["setup-cross"]
 
 # --- network-boot iteration loop (TFTP + NFS, all in Docker via the native daemon) ---
@@ -269,12 +344,66 @@ cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST
 # run, leaving the next iterate to swap libs under the running BPI.
 cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; host=${BPI_HOST:?BPI_HOST is required, set in .env or export it}; echo waiting for $host to power down...; for i in $(seq 1 120); do ping -c 1 -W 1 \"$host\" > /dev/null 2>&1 || { echo $host is down; exit 0; }; sleep 1; done; echo \"ERROR: $host did not go down within 120s — likely the ssh-reboot did not fire (board already wedged). Hard power-cycle the board, then re-run pixi run iterate.\" >&2; exit 1'"
 
-# `iterate`: build → restage TFTP → reboot board → wait for it to drop off the
-# net → extract rootfs (now safe, NFS share is idle) → bring containers up.
-# The board comes back on its own and pulls fresh kernel/dtb/rootfs from the
-# now-correctly-staged servers. No buttons, no SD writes, no wedge.
-[tasks.iterate]
+# `build-rpi`: bake the unified RPi image. Uses kas-rpi.yml as the
+# top-level config so the bananapro shim (kas.yml → kas-bananapro.yml)
+# stays untouched. The wic lands at
+# build/tmp/deploy/images/bananas-rpi/bananas-image-bananas-rpi.rootfs.wic
+[tasks.build-rpi]
+cmd = "kas build kas-rpi.yml"
+
+# `iterate-bananapro`: original iterate flow, now explicitly named.
+# Cross-builds armv7 binaries, runs the bananapro Yocto bake (kas.yml
+# → kas-bananapro.yml), then the TFTP/NFS netboot dance.
+[tasks.iterate-bananapro]
 cmd = "bash -c 'set -a; [ -f .env ] && . .env; set +a; set -e; pixi run build-webadmin-arm && pixi run build-stats-arm && pixi run build-dashboard-arm && pixi run build-config-arm && pixi run setup-rclone-arm && pixi run build && pixi run serve-tftp && pixi run reboot && pixi run wait-board-down && pixi run extract-rootfs && pixi run serve'"
+
+# `iterate-rpi`: cross-build aarch64 binaries → build the unified RPi
+# image → print SD-flash instructions. Unlike iterate-bananapro, the
+# RPi flow does NOT use TFTP/NFS netboot in v1 — RPi's firmware boot
+# path differs from sun7i U-Boot enough that wiring it up is its own
+# v2.1 follow-up. Operators flash the wic onto an SD card with the
+# host's preferred tool (rpi-imager, dd, etcher, etc.).
+[tasks.iterate-rpi]
+cmd = """bash -c '
+set -e
+pixi run build-webadmin-arm64
+pixi run build-stats-arm64
+pixi run build-config-arm64
+pixi run setup-rclone-arm64
+pixi run build-rpi
+WIC=$(ls build/tmp/deploy/images/bananas-rpi/bananas-image-bananas-rpi.rootfs.wic 2>/dev/null | head -1)
+if [ -z "$WIC" ]; then
+    echo "ERROR: rpi wic missing — build-rpi did not produce it." >&2
+    exit 1
+fi
+echo
+echo "=== bananas-rpi image ready ==="
+echo "  wic: $WIC"
+echo
+echo "Flash to an SD card with the tool of your choice, e.g.:"
+echo "  sudo dd if=$WIC of=/dev/sdX bs=4M conv=fsync status=progress"
+echo "  rpi-imager (point at $WIC)"
+echo
+echo "Boots on Raspberry Pi 3, 4, and 5 — the on-board boot.scr picks the right DTB at runtime."
+'"""
+
+# `iterate`: top-level dispatcher. Routes to iterate-bananapro or
+# iterate-rpi based on $BANANAS_MACHINE (default: bananapro). Existing
+# operators who run `pixi run iterate` keep the original BPI flow
+# unchanged.
+[tasks.iterate]
+cmd = """bash -c '
+set -e
+machine=${BANANAS_MACHINE:-bananapro}
+case "$machine" in
+    bananapro)    pixi run iterate-bananapro ;;
+    bananas-rpi)  pixi run iterate-rpi ;;
+    *)
+        echo "ERROR: unknown BANANAS_MACHINE=$machine — supported: bananapro, bananas-rpi" >&2
+        exit 1
+        ;;
+esac
+'"""
 
 # `e2e`: bring up engine + router + webadmin + every plugin daemon
 # as native (host-target) processes against an isolated tmpdir +
