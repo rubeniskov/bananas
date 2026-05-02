@@ -49,18 +49,6 @@ repos:
       meta-arm:
       meta-arm-toolchain:
 
-  # Yocto-Project-blessed mixin layer that forward-ports Rust
-  # onto scarthgap's poky. We need rust >= 1.85 (workspace
-  # `edition = "2024"`); scarthgap's bundled rust is 1.75.
-  # Track wrynose 6.0 — once its branches ship on every layer
-  # we use, this mixin entry retires. See CLAUDE.md "Watch
-  # for wrynose" note.
-  meta-lts-mixins:
-    url: "https://git.yoctoproject.org/meta-lts-mixins"
-    branch: "scarthgap/rust"
-    layers:
-      .:
-
   meta-bananas:
     path: "./layers/meta-bananas"
 
@@ -119,17 +107,6 @@ local_conf_header:
     VIRTUAL-RUNTIME_init_manager = "systemd"
 
     BB_ENV_PASSTHROUGH_ADDITIONS += "PATH"
-
-    # Pin rust to the version meta-lts-mixins/scarthgap/rust
-    # currently ships. Workspace `edition = "2024"` requires
-    # rust >= 1.85; the mixin layer's "%" wildcard (1.92.0%) is
-    # also accepted, but we pin the exact version for
-    # reproducibility.
-    PREFERRED_VERSION_rust = "1.92.0"
-    PREFERRED_VERSION_rust-llvm = "1.92.0"
-    PREFERRED_VERSION_cargo = "1.92.0"
-    PREFERRED_VERSION_libstd-rs = "1.92.0"
-    PREFERRED_VERSION_rust-cross-canadian-${TRANSLATED_TARGET_ARCH} = "1.92.0"
 
   bananas-debug: |
     # Uncomment while bring-up/debugging
