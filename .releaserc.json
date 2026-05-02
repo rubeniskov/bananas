@@ -49,7 +49,8 @@
       "@semantic-release/github",
       {
         "assets": [
-          { "path": "dist/bananas-image-armv7.tar.gz", "label": "SD-card image (bananapro, dd-able after extract)" }
+          { "path": "dist/bananas-image-bananapro.tar.gz", "label": "SD-card image (Banana Pro / sun7i-a20, dd-able after extract)" },
+          { "path": "dist/bananas-image-rpi.tar.gz", "label": "SD-card image (Raspberry Pi 3/4/5 unified, dd-able after extract)" }
         ]
       }
     ],
