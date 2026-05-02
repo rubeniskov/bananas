@@ -86,7 +86,13 @@ jobs:
       # doesn't have a "changed since last commit" signal that maps to
       # prek's git-aware default). The `pre-push` stage adds clippy +
       # tests + wasm check on top of the always-on pre-commit gates.
+      #
+      # BANANAS_E2E_TIMEOUT_MS bumps the e2e harness's wait_for_function
+      # deadline (default 10s) — GitHub Actions runners paint Dioxus
+      # SPAs noticeably slower than a dev laptop, so 30s prevents flake.
       - name: prek run --all-files --hook-stage pre-push
+        env:
+          BANANAS_E2E_TIMEOUT_MS: "30000"
         run: prek run --all-files --hook-stage pre-push --show-diff-on-failure
 
   cross-armv7:
