@@ -41,7 +41,8 @@ CI re-runs the same hooks via `prek run --all-files --hook-stage pre-push`, so a
 |------|------|
 | `crates/` | Rust workspace — server, helper, web admin (wasm), stats sampler, dashboard. |
 | `layers/meta-bananas/` | Yocto layer with all BanaNAS-specific recipes (`recipes-bsp/`, `recipes-core/`, `recipes-kernel/`, `recipes-graphics/`). |
-| `kas.yml` | Layer composition (poky, meta-openembedded, meta-sunxi, meta-arm pinned to `scarthgap`) + `local_conf_header` overrides. |
+| `kas-base.yml` | Board-agnostic layer composition (poky, meta-openembedded, meta-arm, meta-bananas pinned to `scarthgap`) + shared `local_conf_header` overrides. |
+| `kas-bpi.yml` / `kas-rpi.yml` | Per-machine overlays — pick one as the kas top-level (`kas build kas-bpi.yml` or `kas build kas-rpi.yml`). Each adds its board-specific layer (meta-sunxi / meta-raspberrypi) and per-machine `local_conf_header` knobs. |
 | `pixi.toml` | All build/run tasks (`build-webadmin`, `build-server-arm`, `build-stats-arm`, `build-dashboard-arm`, `setup-rclone-arm`, `iterate`, …). |
 | `compose.yml` | TFTP + NFS containers for the netboot iterate loop. |
 | `serve/` | Build artifacts staged for Yocto recipes (`serve/bin/` = prebuilt arm binaries; `serve/webadmin/` = wasm SPA bundle). Gitignored. |
@@ -75,7 +76,9 @@ pixi run iterate
 
 ```bash
 pixi shell
-kas shell kas.yml -c 'bitbake -c <task> <recipe>'   # e.g. -c devshell linux-mainline
+# Pick the overlay matching the MACHINE you're targeting.
+kas shell kas-bpi.yml -c 'bitbake -c <task> <recipe>'   # e.g. -c devshell linux-mainline
+kas shell kas-rpi.yml -c 'bitbake -c <task> <recipe>'   # for the bananas-rpi flow
 ```
 
 The two-pass `pixi run build` (`bitbake -c rootfs -f bananas-image && bitbake bananas-image`) is what you want for normal "rebake" iteration.
