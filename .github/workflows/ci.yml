@@ -107,9 +107,25 @@ jobs:
           BANANAS_E2E_TIMEOUT_MS: "30000"
         run: prek run --all-files --hook-stage pre-push --show-diff-on-failure
 
-  cross-armv7:
-    name: Cross-compile armv7 (server + helper + stats)
+  cross:
+    name: Cross-compile (${{ matrix.machine }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - machine: bananapro
+            tune: cortexa7t2hf-neon
+            rust_target: armv7-unknown-linux-gnueabihf
+            elf_grep: "ARM"           # `file` prints "ARM, EABI5..." for armv7
+            build_webadmin: build-webadmin-arm
+            build_stats: build-stats-arm
+          - machine: bananas-rpi
+            tune: cortexa53
+            rust_target: aarch64-unknown-linux-gnu
+            elf_grep: "aarch64"
+            build_webadmin: build-webadmin-arm64
+            build_stats: build-stats-arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -120,13 +136,13 @@ jobs:
           cache: true
 
       # pixi ships rust via conda but not the per-target std; cargo-zigbuild
-      # still needs the armv7 sysroot. Pull it in via rustup so cargo can
-      # find `core` for the cross-target. Local dev hosts already have it
-      # via `rustup target add` — CI was the missing case.
-      - name: Install rust toolchain (armv7 target)
+      # still needs the matching sysroot. rust-toolchain installs the host
+      # toolchain + the per-machine cross target; rustup target add below
+      # adds wasm32 for the SPA build invoked by each daemon's build.rs.
+      - name: Install rust toolchain (${{ matrix.rust_target }})
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: armv7-unknown-linux-gnueabihf
+          targets: ${{ matrix.rust_target }}
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -138,13 +154,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
-      - name: Cache cargo target (cross armv7)
+      - name: Cache cargo target (cross ${{ matrix.tune }})
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-cargo-target-cross-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-target-cross-${{ matrix.tune }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-target-cross-
+            ${{ runner.os }}-cargo-target-cross-${{ matrix.tune }}-
 
       # Add wasm32 target so the SPA build inside each daemon's build.rs
       # (invoked by dx) can compile.
@@ -153,21 +169,27 @@ jobs:
 
       # pixi tasks already strip the conda-injected CFLAGS that would
       # leak `-march=haswell` into the rusqlite-bundled cross-compile.
-      # We run them through pixi so CI matches local iterate exactly.
-      # build-webadmin-arm cross-compiles all daemons (webadmin, engine,
-      # router, cloud, exports, storage, users, stats-web, dashboard-web)
-      # in one zigbuild invocation; build.rs of each invokes dx for the
-      # embedded SPA, hence the wasm32 target above + setup-dx via depends-on.
-      - name: build-webadmin-arm
-        run: pixi run build-webadmin-arm
+      # build-webadmin-arm{,64} cross-compiles all daemons (webadmin,
+      # engine, router, cloud, exports, storage, users, stats-web,
+      # dashboard-web) in one zigbuild invocation; build.rs of each
+      # invokes dx for the embedded SPA, hence the wasm32 target above
+      # + setup-dx via the task's depends-on.
+      - name: ${{ matrix.build_webadmin }}
+        run: pixi run ${{ matrix.build_webadmin }}
 
-      - name: build-stats-arm
-        run: pixi run build-stats-arm
+      - name: ${{ matrix.build_stats }}
+        run: pixi run ${{ matrix.build_stats }}
 
-      # Smoke-confirm the binaries are armv7 ELF — protects against
-      # the pixi env accidentally picking up the host toolchain.
-      - name: Verify ARM ELFs
+      # Smoke-confirm the binaries match the target arch — protects
+      # against the pixi env accidentally picking up the host toolchain
+      # or the wrong --target leaking through. Per-arch dir matches the
+      # FILESEXTRAPATHS:prepend in every plugin recipe.
+      - name: Verify cross ELFs
         run: |
-          file serve/bin/bananas-webadmin | grep -q "ARM" || (echo "bananas-webadmin is not ARM!" && exit 1)
-          file serve/bin/bananas-engine | grep -q "ARM" || (echo "bananas-engine is not ARM!" && exit 1)
-          file serve/bin/bananas-stats  | grep -q "ARM" || (echo "bananas-stats is not ARM!"  && exit 1)
+          DEST=serve/bin/${{ matrix.tune }}
+          for bin in bananas-webadmin bananas-engine bananas-stats; do
+            file "$DEST/$bin" | grep -q "${{ matrix.elf_grep }}" || {
+              echo "::error::$bin is not ${{ matrix.elf_grep }} ($(file $DEST/$bin))"
+              exit 1
+            }
+          done
