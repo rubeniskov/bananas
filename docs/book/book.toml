@@ -1,0 +1,33 @@
+[book]
+title = "BanaNAS"
+description = "Yocto-based NAS distribution for the Banana Pro (BPI-M1+)."
+authors = ["Rubén López Gómez"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/rubeniskov/bananas"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/rubeniskov/bananas/edit/main/docs/book/{path}"
+site-url = "/bananas/docs/"
+no-section-label = true
+mathjax-support = false
+additional-css = [
+  "theme/css/bn-variables.css",
+  "theme/css/bn-general.css",
+  "theme/css/bn-chrome.css",
+]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+
+[output.html.playground]
+runnable = false

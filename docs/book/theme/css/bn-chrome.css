@@ -1,0 +1,87 @@
+/* Sidebar nav, top header, and search box for the BanaNAS docs theme.
+   Builds on variables.css. */
+
+#sidebar {
+  background: var(--sidebar-bg);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  font-family: var(--bn-font-sans);
+}
+.navy #sidebar, .coal #sidebar {
+  border-right-color: rgba(255, 255, 255, 0.06);
+}
+
+#sidebar .sidebar-scrollbox {
+  padding: 16px 12px;
+}
+#sidebar .chapter li {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--sidebar-fg);
+}
+#sidebar .chapter li > a {
+  color: var(--sidebar-fg);
+  padding: 4px 10px;
+  border-radius: 4px;
+  display: block;
+  transition: background 0.1s ease;
+}
+#sidebar .chapter li > a:hover {
+  background: rgba(99, 102, 241, 0.06);
+  color: var(--fg);
+}
+#sidebar .chapter li.chapter-item > a.active,
+#sidebar .chapter li > a.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active);
+  font-weight: 600;
+}
+#sidebar .part-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sidebar-fg);
+  opacity: 0.6;
+  margin: 18px 12px 6px;
+  font-weight: 600;
+}
+
+#menu-bar {
+  background: var(--bg);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+.navy #menu-bar, .coal #menu-bar {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+#menu-bar .menu-title {
+  font-family: var(--bn-font-sans);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+#searchbar {
+  font-family: var(--bn-font-sans);
+  background: var(--sidebar-bg);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--bn-radius);
+  padding: 8px 12px;
+}
+#searchbar:focus {
+  border-color: var(--bn-accent-from);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.searchresults-outer {
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: var(--bn-radius);
+}
+.searchresults-header {
+  font-family: var(--bn-font-sans);
+  font-weight: 600;
+}
+mark {
+  background: rgba(254, 230, 44, 0.4);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}

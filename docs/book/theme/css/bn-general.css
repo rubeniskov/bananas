@@ -1,0 +1,80 @@
+/* Typography + body styling for the BanaNAS docs theme.
+   Builds on variables.css (must be loaded first by mdbook). */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+html {
+  font-family: var(--bn-font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.content h1, .content h2, .content h3, .content h4 {
+  font-family: var(--bn-font-sans);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.content h1 {
+  font-size: 2.4rem;
+  margin-top: 0.4em;
+  background: linear-gradient(90deg, var(--bn-accent-from), var(--bn-accent-to));
+  -webkit-background-clip: text;
+          background-clip: text;
+  color: transparent;
+}
+.navy .content h1, .coal .content h1 {
+  background: none; color: var(--fg);  /* gradient reads poorly on dark */
+}
+.content h2 { font-size: 1.6rem; margin-top: 1.8em; }
+.content h3 { font-size: 1.2rem; margin-top: 1.6em; color: var(--fg); }
+.content p { margin: 0 0 1em; }
+
+.content code:not(pre code) {
+  font-family: var(--bn-font-mono);
+  font-size: 0.88em;
+  color: var(--inline-code-color);
+  background: var(--inline-code-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.content pre {
+  border-radius: var(--bn-radius);
+  padding: 14px 18px;
+  font-family: var(--bn-font-mono);
+  font-size: 0.85em;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+/* Force dark code blocks regardless of palette so they read like the landing page */
+.content pre, .content pre code {
+  background: #0f172a !important;
+  color: #e2e8f0 !important;
+}
+
+.content blockquote {
+  border-left: 3px solid var(--bn-accent-from);
+  padding: 8px 16px;
+  margin: 1.4em 0;
+  background: var(--quote-bg);
+  border-radius: 0 var(--bn-radius) var(--bn-radius) 0;
+  color: var(--fg);
+}
+
+.content table {
+  border-collapse: collapse;
+  margin: 1.4em 0;
+}
+.content th, .content td {
+  padding: 8px 14px;
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+.content th {
+  background: var(--sidebar-active-bg);
+  font-weight: 600;
+}
