@@ -215,7 +215,16 @@ impl Page {
     /// the playwright suite — the underlying signals fire in
     /// ~hundreds of ms, so this typically returns much faster.
     pub async fn wait_for_function(&self, predicate_js: &str) -> Result<()> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        // BANANAS_E2E_TIMEOUT_MS lets CI bump the deadline without
+        // recompiling — GitHub Actions runners are noticeably slower
+        // than dev laptops at SPA paint, so the 10 s default tends
+        // to flake on the first navigation. Locally the variable is
+        // unset and the fast default applies.
+        let timeout_ms: u64 = std::env::var("BANANAS_E2E_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10_000);
+        let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
         loop {
             let ok = self
                 .inner

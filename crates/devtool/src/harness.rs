@@ -223,18 +223,43 @@ impl Harness {
     }
 
     async fn wait_for_ready(&self) -> Result<()> {
+        // Step 1: webadmin/router public TCP face answers.
         let url = format!("{}/api/healthz", self.origin());
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
         let mut last_err: Option<anyhow::Error> = None;
-        while std::time::Instant::now() < deadline {
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return Err(last_err.unwrap_or_else(|| anyhow!("/api/healthz never answered")))
+                    .with_context(|| format!("waiting on {url}"));
+            }
             match self.http.get(&url).send().await {
-                Ok(_) => return Ok(()),
+                Ok(_) => break,
                 Err(e) => last_err = Some(e.into()),
             }
             sleep(Duration::from_millis(80)).await;
         }
-        Err(last_err.unwrap_or_else(|| anyhow!("/api/healthz never answered")))
-            .with_context(|| format!("waiting on {url}"))
+        // Step 2: every plugin socket exists. The router reads
+        // manifests at startup but lazily dials the plugin sockets,
+        // so the SPA's first nav fetch can land *before* a plugin
+        // has bound its socket — which presents as a missing tab in
+        // CI. Block until they're all present (or 15 s, same budget
+        // as healthz) so tests see a fully populated nav.
+        let plugin_deadline = std::time::Instant::now() + Duration::from_secs(15);
+        for (_, id, _, _, _, _) in PLUGINS {
+            let sock = self
+                .tmp_path
+                .join(format!("{}.sock", manifest_socket_name(id)));
+            while !sock.exists() {
+                if std::time::Instant::now() >= plugin_deadline {
+                    return Err(anyhow!(
+                        "plugin socket {} did not appear within 15s",
+                        sock.display()
+                    ));
+                }
+                sleep(Duration::from_millis(80)).await;
+            }
+        }
+        Ok(())
     }
 }
 
