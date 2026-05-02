@@ -155,13 +155,13 @@ Insert the card, plug in Ethernet, power on. The first boot:
 - U-Boot shows the BanaNAS splash on the LCD if one is attached.
 - A psplash progress bar covers the kernel → userspace handoff.
 - The rootfs auto-grows to fill the rest of the SD card (one-time, NFS netboots are skipped automatically).
-- mDNS publishes the box as `bananas-bpi.local` via avahi.
+- mDNS publishes the box as `bananas.local` via avahi.
 
-Find the LAN IP via `ping bananas-bpi.local` or your router's DHCP table.
+Find the LAN IP via `ping bananas.local` or your router's DHCP table.
 
 ### 4. Sign in to the web admin
 
-Browse to **`http://bananas-bpi.local:8080/`** (or the IP). First sign-in is **`root` / `bananas`**, the placeholder credential the image ships with. The login form immediately bounces you into a "Set a new password to continue" screen — the placeholder stops working the moment you rotate it. After rotation:
+Browse to **`http://bananas.local:8080/`** (or the IP). First sign-in is **`root` / `bananas`**, the placeholder credential the image ships with. The login form immediately bounces you into a "Set a new password to continue" screen — the placeholder stops working the moment you rotate it. After rotation:
 
 1. **Mount points** tab → add fstab entries for any SATA / USB disk you have plugged in. The image ships with no defaults; the UI handles `mkdir`, fstab edit, and `systemctl daemon-reload`.
 2. **Exports** tab → declare which paths to share over NFS and to what client / CIDR. Same deal — the image ships an empty `/etc/exports`, the UI rewrites it via the privileged helper.
@@ -174,7 +174,7 @@ Browse to **`http://bananas-bpi.local:8080/`** (or the IP). First sign-in is **`
 The default image stays lean and ships only the NAS-essentials. The rest of the `bananas-*` plugin set is in the public opkg feed and installs in seconds:
 
 ```bash
-ssh root@bananas-bpi.local
+ssh root@bananas.local
 opkg update
 opkg install bananas-cloud           # Google Drive / Dropbox / S3 sync (pulls bananas-rclone)
 opkg install bananas-dashboard       # Slint LCD app + per-tab web SPA
