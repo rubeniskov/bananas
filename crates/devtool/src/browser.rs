@@ -46,10 +46,19 @@ impl Browser {
     pub async fn launch() -> Result<Self> {
         let chrome = locate_chrome().context("locate chrome binary")?;
         let user_data_dir = tempfile::tempdir().context("tempdir for chrome user-data-dir")?;
+        // `--no-sandbox` lets chrome start as a non-privileged user
+        // inside CI runners (ubuntu-latest's `runner` user lacks the
+        // CAP_SYS_ADMIN that chrome's setuid sandbox needs); locally
+        // it's a no-op since chromium falls back to a user-namespace
+        // sandbox in either case. `--disable-dev-shm-usage` swaps
+        // /dev/shm (often 64 MiB on CI containers) for /tmp so chrome
+        // doesn't OOM under the smaller default.
         let config = BrowserConfig::builder()
             .chrome_executable(chrome)
             .user_data_dir(user_data_dir.path())
             .request_timeout(Duration::from_secs(15))
+            .arg("--no-sandbox")
+            .arg("--disable-dev-shm-usage")
             .build()
             .map_err(|e| anyhow!("BrowserConfig: {e}"))?;
         let (browser, mut handler) = ChromiumBrowser::launch(config)
