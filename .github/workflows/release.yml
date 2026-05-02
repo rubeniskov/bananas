@@ -307,13 +307,14 @@ jobs:
               -C build/tmp/deploy/images/bananapro \
               bananas-image-bananapro.rootfs.wic
 
-          # bananas-rpi (rpi-sdimg variant) lands as *.rootfs.wic too —
-          # same Yocto wic class, just with the FAT firmware partition
-          # laid out for the RPi VideoCore loader. Boots on RPi 3/4/5.
+          # bananas-rpi uses the rpi-sdimg image type (separate FAT
+          # firmware partition + ext4 rootfs, laid out the way RPi's
+          # VideoCore loader expects). The asset extracts to a clean
+          # bananas-image-rpi.img that operators dd onto an SD card.
           tar -czhf dist/bananas-image-rpi.tar.gz \
-              --transform 's,^bananas-image-bananas-rpi.rootfs.wic$,bananas-image-bananas-rpi.wic,' \
+              --transform 's,^bananas-image-bananas-rpi.rootfs.rpi-sdimg$,bananas-image-rpi.img,' \
               -C build/tmp/deploy/images/bananas-rpi \
-              bananas-image-bananas-rpi.rootfs.wic
+              bananas-image-bananas-rpi.rootfs.rpi-sdimg
 
           ls -la dist/
 
