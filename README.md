@@ -178,8 +178,9 @@ ssh root@bananapro.local
 opkg update
 opkg install bananas-cloud           # Google Drive / Dropbox / S3 sync (pulls bananas-rclone)
 opkg install bananas-dashboard       # Slint LCD app + per-tab web SPA
-opkg install bananas-config          # operator TUI / CLI
 ```
+
+(`bananas-config`, the operator TUI / CLI, ships pre-installed so first-boot recovery from the serial console works without opkg.)
 
 The Cloud / Dashboard / etc. tabs appear in the SPA the moment the install finishes — `bananas-router` and `bananas-webadmin` reload the manifest list via the postinst.
 
