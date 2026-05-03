@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-cloud"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-config"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bananas-proto",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-config-form"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bananas-config-form-derive",
  "dioxus",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-config-form-derive"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-dashboard"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-devtool"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chromiumoxide",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bananas-proto",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-exports"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-mfe-runtime"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-proto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "hyper-util",
  "prost",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-router"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-server-common"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-stats"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-storage"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-users"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "bananas-webadmin"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
