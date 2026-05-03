@@ -1,11 +1,11 @@
 Package: bananas-feed-config
-Version: 1.5.0-r0
+Version: 1.0.0-r0
 Section: base
 Architecture: all
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 6c167ea290b1076fcccde390a7272b65
-Size: 1384
-Filename: bananas-feed-config_1.5.0-r0_all.ipk
+MD5Sum: aa348c0c27f9f927338244c72faf54a1
+Size: 1542
+Filename: bananas-feed-config_1.0.0-r0_all.ipk
 Source: bananas-feed-config.bb
 Description: BanaNAS opkg feed configuration
 OE: bananas-feed-config

@@ -2,11 +2,11 @@ Package: bananas-config
 Version: 1.0.0-r0
 Depends: libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: cb899941daa5bfdcef17d448dba376bf
-Size: 1035110
-Filename: bananas-config_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: c11c643109990e12db97972f9693ef2d
+Size: 1040574
+Filename: bananas-config_1.0.0-r0_cortexa53.ipk
 Source: bananas-config.bb
 Description: BanaNAS operator console (TUI + CLI)
 OE: bananas-config
@@ -18,29 +18,14 @@ Package: bananas-exports
 Version: 1.0.0-r0
 Depends: bananas-router, bananas-webadmin, libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 64d4f3ec794be77d656b9aac3e582688
-Size: 1984986
-Filename: bananas-exports_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: a5ab27d8a2106a7d098767e547f78dd5
+Size: 1983510
+Filename: bananas-exports_1.0.0-r0_cortexa53.ipk
 Source: bananas-exports.bb
 Description: BanaNAS NFS exports plugin daemon + SPA
 OE: bananas-exports
-License: MIT
-Priority: optional
-
-
-Package: bananas-modprobe
-Version: 1.0.0-r0
-Section: base
-Architecture: cortexa7t2hf-neon
-Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: d42499c08f71e00dbf1a99aeaa7582ec
-Size: 1114
-Filename: bananas-modprobe_1.0.0-r0_cortexa7t2hf-neon.ipk
-Source: bananas-modprobe.bb
-Description: BanaNAS modprobe blacklist drop-ins
-OE: bananas-modprobe
 License: MIT
 Priority: optional
 
@@ -49,11 +34,11 @@ Package: bananas-router
 Version: 1.0.0-r0
 Depends: bananas-webadmin, libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: c4ff2554a83a6faab8a6381601cfdaf0
-Size: 993190
-Filename: bananas-router_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: 3e1a4134fc8cd7edfed8d8778af9a20b
+Size: 977868
+Filename: bananas-router_1.0.0-r0_cortexa53.ipk
 Source: bananas-router.bb
 Description: BanaNAS reverse-proxy gateway (path-based to per-package daemons)
 OE: bananas-router
@@ -65,11 +50,11 @@ Package: bananas-stats-web
 Version: 1.0.0-r0
 Depends: bananas-router, bananas-stats, bananas-webadmin, libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: 49e094bb3bdd9e0378ec3b0765970c53
-Size: 3236144
-Filename: bananas-stats-web_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: 84ff72dc2db66bcaf83ac892f4aa6004
+Size: 3211926
+Filename: bananas-stats-web_1.0.0-r0_cortexa53.ipk
 Source: bananas-stats-web.bb
 Description: BanaNAS stats web plugin daemon + SPA
 OE: bananas-stats-web
@@ -81,11 +66,11 @@ Package: bananas-stats
 Version: 1.0.0-r0
 Depends: bananas-webadmin, libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: d342157ff5ad6b63b172c0bc7d9f258a
-Size: 1590324
-Filename: bananas-stats_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: 124b16472d08da063add2af85b86b3e8
+Size: 1565082
+Filename: bananas-stats_1.0.0-r0_cortexa53.ipk
 Source: bananas-stats.bb
 Description: BanaNAS stats sampler daemon
 OE: bananas-stats
@@ -97,11 +82,11 @@ Package: bananas-storage
 Version: 1.0.0-r0
 Depends: bananas-router, bananas-webadmin, libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: f174187b39ea9faae021387ed6f90ff7
-Size: 2075462
-Filename: bananas-storage_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: 7f3037e06d0485de46a4914da8e6d900
+Size: 2073408
+Filename: bananas-storage_1.0.0-r0_cortexa53.ipk
 Source: bananas-storage.bb
 Description: BanaNAS storage plugin daemon + SPA
 OE: bananas-storage
@@ -113,11 +98,11 @@ Package: bananas-users
 Version: 1.0.0-r0
 Depends: bananas-router, bananas-webadmin, libc6 (>= 2.39+git0+ce65d944e3)
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: c5a66b83df4ed39b5f828096089e3ff5
-Size: 1857506
-Filename: bananas-users_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: fe3d494489dc4ac665153bd88d8153c7
+Size: 1850346
+Filename: bananas-users_1.0.0-r0_cortexa53.ipk
 Source: bananas-users.bb
 Description: BanaNAS users plugin daemon + SPA
 OE: bananas-users
@@ -129,11 +114,11 @@ Package: bananas-webadmin
 Version: 1.0.0-r0
 Depends: bananas-router, base-files, base-passwd, libc6 (>= 2.39+git0+ce65d944e3), shadow
 Section: base
-Architecture: cortexa7t2hf-neon
+Architecture: cortexa53
 Maintainer: Poky Maintainers <poky@lists.yoctoproject.org>
-MD5Sum: b293fbec11f72e2342c3a62e85075b04
-Size: 3463732
-Filename: bananas-webadmin_1.0.0-r0_cortexa7t2hf-neon.ipk
+MD5Sum: d64caaaf12c7aec16a7a6a0403714a35
+Size: 3371558
+Filename: bananas-webadmin_1.0.0-r0_cortexa53.ipk
 Source: bananas-webadmin.bb
 Description: BanaNAS web admin: bananas-webadmin (HTTP UI + embedded SPA) + bananas-engine (root)
 OE: bananas-webadmin
