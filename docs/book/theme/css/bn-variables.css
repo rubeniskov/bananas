@@ -1,0 +1,39 @@
+/* BanaNAS docs theme — palette + typography variables.
+   Loaded by mdbook in addition to its default CSS; keep this file small
+   and let general.css / chrome.css consume the variables. */
+
+:root {
+  --bn-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --bn-font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --bn-accent-from: #6366f1;
+  --bn-accent-to:   #ec4899;
+  --bn-radius:      6px;
+}
+
+/* Light theme overrides */
+.light, .ayu, html:not([dir]) .light {
+  --bg:        #ffffff;
+  --fg:        #1a1f2e;
+  --sidebar-bg: #fafbfc;
+  --sidebar-fg: #475569;
+  --sidebar-active: var(--bn-accent-from);
+  --sidebar-active-bg: rgba(99, 102, 241, 0.08);
+  --quote-bg: #f7f8fa;
+  --inline-code-color: var(--bn-accent-from);
+  --inline-code-bg: rgba(99, 102, 241, 0.08);
+  --links: var(--bn-accent-from);
+}
+
+/* Dark theme overrides (mdbook's "navy" palette is the preferred-dark) */
+.navy, .coal {
+  --bg: #0f172a;
+  --fg: #e2e8f0;
+  --sidebar-bg: #0b1322;
+  --sidebar-fg: #94a3b8;
+  --sidebar-active: #fee62c;             /* banana yellow accent in dark */
+  --sidebar-active-bg: rgba(254, 230, 44, 0.08);
+  --quote-bg: #1e293b;
+  --inline-code-color: #fee62c;
+  --inline-code-bg: rgba(254, 230, 44, 0.08);
+  --links: #fee62c;
+}

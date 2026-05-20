@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BanaNAS — A NAS for your Banana Pro</title>
+  <meta name="description" content="Yocto-based NAS distribution for the Banana Pro (BPI-M1+). Web admin, NFS, live LCD dashboard, cloud sync — one SD card, no vendor lock-in.">
+  <link rel="icon" href="assets/splashscreen.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fafbfc;
+      --card-bg: #ffffff;
+      --text: #1a1f2e;
+      --muted: #475569;
+      --border: #ebedf0;
+      --accent-from: #6366f1;
+      --accent-to: #ec4899;
+      --code-bg: #0f172a;
+      --code-fg: #e2e8f0;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+      --radius: 8px;
+      --max-width: 1100px;
+      --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--text); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { font-family: var(--font-mono); font-size: 0.9em; }
+
+    .site-header {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 24px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 18px;
+    }
+    .brand-logo { display: block; border-radius: 6px; }
+    .brand:hover { text-decoration: none; }
+    .nav-links { display: flex; gap: 24px; font-size: 14px; }
+    .nav-links a { color: var(--muted); }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+
+    .hero {
+      max-width: var(--max-width);
+      margin: 32px auto 48px;
+      padding: 0 32px;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 56px;
+      align-items: center;
+    }
+    .hero-tag {
+      display: inline-block;
+      font-size: 12px; font-weight: 600;
+      color: var(--accent-from);
+      background: rgba(99, 102, 241, 0.08);
+      padding: 4px 12px;
+      border-radius: 99px;
+      margin-bottom: 16px;
+    }
+    .hero-title {
+      font-size: 56px;
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: -0.025em;
+      margin: 0 0 16px;
+    }
+    .hero-gradient {
+      background: linear-gradient(90deg, var(--accent-from), var(--accent-to));
+      -webkit-background-clip: text;
+              background-clip: text;
+      color: transparent;
+    }
+    .hero-sub {
+      font-size: 18px;
+      color: var(--muted);
+      margin: 0 0 28px;
+      max-width: 520px;
+    }
+    .cta-row {
+      display: flex; flex-wrap: wrap; gap: 10px;
+      margin-bottom: 20px;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: inherit; font-size: 14px; font-weight: 600;
+      padding: 10px 18px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: transform 0.05s ease, box-shadow 0.15s ease, background 0.15s ease;
+      text-decoration: none;
+    }
+    .btn:hover { text-decoration: none; }
+    .btn-primary {
+      background: var(--text); color: #fff;
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+    .btn-secondary {
+      background: var(--card-bg); color: var(--text);
+      border-color: #d1d5db;
+    }
+    .btn-secondary:hover { background: #f7f8fa; }
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+    .badges img { display: block; height: 20px; }
+
+    .hero-screenshot {
+      background: linear-gradient(135deg, #1e293b, #0f172a);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: var(--shadow-md);
+    }
+    .hero-screenshot img {
+      display: block; width: 100%; height: auto;
+      border-radius: 6px;
+    }
+
+    .features {
+      max-width: var(--max-width);
+      margin: 0 auto 48px;
+      padding: 0 32px;
+    }
+    .feat-list {
+      list-style: none; padding: 0; margin: 0;
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
+    }
+    .feat-list li {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      font-size: 14px;
+      color: var(--muted);
+      box-shadow: var(--shadow-sm);
+    }
+    .feat-list li strong { color: var(--text); }
+    .feat-list code {
+      background: rgba(99, 102, 241, 0.08);
+      color: var(--accent-from);
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+
+    .site-footer {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 24px 32px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .site-footer a { color: var(--muted); }
+
+    /* Sponsor popover (hidden by default; JS removes [hidden]) */
+    .popover {
+      position: absolute;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-md);
+      padding: 16px;
+      width: 320px;
+      z-index: 100;
+    }
+    .popover[hidden] { display: none; }
+    .popover-paypal {
+      display: flex; gap: 12px; align-items: center;
+    }
+    .paypal-qr {
+      display: block;
+      width: 96px; height: 96px;
+      border-radius: 4px;
+    }
+    .paypal-info { flex: 1; }
+    .paypal-info .btn { width: 100%; justify-content: center; }
+    .popover-caption {
+      font-size: 12px; color: var(--muted);
+      margin: 8px 0 0;
+    }
+    .popover-divider {
+      display: flex; align-items: center;
+      margin: 14px 0;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .popover-divider::before,
+    .popover-divider::after {
+      content: ""; flex: 1; height: 1px; background: var(--border);
+    }
+    .popover-divider span { padding: 0 10px; }
+    .popover-crypto {
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .crypto-row {
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 8px;
+      border-radius: 4px;
+    }
+    .crypto-row:hover { background: #f7f8fa; }
+    .crypto-label {
+      font-size: 11px; font-weight: 700; color: var(--muted);
+    }
+    .crypto-addr {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .btn-copy {
+      font-family: inherit; font-size: 11px; font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 4px;
+      background: var(--text);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+    }
+    .btn-copy:hover { opacity: 0.9; }
+    .btn-copy.copied { background: #16a34a; }
+
+    @media (max-width: 720px) {
+      .hero { grid-template-columns: 1fr; gap: 32px; }
+      .hero-title { font-size: 40px; }
+      .feat-list { grid-template-columns: 1fr; }
+      .popover { width: 90vw; max-width: 320px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">
+      <img src="assets/splashscreen.png" alt="" class="brand-logo" width="32" height="32">
+      <span class="brand-name">BanaNAS</span>
+    </a>
+    <nav class="nav-links">
+      <a href="/docs/">Docs</a>
+      <a href="https://github.com/rubeniskov/bananas">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="hero">
+    <div class="hero-text">
+      <span class="hero-tag">Banana Pro · Yocto · MIT</span>
+      <h1 class="hero-title">A NAS for your <span class="hero-gradient">Banana Pro.</span></h1>
+      <p class="hero-sub">Yocto-based NAS distribution for the BPI-M1+. Web admin, NFS, live LCD dashboard, cloud sync — all on one SD card.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="/docs/">Read the docs →</a>
+        <a class="btn btn-secondary" href="https://github.com/rubeniskov/bananas" target="_blank" rel="noopener">★ GitHub</a>
+        <button class="btn btn-secondary" id="sponsor-btn" type="button" aria-haspopup="dialog" aria-expanded="false">❤ Sponsor</button>
+      </div>
+      <div class="badges">
+        <a href="https://github.com/rubeniskov/bananas/releases/latest"><img src="https://img.shields.io/github/v/release/rubeniskov/bananas?display_name=tag&amp;sort=semver" alt="Latest release"></a>
+        <a href="https://github.com/rubeniskov/bananas/actions/workflows/ci.yml"><img src="https://github.com/rubeniskov/bananas/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+        <a href="https://github.com/rubeniskov/bananas/blob/main/LICENSE"><img src="https://img.shields.io/github/license/rubeniskov/bananas" alt="License: MIT"></a>
+      </div>
+    </div>
+    <div class="hero-screenshot">
+      <img src="docs/screenshots/lcd-dashboard.png" alt="BanaNAS LCD dashboard showing CPU, memory, network, and disk tiles">
+    </div>
+  </main>
+
+  <section class="features">
+    <ul class="feat-list">
+      <li><strong>NFS server</strong> with web-managed exports — no <code>/etc/exports</code> edits</li>
+      <li><strong>Live LCD tiles</strong> — CPU, memory, network, disk, temperatures, all on the on-board panel</li>
+      <li><strong>Cloud sync</strong> to Drive, Dropbox, OneDrive, S3, WebDAV via rclone</li>
+      <li><strong>Reproducible bake</strong> from <code>pixi run build</code> — every dep pinned</li>
+    </ul>
+  </section>
+
+  <footer class="site-footer">
+    <span>MIT · <a href="https://github.com/rubeniskov/bananas">rubeniskov/bananas</a></span>
+    <span>Built with Yocto scarthgap</span>
+  </footer>
+
+  <!-- Sponsor popover (hidden until JS toggles it) -->
+  <div class="popover" id="sponsor-popover" role="dialog" aria-modal="false" aria-label="Sponsor BanaNAS" hidden>
+    <div class="popover-paypal">
+      <img src="assets/paypal-qr.png" alt="PayPal QR code for Rubén López Gómez" class="paypal-qr" width="160" height="160">
+      <div class="paypal-info">
+        <a class="btn btn-primary" href="https://www.paypal.com/qrcodes/p2pqrc/8NTCJ434GMFLW" target="_blank" rel="noopener">Pay with PayPal</a>
+        <p class="popover-caption">Scan or click to pay via PayPal.</p>
+      </div>
+    </div>
+
+    <div class="popover-divider"><span>Or send crypto</span></div>
+
+    <div class="popover-crypto">
+      <div class="crypto-row">
+        <span class="crypto-label">BTC</span>
+        <code class="crypto-addr">bc1qy022a…wl3qqt6gu</code>
+        <button class="btn-copy" type="button" data-copy="bc1qy022avlavvwhwmptjlkmtvw50zmg8wl3qqt6gu">Copy</button>
+      </div>
+      <div class="crypto-row">
+        <span class="crypto-label">ETH</span>
+        <code class="crypto-addr">0x82Ed44…3ff0317e</code>
+        <button class="btn-copy" type="button" data-copy="0x82Ed44485A463Caad281003FDfaCa70e3ff0317e">Copy</button>
+      </div>
+      <div class="crypto-row">
+        <span class="crypto-label">SOL</span>
+        <code class="crypto-addr">HGqMJP3…mdPkjpmT</code>
+        <button class="btn-copy" type="button" data-copy="HGqMJP37BVEer8VBTMTZZPNsH4HaHyNWqDZxmdPkjpmT">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const btn = document.getElementById("sponsor-btn");
+      const pop = document.getElementById("sponsor-popover");
+      if (!btn || !pop) return;
+
+      function position() {
+        const r = btn.getBoundingClientRect();
+        pop.style.top = (window.scrollY + r.bottom + 8) + "px";
+        pop.style.left = (window.scrollX + r.left) + "px";
+      }
+
+      function open() {
+        position();
+        pop.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+        const firstFocusable = pop.querySelector("a, button");
+        if (firstFocusable) firstFocusable.focus();
+        document.addEventListener("click", onDocClick, true);
+        document.addEventListener("keydown", onKey, true);
+        window.addEventListener("resize", position);
+        window.addEventListener("scroll", position, { passive: true });
+      }
+
+      function close() {
+        pop.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+        btn.focus();
+        document.removeEventListener("click", onDocClick, true);
+        document.removeEventListener("keydown", onKey, true);
+        window.removeEventListener("resize", position);
+        window.removeEventListener("scroll", position, { passive: true });
+      }
+
+      function onDocClick(e) {
+        if (pop.contains(e.target) || btn.contains(e.target)) return;
+        close();
+      }
+
+      function onKey(e) {
+        if (e.key === "Escape") close();
+      }
+
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (pop.hidden) open(); else close();
+      });
+
+      pop.querySelectorAll(".btn-copy").forEach(function (b) {
+        const origText = b.textContent;
+        let resetTimer = null;
+        b.addEventListener("click", async function (e) {
+          e.stopPropagation();
+          const value = b.dataset.copy;
+          if (!value) return;
+          try {
+            await navigator.clipboard.writeText(value);
+          } catch (err) {
+            // Fallback for older browsers / non-secure contexts
+            const ta = document.createElement("textarea");
+            ta.value = value;
+            ta.style.position = "fixed"; ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand("copy"); } finally { ta.remove(); }
+          }
+          if (resetTimer) clearTimeout(resetTimer);
+          b.textContent = "Copied";
+          b.classList.add("copied");
+          resetTimer = setTimeout(function () {
+            b.textContent = origText;
+            b.classList.remove("copied");
+            resetTimer = null;
+          }, 1500);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
